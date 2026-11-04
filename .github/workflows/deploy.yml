@@ -115,8 +115,10 @@ jobs:
         id: v
         run: |
           THEME_V=$(grep -m1 '^Version:' wordpress/tuc-theme/style.css | sed 's/Version:[[:space:]]*//')
+          PLUGIN_V=$(grep -m1 "const TUC_CORE_VERSION" wordpress/tuc-market-core/tuc-market-core.php | sed "s/.*'\\([0-9.]*\\)'.*/\\1/")
           echo "theme=$THEME_V" >> "$GITHUB_OUTPUT"
-          echo "Thème $THEME_V → ${{ needs.cible.outputs.env }}"
+          echo "plugin=$PLUGIN_V" >> "$GITHUB_OUTPUT"
+          echo "Thème $THEME_V · Plugin $PLUGIN_V → ${{ needs.cible.outputs.env }}"
 
       - name: La cible est-elle branchée ?
         env:
@@ -217,7 +219,8 @@ jobs:
         env:
           URL: ${{ needs.cible.outputs.url }}
           ENV_NM: ${{ needs.cible.outputs.env }}
-          VER: ${{ steps.v.outputs.theme }}
+          VER_T: ${{ steps.v.outputs.theme }}
+          VER_P: ${{ steps.v.outputs.plugin }}
         run: |
           BODY=""
           for i in 1 2 3 4 5; do
@@ -228,14 +231,18 @@ jobs:
           echo "$BODY"
           echo "$BODY" | grep -q '"ok":true' || {
             echo "::error::/sante ne dit pas ok sur $ENV_NM — lire plugins_ko et theme ci-dessus"; exit 1; }
-          # le site déployé doit annoncer la version déployée
-          echo "$BODY" | grep -q "\"theme\":\"$VER\"" || echo "::warning::version annoncée différente de $VER"
+          # le site déployé doit annoncer la version RÉELLEMENT déployée.
+          # Le plugin porte le métier : c'est lui qui bouge le plus souvent.
+          echo "$BODY" | grep -q "\"plugin\":\"$VER_P\"" \
+            || echo "::warning::plugin annoncé différent de $VER_P (fabrique du site en retard ?)"
+          echo "$BODY" | grep -q "\"theme\":\"$VER_T\"" \
+            || echo "::warning::thème annoncé différent de $VER_T"
           echo ""
-          echo "### ✅ $ENV_NM déployé — version $VER" >> "$GITHUB_STEP_SUMMARY"
+          echo "### ✅ $ENV_NM déployé — plugin $VER_P · thème $VER_T" >> "$GITHUB_STEP_SUMMARY"
           echo "" >> "$GITHUB_STEP_SUMMARY"
           echo "| | |" >> "$GITHUB_STEP_SUMMARY"
           echo "|---|---|" >> "$GITHUB_STEP_SUMMARY"
           echo "| environnement | \`$ENV_NM\` |" >> "$GITHUB_STEP_SUMMARY"
           echo "| branche | \`${{ github.ref_name }}\` |" >> "$GITHUB_STEP_SUMMARY"
           echo "| URL | $URL |" >> "$GITHUB_STEP_SUMMARY"
-          echo "| version | $VER |" >> "$GITHUB_STEP_SUMMARY"
+          echo "| version | plugin `$VER_P` · thème `$VER_T` |" >> "$GITHUB_STEP_SUMMARY"
