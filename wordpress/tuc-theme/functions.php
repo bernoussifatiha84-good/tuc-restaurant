@@ -49,6 +49,61 @@ add_action('init', function () {
     remove_action('admin_print_styles', 'print_emoji_styles');
 });
 
+
+/* ---------------------------------------------------------------- perf */
+/**
+ * WooCommerce ne sert qu'à l'ADMIN (catalogue). Sur le site public, ses assets
+ * coûtent 3 CSS + jQuery + 7 scripts. Mesuré : 127 Ko de CSS dont 108 Ko de Woo.
+ * On garde Woo uniquement sur les pages boutique / panier / compte.
+ */
+add_action('wp_enqueue_scripts', function () {
+    if (is_admin()) {
+        return;
+    }
+    $garder = is_cart() || is_checkout() || is_account_page() || is_singular('product')
+        || is_post_type_archive('product') || is_product_taxonomy() || is_shop();
+
+    if ($garder) {
+        return;
+    }
+
+    // styles
+    wp_dequeue_style('woocommerce-layout');
+    wp_dequeue_style('woocommerce-smallscreen');
+    wp_dequeue_style('woocommerce-general');
+    wp_dequeue_style('wc-blocks-style');
+
+    // scripts
+    foreach ([
+        'woocommerce', 'wc-add-to-cart', 'wc-cart-fragments', 'jquery-blockui',
+        'js-cookie', 'sourcebuster-js', 'wc-order-attribution', 'wc-price-slider',
+    ] as $h) {
+        wp_dequeue_script($h);
+    }
+
+    // blocks inutiles hors boutique
+    wp_dequeue_style('wc-blocks-vendors-style');
+}, 99);
+
+/**
+ * Un seul fichier JS, 4 Ko, aucun framework. On retire jQuery du front :
+ * le thème n'en a pas besoin et Woo n'est plus chargé hors boutique.
+ */
+add_action('wp_enqueue_scripts', function () {
+    if (is_admin() || is_cart() || is_checkout() || is_account_page()) {
+        return;
+    }
+    wp_deregister_script('jquery');
+    wp_deregister_script('jquery-core');
+    wp_deregister_script('jquery-migrate');
+}, 100);
+
+/* pas de bloc <style> ni de scripts de blocs sur le front */
+add_action('wp_enqueue_scripts', function () {
+    wp_dequeue_style('global-styles');
+    wp_dequeue_style('classic-theme-styles');
+}, 100);
+
 /* ---------------------------------------------------------------- données */
 require_once TUC_DIR . '/inc/data.php';
 require_once TUC_DIR . '/inc/template-tags.php';
