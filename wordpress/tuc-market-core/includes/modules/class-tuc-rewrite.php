@@ -35,15 +35,16 @@ final class TUC_Rewrite
      */
     public static function intercepter(array $vars): array
     {
-        // ne pas toucher à l'admin, à l'API REST ni aux fichiers
+        // ne pas toucher à l'admin, à l'API REST
         if (is_admin() || (defined('REST_REQUEST') && REST_REQUEST)) {
             return $vars;
         }
-        // si WordPress a déjà résolu quelque chose, on ne discute pas
-        if (!empty($vars['p']) || !empty($vars['page_id']) || !empty($vars['pagename'])
-            || !empty($vars['post_type']) || !empty($vars['attachment'])
-            || !empty($vars['feed']) || !empty($vars['category_name']) || !empty($vars['name'])) {
-            return $vars;
+
+        // si WordPress a résolu une date, un flux, une catégorie… on ne discute pas
+        foreach (['attachment', 'feed', 'category_name', 'tag', 's', 'error'] as $cle) {
+            if (!empty($vars[$cle])) {
+                return $vars;
+            }
         }
 
         $path = trim((string) parse_url($_SERVER['REQUEST_URI'] ?? '/', PHP_URL_PATH), '/');
@@ -54,6 +55,7 @@ final class TUC_Rewrite
             $path = trim(substr($path, strlen($home)), '/');
         }
 
+        // un seul segment : /kfc — pas /kfc/menu ni /a/b
         if ($path === '' || str_contains($path, '/')) {
             return $vars;
         }
@@ -61,6 +63,15 @@ final class TUC_Rewrite
         $slug = sanitize_title($path);
         if ($slug === '') {
             return $vars;
+        }
+
+        // PRIORITÉ : une page, un article ou un produit qui porte ce slug gagne.
+        // Le resto ne prend la main que si le slug est libre.
+        if (!empty($vars['pagename']) || !empty($vars['name']) || !empty($vars['product'])) {
+            $conflit = get_page_by_path($slug, OBJECT, ['page', 'post', 'product']);
+            if ($conflit instanceof WP_Post) {
+                return $vars;
+            }
         }
 
         $id = self::trouver($slug);
@@ -72,6 +83,7 @@ final class TUC_Rewrite
             'tuc_resto' => $slug,
             'post_type' => 'tuc_resto',
             'name'      => $slug,
+            'p'         => $id,
         ];
     }
 
