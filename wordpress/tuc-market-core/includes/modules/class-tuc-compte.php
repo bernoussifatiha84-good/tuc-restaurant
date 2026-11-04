@@ -135,6 +135,13 @@ final class TUC_Compte
             'callback'            => [self::class, 'wa_statut'],
         ]);
 
+        // ③b aperçu du message pré-rempli (panier en texte)
+        register_rest_route('tuc/v1', '/wa-panier', [
+            'methods'             => 'POST',
+            'permission_callback' => '__return_true',
+            'callback'            => [self::class, 'wa_panier'],
+        ]);
+
         // ④ consommation du lien magique
         register_rest_route('tuc/v1', '/magie', [
             'methods'             => 'POST',
@@ -235,6 +242,35 @@ final class TUC_Compte
                 $magie
             ),
         ], 201);
+    }
+
+    /** Construit le message panier et l'URL wa.me — le client voit avant d'envoyer. */
+    public static function wa_panier(WP_REST_Request $req)
+    {
+        $resto  = sanitize_title((string) $req->get_param('resto'));
+        $mode   = sanitize_key((string) ($req->get_param('mode') ?? 'emporter'));
+        $table  = (int) ($req->get_param('table') ?? 0);
+        $lignes = json_decode((string) wp_json_encode($req->get_param('items')), true) ?: [];
+
+        $numero = preg_replace('/[^0-9]/', '', (string) get_option('tuc_wa_numero', ''));
+        if ($numero === '') {
+            return new WP_Error('tuc_wa', 'Numéro WhatsApp non configuré.', ['status' => 503]);
+        }
+
+        $total = 0.0;
+        foreach ($lignes as $l) {
+            $total += (float) ($l['pu'] ?? 0) * max(1, (int) ($l['q'] ?? 1));
+        }
+        $frais = $mode === 'table' ? 0.0 : (float) ($req->get_param('frais') ?? 0);
+        $total += $frais;
+
+        $msg = TUC_WA_Message::panier($resto, $lignes, $frais, $total, $mode, $table);
+
+        return new WP_REST_Response([
+            'message' => $msg,
+            'url'     => TUC_WA_Message::wa_url($numero, $msg),
+            'total'   => $total,
+        ], 200);
     }
 
     public static function wa_statut(WP_REST_Request $req)

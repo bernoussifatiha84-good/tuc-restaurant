@@ -101,6 +101,7 @@ final class TUC_CPT
             'tuc_minimum'   => 'number',   // panier minimum (0 = aucun)
             'tuc_ferme'     => 'boolean',  // pause restaurant
             'tuc_horaires'  => 'array',    // ouverture par jour
+            'tuc_tables'    => 'integer',  // nombre de tables (QR par table)
         ];
 
         foreach ($champs as $key => $type) {
