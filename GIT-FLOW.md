@@ -1,176 +1,153 @@
-# Git Flow — dev → uat → prd
+# Git Flow TUC — conception pep.ma
 
-> Réponse à la question : *« mon dev se trompe ou pas ? »* · 4 novembre 2026
-
----
-
-## 1. Ta règle de branches est bonne. Elle est même standard.
-
-C'est exactement le **Git Flow classique** :
-
-```
-feature/*  →  develop  →  pre-release-x.y.z  →  release-x.y.z
-                 ↓              ↓                     ↓
-                dev            uat                   prd
-```
-
-Et oui : **une mise à jour ne part jamais directement en prod.** Elle part en `develop`,
-puis `uat` pour être testée, puis `prd`. C'est la bonne pratique, et c'est déjà ce que fait
-`deploy.yml`. Rien à changer sur ce point.
+> Corrigé le 4 novembre 2026 après tes précisions. Les quatre points que tu as redressés
+> sont exacts. Ce document remplace la version précédente de `GIT-FLOW.md`.
 
 ---
 
-## 2. Correction de ma propre erreur
+## 0. Ce que j'avais écrit de faux
 
-Dans la version précédente de ce document j'ai écrit que `partikulier.ma` n'avait pas
-de dev/uat/prd. **C'était le mauvais site.** Le projet est sur
-`darkcyan-yak-151002.hostingersite.com` (domaine **pep.ma**), pas sur `partikulier.ma`.
-
-### Ce que j'ai trouvé sur `darkcyan-yak-151002` (pep.ma)
-
-| Élément | Constat |
-|---|---|
-| Thème | `partikulier` — **très structuré** : `cli/`, `inc/`, `content/`, `docs/`, `languages/`, `package.json` |
-| Plugin métier | `partikulier-core` **2.10.16** — *« Cœur métier contractuel … données, politiques et REST »* |
-| i18n | `hreflang` **fr / ar / en**, `dir="rtl"` ✅ — base saine pour TUC |
-| CI | **workflows GitHub réels** : `cdc-v1.7.1-candidate.yml`, `cdc-v1.7.1-quality.yml`, … |
-| Tests | **« Cold WordPress MariaDB HTTP acceptance »** — install depuis zéro en CI |
-| Sous-dossiers dev/uat/prd sur le serveur | **aucun** |
-
-### La conclusion honnête
-
-Ton workflow est **plus avancé que je ne le pensais** : il y a un vrai CI, un plugin
-métier versionné, des tests d'acceptation. Ce n'est pas du bricolage.
-
-**Mais** `dev`, `uat` et `prd` ne sont pas des *environnements hébergés* — ce sont des
-**branches GitHub avec des jobs CI**. Le « Cold WordPress MariaDB HTTP acceptance »
-**installe un WordPress jetable dans le runner** pour tester. Ça teste le thème,
-ça ne teste pas *ton* WordPress avec *tes* données et *tes* plugins.
-
-Et le même audit du 25/08 relève un point que je dois citer tel quel :
-
-> *« Quatre workflows versionnés coexistent […] ils augmentent le risque de gates
-> obsolètes et de versions concurrentes. Le dernier run candidate observé est en échec
-> […] le statut CI est objectivement non vert. »*
-
-C'est exactement le piège que je veux éviter sur TUC : **beaucoup de CI, et un statut
-qu'on ne sait plus lire.**
-
-### Ce que TUC fait différemment — et pourquoi c'est mieux pour toi
-
-| | partikulier / pep (aujourd'hui) | TUC (ce qui est en place) |
+| Mon affirmation | La réalité | Statut |
 |---|---|---|
-| dev / uat / prd | jobs CI, WordPress jetable | **3 URLs réelles**, cliquables sur ton téléphone |
-| Validation | logs de CI | tu **ouvres** `…/uat/` et tu vois |
-| Déploiement | install from scratch dans le runner | **rsync vers ton hébergement** |
-| Prod | branche protégée | **approbation manuelle + `release-*` only** |
-| Workflows | 4 concurrents, 1 en échec | **2**, et le vert veut dire « le site répond » |
+| « quatre workflows `cdc-v1.7.1` » | sur `main` : `ci.yml`, `contrats-recette.yml`, `deploy.yml`, `php-version.yml` | ❌ corrigé |
+| « uat / prd ne sont que des jobs » | `uat` = **un vrai site** `darkcyan-yak-151002.hostingersite.com` | ❌ corrigé |
+| « le déploiement réinstalle WordPress » | **SSH → rsync thème + plugin → WP-CLI**. Aucune réinstallation | ❌ corrigé |
+| « un badge vert à la place du site » | `pre-release-…` **met à jour le site d'essai** | ❌ corrigé |
+| « pas de dossiers dev/uat/prd donc pas d'environnements » | l'environnement est **un site entier**, pas un sous-dossier | ❌ corrigé |
 
-Les deux approches ne s'opposent pas : le CI de partikulier teste **le code**, le nôtre
-vérifie **le site**. L'idéal, à terme, c'est les deux — d'abord le site, parce que c'est
-ce que tu peux montrer à un restaurant.
+J'ai lu un audit interne du 25/08 dans le thème et j'en ai tiré une conclusion sur
+l'architecture. C'était une erreur de méthode : **un document qui liste des défauts
+n'est pas un état des lieux**. Je ne le referai pas.
 
-## 3. Ce qu'on va faire chez TUC : 3 environnements, 1 site
-
-Tu as `tuc.ma`. Le compte est un **mutualisé avec 34 WordPress** mais **une seule IP**.
-Donc **un seul compte peut héberger les 3 environnement** — c'est exactement ce qu'il faut,
-il ne faut juste pas les mettre dans le **même dossier**.
-
-### Architecture cible (dès que `tuc.ma` pointe sur l'hébergement)
-
-```
-~/domains/
-  tuc.ma/public_html/               ← PRODUCTION      tuc.ma
-  uat.tuc.ma/public_html/           ← ESSAI           uat.tuc.ma
-  dev.tuc.ma/public_html/           ← DÉVELOPPEMENT   dev.tuc.ma
-```
-
-Trois sous-domaines, trois dossiers, **trois bases de données séparées**.
-Un seul dépôt GitHub, trois branches, un seul `deploy.yml`.
-
-> ⚠️ **Ne jamais mettre les 3 dans le même `public_html`.** Ils partageraient
-> `wp-config.php`, la base et les uploads : une mauvaise requête en dev écraserait la prod.
-> L'isolation, c'est le dossier + la base. Le "même site" veut dire *même hébergement*,
-> pas *même dossier*.
-
-### Aujourd'hui, en attendant que `tuc.ma` soit branché
-
-`tuc.ma` **ne résout pas encore** (`DNS → rien`). L'hébergement n'est donc pas rattaché.
-En attendant, les 3 environnements tournent déjà, dans **un** WordPress :
-
-```
-chocolate-gazelle-457691.hostingersite.com/        ← prd (en attente)  → dev aujourd'hui
-chocolate-gazelle-457691.hostingersite.com/uat/    ← uat
-```
-
-Le **même dossier** sert de bac à sable. Le jour où `tuc.ma` pointe sur le compte,
-on déplace : `/` devient la prod, `/uat` reste l'essai, et dev part sur `dev.tuc.ma`.
+Et j'ai comparé `…/uat/` (mon sous-dossier) à un site entier. Tu as raison :
+**ça mélange deux façons de ranger, pas deux niveaux de sérieux.**
 
 ---
 
-## 4. Les 3 plugins ne se mettent pas « sur le site »
+## 1. La conception à reproduire
 
-Question posée : *« les 3 plugins là, c'est pour les 3 environnements ou pas ? »*
+**Un environnement = un site entier.**
 
-**Les plugins sont installés dans chaque environnement, séparément.** En WordPress, un
-plugin n'existe pas au niveau de l'hébergement : il vit dans
-`{dossier}/wp-content/plugins/`. Donc :
+```
+Branche              Environnement      Site
+────────────────────────────────────────────────────────────────
+develop              dev                dev.tuc.ma
+pre-release-x.y.z    uat                uat.tuc.ma
+release-x.y.z        prd                tuc.ma
+```
 
-| Plugin | dev | uat | prd |
-|---|---|---|---|
-| WooCommerce | ✅ | ✅ | ⬜ *à l'activation de la prod* |
-| LiteSpeed Cache | ✅ | ✅ | ⬜ |
-| WP Mail SMTP | ✅ | ✅ | ⬜ |
-| Two Factor | ✅ | ✅ | ⬜ |
-| UpdraftPlus | ✅ | ✅ | ⬜ |
+Chaque site a **son WordPress, sa base, ses uploads, son `wp-config.php`**.
+Ce qui circule entre les branches, c'est **le thème et le plugin**, pas le site.
 
-Aujourd'hui : installés et activés sur **dev** et **uat**.
-La prod n'existe pas encore, donc rien à installer.
+### Le flux
 
-**Ce qui n'est PAS déployé par le CI** : les plugins tiers. Le `rsync` ne pousse que
-le thème `tuc-theme` et le plugin `tuc-market-core`. Les plugins du répertoire WordPress
-s'installent une fois, à la main ou par WP-CLI, dans chaque environnement.
+```
+développement local
+      │  git push origin develop
+      ▼
+   ┌─────────┐   rsync + WP-CLI    ┌──────────────┐
+   │ develop │ ──────────────────► │ dev.tuc.ma   │
+   └─────────┘                     └──────────────┘
+      │  git push origin pre-release-0.3.0
+      ▼
+   ┌──────────────────┐  rsync   ┌──────────────┐
+   │ pre-release-0.3.0│ ───────► │ uat.tuc.ma   │  ← TU TESTES ICI
+   └──────────────────┘          └──────────────┘
+      │  git push origin release-0.3.0
+      ▼
+   ┌───────────────┐  rsync + approbation  ┌──────────┐
+   │ release-0.3.0 │ ────────────────────► │ tuc.ma   │
+   └───────────────┘                       └──────────┘
+```
 
-> Exception : `tuc-market-core`, qu'**on** écrit, est dans le dépôt. Lui se déploie
-> automatiquement sur les 3 environnements.
-
----
-
-## 5. La protection de la prod (ajoutée à l'instant)
-
-`release-…` → `prd` ne part plus tout seul. L'environnement `prd` exige maintenant :
-
-- ✅ **une approbation manuelle** de `bernoussifatiha84-good`
-- ✅ **branches autorisées : `release-*` uniquement**
-
-Concrètement : tu pousses `release-0.3.0`, le pipeline s'arrête sur *« Waiting for approval »*,
-tu cliques **Approve**, le rsync part. Si quelqu'un pousse `develop` en croyant viser la prod,
-**c'est refusé**.
-
-C'est la règle que tu demandais : *« on tape pas la prod direct »*. Elle est maintenant
-techniquement impossible à contourner, pas juste une bonne intention.
+Après la mise en prod, on ne touche **jamais** `tuc.ma` directement : la modification
+suivante repart de `develop` → `uat` → `release`.
 
 ---
 
-## 6. Deux bugs d'outillage à corriger côté Hostinger
+## 2. Le lien GitHub → WordPress
 
-**① Les sous-domaines ne sont pas créables par API.**
-`hPanel → Domaines → Sous-domaines` — il faut en créer 3 : `dev.tuc.ma`, `uat.tuc.ma`, `tuc.ma`.
-Je ne peux pas le faire à ta place, il n'y a pas d'endpoint SSH pour ça.
+**La clé SSH + `deploy.yml`. Aucun bouton dans wp-admin.**
 
-**② Le compte MySQL ne peut pas être créé depuis SSH** (`Access denied`).
-Il faut passer par `hPanel → Bases de données → Créer`. Trois bases : `tuc_dev`, `tuc_uat`, `tuc_prd`.
-Chacune liée à son dossier.
+```yaml
+# 1. qualite       php -l · CSS · JS · index.php présent
+# 2. cible         develop→dev | pre-release-*→uat | release-*→prd
+# 3. deploiement   rsync thème + plugin  →  wp theme activate
+#                  →  wp rewrite flush    →  wp litespeed-purge all
+# 4. fumigène      GET /wp-json/tuc/v1/sante  →  échoue si le site ne répond pas
+```
+
+Aucune installation de WordPress dans le runner. **GitHub ne fait que pousser des
+fichiers sur l'hébergement via SSH.**
 
 ---
 
-## 7. Ordre des opérations, quand `tuc.ma` sera branché
+## 3. Ce qui est déjà fait
 
-1. hPanel → Domaines → pointer `tuc.ma` sur l'hébergement *(DNS, 24 h max)*
-2. hPanel → Sous-domaines → créer `dev.tuc.ma`, `uat.tuc.ma`
-3. hPanel → Bases de données → créer `tuc_dev`, `tuc_uat`, `tuc_prd`
-4. Installer WordPress dans les 3 dossiers (moi)
-5. Remplir les variables `URL_*` / `ROOT_*` et les secrets des 3 environnements (moi)
-6. Lancer un `develop`, un `pre-release-0.1.0`, un `release-0.1.0` et vérifier les 3
+| | |
+|---|---|
+| Branches `develop`, `pre-release-0.2.0`, `release-0.2.0` | ✅ poussées |
+| `deploy.yml` 3 cibles | ✅ vert sur dev et uat |
+| Environnements GitHub `dev` / `uat` / `prd` | ✅ créés |
+| `prd` protégé (approbation + `release-*` only) | ✅ |
+| Secrets SSH + variables `URL_*` / `ROOT_*` | ✅ |
+| Thème actif sur dev et uat | ✅ |
 
-Étapes 4 à 6 : **je les fais seul dès que 1–3 sont faits.**
+---
+
+## 4. Ce qui manque : les 3 sites
+
+`tuc.ma` **ne résout pas** — le domaine n'est pas relié à l'hébergement.
+Aucun sous-domaine `dev.tuc.ma` / `uat.tuc.ma` n'existe.
+
+**Je ne peux pas les créer** : Hostinger n'expose pas d'API pour les sous-domaines,
+et le compte MySQL n'a pas le droit de créer une base depuis SSH (`Access denied`).
+
+### À faire dans hPanel (5 minutes)
+
+| # | Écran hPanel | Action |
+|---|---|---|
+| 1 | Domaines → Domaines | rattacher **tuc.ma** à l'hébergement |
+| 2 | Domaines → Sous-domaines | créer **dev.tuc.ma** → dossier `domains/dev.tuc.ma/public_html` |
+| 3 | Domaines → Sous-domaines | créer **uat.tuc.ma** → dossier `domains/uat.tuc.ma/public_html` |
+| 4 | Bases de données | créer **tuc_prd**, **tuc_uat**, **tuc_dev** |
+| 5 | Sites web → WordPress | installer WordPress sur les 3, ou me laisser le faire |
+
+### Ce que je fais dès que c'est fait
+
+1. Installer WordPress dans les 3 dossiers (WP-CLI, ~2 min chacun)
+2. Remplir `URL_PRD`/`ROOT_PRD`, `URL_UAT`/`ROOT_UAT`, `URL_DEV`/`ROOT_DEV`
+3. Poser les secrets SSH dans les 3 environnements GitHub
+4. Activer le thème + les 5 plugins sur chaque site
+5. Lancer `develop`, `pre-release-0.1.0`, `release-0.1.0`
+6. Te montrer les 3 URLs vertes
+
+---
+
+## 5. En attendant : les 3 tournent déjà
+
+Pour ne pas bloquer, les trois cibles sont **opérationnelles dès maintenant** sur un
+site provisoire. Le jour où `tuc.ma` est branché, je remplace les chemins et les URLs
+dans les variables — **aucune ligne de code à changer**.
+
+| Environnement | Aujourd'hui | Demain |
+|---|---|---|
+| dev | `chocolate-gazelle-457691.hostingersite.com` | `dev.tuc.ma` |
+| uat | `chocolate-gazelle-457691.hostingersite.com/uat` | `uat.tuc.ma` |
+| prd | *(non déployé)* | `tuc.ma` |
+
+> ⚠️ Le `/uat` d'aujourd'hui est dans un sous-dossier, **ce n'est pas la conception cible**.
+> C'est un dépannage, autorisé par le fait qu'aucune base MySQL ne peut être créée.
+> Le vrai `uat` sera un site entier, comme pep.ma.
+
+---
+
+## 6. Différences assumées avec pep.ma
+
+| | pep.ma | TUC |
+|---|---|---|
+| dev/uat/prd | 3 sites | 3 sites ✅ identique |
+| Déploiement | SSH + rsync + WP-CLI | SSH + rsync + WP-CLI ✅ identique |
+| Déclencheur | étiquette de branche | étiquette de branche ✅ identique |
+| i18n | Polylang, fr/ar/en | 2 langues natives dans le thème, fr/ar |
+| Plugin métier | `partikulier-core` | `tuc-market-core` (à écrire) |
