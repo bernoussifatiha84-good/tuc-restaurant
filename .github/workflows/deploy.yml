@@ -72,14 +72,25 @@ jobs:
           echo "Version du thème : $THEME_V"
 
       - name: Contrôle des secrets
+        env:
+          S_HOST: ${{ secrets.SSH_HOST }}
+          S_USER: ${{ secrets.SSH_USER }}
+          S_ROOT: ${{ secrets.WP_ROOT }}
+          S_URL:  ${{ secrets.SITE_URL }}
+          S_KEY:  ${{ secrets.SSH_PRIVATE_KEY }}
         run: |
           manquant=0
-          for s in SSH_HOST SSH_USER WP_ROOT SITE_URL; do
-            v=$(eval echo "\${{ secrets.$s }}")
-            if [ -z "$v" ]; then echo "::error::Secret manquant dans l'environnement '${{ github.ref_name == 'develop' && 'dev' || 'prd' }}' : $s"; manquant=1; fi
+          for n in S_HOST S_USER S_ROOT S_URL S_KEY; do
+            if [ -z "${!n}" ]; then
+              echo "::error::Secret manquant dans l'environnement (dev|prd) : $n"
+              manquant=1
+            fi
           done
-          [ -n "${{ secrets.SSH_PRIVATE_KEY }}" ] || { echo "::error::Secret manquant : SSH_PRIVATE_KEY"; manquant=1; }
-          [ "$manquant" = "0" ] || { echo "→ Settings > Environments > dev|prd > Add secret"; exit 1; }
+          if [ "$manquant" != "0" ]; then
+            echo "→ Settings > Environments > dev (ou prd) > Add secret"
+            echo "  S_HOST=SSH_HOST  S_USER=SSH_USER  S_ROOT=WP_ROOT  S_URL=SITE_URL  S_KEY=SSH_PRIVATE_KEY"
+            exit 1
+          fi
           echo "Tous les secrets sont présents."
 
       - name: Préparer la clé SSH
