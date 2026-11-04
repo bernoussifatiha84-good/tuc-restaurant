@@ -38,9 +38,9 @@ function tuc_picture(string $name, string $alt = '', array $attr = []): string
         $w, $h, esc_attr($loading), esc_attr($decoding), $extra
     );
 
-    $srcset = static function (string $ext) use ($base, $w): string {
-        // on expose 2 densités : 1x et 2x (2x = même fichier, retina n'a pas de sens ici)
-        return esc_url($base . $ext . '/' . $name . '.' . substr($ext, 1)) . ' ' . $w . 'w';
+    // une seule résolution par format : les cartes ne dépassent pas 300 px CSS
+    $srcset = static function (string $ext) use ($base, $name, $w): string {
+        return esc_url($base . $ext . '/' . $name . '.' . $ext) . ' ' . $w . 'w';
     };
 
     $html  = '<picture>';
