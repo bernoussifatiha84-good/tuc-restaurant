@@ -118,6 +118,25 @@ jobs:
           echo "theme=$THEME_V" >> "$GITHUB_OUTPUT"
           echo "Thème $THEME_V → ${{ needs.cible.outputs.env }}"
 
+      - name: La cible est-elle branchée ?
+        env:
+          ENV_NM: ${{ needs.cible.outputs.env }}
+          S_URL:  ${{ needs.cible.outputs.url }}
+          S_HOST: ${{ secrets.SSH_HOST }}
+        run: |
+          # prd n'a pas encore d'hébergement : on le dit clairement au lieu
+          # de laisser un 'Permission denied' ou un timeout DNS incompréhensible
+          if [ "$ENV_NM" = "prd" ] && [ -z "$S_HOST" ]; then
+            echo "::error::La cible 'prd' n'est pas encore branchée."
+            echo ""
+            echo "  Aujourd'hui : dev et uat déposent le code sur le même hébergement."
+            echo "  'prd' s'activera quand tuc.ma sera rattaché, puis :"
+            echo "    Settings > Environments > prd > SSH_HOST, SSH_USERNAME, SSH_PRIVATE_KEY"
+            echo "    Settings > Variables    > URL_PRD, ROOT_PRD"
+            exit 1
+          fi
+          echo "Cible branchée : $ENV_NM → $S_URL"
+
       - name: Contrôle des secrets
         env:
           S_HOST:  ${{ secrets.SSH_HOST }}
