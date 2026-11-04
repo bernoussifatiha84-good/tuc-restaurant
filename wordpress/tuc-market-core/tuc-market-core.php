@@ -28,6 +28,7 @@ require_once TUC_CORE_DIR . 'includes/modules/class-tuc-commande.php';  // 4. RE
 require_once TUC_CORE_DIR . 'includes/modules/class-tuc-qr.php';        // 5. QR table
 require_once TUC_CORE_DIR . 'includes/modules/class-tuc-geo.php';       // 8. quartiers
 require_once TUC_CORE_DIR . 'includes/modules/class-tuc-rewrite.php';   // 1b. slug racine /kfc
+require_once TUC_CORE_DIR . 'includes/modules/class-tuc-compte.php';    // 2b. comptes par numéro WhatsApp
 
 /**
  * Activation : on ne devine pas, on prépare le minimum et on le vérifie.
@@ -45,6 +46,7 @@ add_action('plugins_loaded', static function (): void {
     TUC_QR::init();
     TUC_Geo::init();
     TUC_Rewrite::init();
+    TUC_Compte::init();
 }, 5);
 
 /**
