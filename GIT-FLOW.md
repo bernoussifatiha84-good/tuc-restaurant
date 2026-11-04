@@ -20,38 +20,55 @@ puis `uat` pour être testée, puis `prd`. C'est la bonne pratique, et c'est dé
 
 ---
 
-## 2. MAIS il y a une erreur dans le récit, et je dois te la signaler
+## 2. Correction de ma propre erreur
 
-Tu dis : *« mon dev pour partikulier.ma a les 3 sur le même site »*.
+Dans la version précédente de ce document j'ai écrit que `partikulier.ma` n'avait pas
+de dev/uat/prd. **C'était le mauvais site.** Le projet est sur
+`darkcyan-yak-151002.hostingersite.com` (domaine **pep.ma**), pas sur `partikulier.ma`.
 
-**J'ai vérifié le serveur. Ce n'est pas ce qui est en place.**
+### Ce que j'ai trouvé sur `darkcyan-yak-151002` (pep.ma)
 
-| Ce que j'ai trouvé | Réalité |
+| Élément | Constat |
 |---|---|
-| `partikulier.ma/public_html` | **un seul** WordPress (thème `wpresidence`) |
-| Sous-dossiers `dev/`, `uat/`, `staging/` | **aucun** |
-| Sous-domaines `dev.partikulier.ma`, `uat.partikulier.ma` | **n'existent pas** dans `~/domains` |
-| Dépôts git sur le serveur | `.git_clones` **vide**, pas de `.git` dans `public_html` |
+| Thème | `partikulier` — **très structuré** : `cli/`, `inc/`, `content/`, `docs/`, `languages/`, `package.json` |
+| Plugin métier | `partikulier-core` **2.10.16** — *« Cœur métier contractuel … données, politiques et REST »* |
+| i18n | `hreflang` **fr / ar / en**, `dir="rtl"` ✅ — base saine pour TUC |
+| CI | **workflows GitHub réels** : `cdc-v1.7.1-candidate.yml`, `cdc-v1.7.1-quality.yml`, … |
+| Tests | **« Cold WordPress MariaDB HTTP acceptance »** — install depuis zéro en CI |
+| Sous-dossiers dev/uat/prd sur le serveur | **aucun** |
 
-**Ce qui s'est réellement passé sur partikulier :**
+### La conclusion honnête
 
-```
-srv/…/blanchedalmond-reindeer-376379.hostingersite.com/public_html/wp-content/themes/
-  ├── partikulier-cdc-v18-final
-  ├── partikulier-cdc-v18-final2
-  ├── partikulier-cdc-v18-final3
-  │   … 29 copies …
-  └── partikulier-cdc-v18-final30
-```
+Ton workflow est **plus avancé que je ne le pensais** : il y a un vrai CI, un plugin
+métier versionné, des tests d'acceptation. Ce n'est pas du bricolage.
 
-**41 thèmes**, dont **29 copies manuelles** de la même chose. C'est du **versionnage par
-duplication**, pas du CI/CD. Il n'y a pas de dev/uat/prd — il y a un site et des copies
-de secours dans un dossier.
+**Mais** `dev`, `uat` et `prd` ne sont pas des *environnements hébergés* — ce sont des
+**branches GitHub avec des jobs CI**. Le « Cold WordPress MariaDB HTTP acceptance »
+**installe un WordPress jetable dans le runner** pour tester. Ça teste le thème,
+ça ne teste pas *ton* WordPress avec *tes* données et *tes* plugins.
 
-Ce n'est pas un reproche. C'est juste que **si on reproduit ça pour TUC, on n'aura pas
-d'environnements** — on aura 30 dossiers et une prod qu'on ne sait plus quelle version sert.
+Et le même audit du 25/08 relève un point que je dois citer tel quel :
 
----
+> *« Quatre workflows versionnés coexistent […] ils augmentent le risque de gates
+> obsolètes et de versions concurrentes. Le dernier run candidate observé est en échec
+> […] le statut CI est objectivement non vert. »*
+
+C'est exactement le piège que je veux éviter sur TUC : **beaucoup de CI, et un statut
+qu'on ne sait plus lire.**
+
+### Ce que TUC fait différemment — et pourquoi c'est mieux pour toi
+
+| | partikulier / pep (aujourd'hui) | TUC (ce qui est en place) |
+|---|---|---|
+| dev / uat / prd | jobs CI, WordPress jetable | **3 URLs réelles**, cliquables sur ton téléphone |
+| Validation | logs de CI | tu **ouvres** `…/uat/` et tu vois |
+| Déploiement | install from scratch dans le runner | **rsync vers ton hébergement** |
+| Prod | branche protégée | **approbation manuelle + `release-*` only** |
+| Workflows | 4 concurrents, 1 en échec | **2**, et le vert veut dire « le site répond » |
+
+Les deux approches ne s'opposent pas : le CI de partikulier teste **le code**, le nôtre
+vérifie **le site**. L'idéal, à terme, c'est les deux — d'abord le site, parce que c'est
+ce que tu peux montrer à un restaurant.
 
 ## 3. Ce qu'on va faire chez TUC : 3 environnements, 1 site
 
