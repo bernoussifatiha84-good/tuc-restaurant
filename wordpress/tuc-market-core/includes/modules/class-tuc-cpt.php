@@ -98,6 +98,9 @@ final class TUC_CPT
             'tuc_adresse'   => 'string',
             'tuc_lat'       => 'number',
             'tuc_lng'       => 'number',
+            'tuc_minimum'   => 'number',   // panier minimum (0 = aucun)
+            'tuc_ferme'     => 'boolean',  // pause restaurant
+            'tuc_horaires'  => 'array',    // ouverture par jour
         ];
 
         foreach ($champs as $key => $type) {
@@ -110,7 +113,7 @@ final class TUC_CPT
             ]);
         }
 
-        foreach (['tuc_prix' => 'number', 'tuc_promo' => 'integer', 'tuc_options' => 'array'] as $key => $type) {
+        foreach (['tuc_prix' => 'number', 'tuc_promo' => 'integer', 'tuc_options' => 'array', 'tuc_resto_id' => 'integer', 'tuc_dispo' => 'boolean'] as $key => $type) {
             register_post_meta(self::ITEM, $key, [
                 'type'          => $type,
                 'single'        => true,
