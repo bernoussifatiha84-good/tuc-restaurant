@@ -21,7 +21,7 @@ defined('ABSPATH') || exit;
  */
 function tuc_picture(string $name, string $alt = '', array $attr = []): string
 {
-    $base = TUC_URI . '/assets/img/' . $name;
+    $base = TUC_URI . '/assets/img/';
     $dir  = TUC_DIR . '/assets/img/';
 
     $w = (int) ($attr['width'] ?? 440);
@@ -40,19 +40,19 @@ function tuc_picture(string $name, string $alt = '', array $attr = []): string
 
     $srcset = static function (string $ext) use ($base, $w): string {
         // on expose 2 densités : 1x et 2x (2x = même fichier, retina n'a pas de sens ici)
-        return esc_url("$base.$ext") . ' ' . $w . 'w';
+        return esc_url($base . $ext . '/' . $name . '.' . substr($ext, 1)) . ' ' . $w . 'w';
     };
 
     $html  = '<picture>';
-    if (file_exists($dir . $name . '.avif')) {
+    if (file_exists($dir . 'avif/' . $name . '.avif')) {
         $html .= '<source type="image/avif" srcset="' . $srcset('avif') . '" sizes="' . esc_attr($sizes) . '">';
     }
-    if (file_exists($dir . $name . '.webp')) {
+    if (file_exists($dir . 'webp/' . $name . '.webp')) {
         $html .= '<source type="image/webp" srcset="' . $srcset('webp') . '" sizes="' . esc_attr($sizes) . '">';
     }
     $html .= sprintf(
         '<img src="%s" alt="%s" class="%s" %s>',
-        esc_url("$base.jpg"),
+        esc_url($base . $name . '.jpg'),
         esc_attr($alt),
         esc_attr($class),
         $attrs
