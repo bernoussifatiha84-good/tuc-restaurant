@@ -1,153 +1,126 @@
 # Git Flow TUC — conception pep.ma
 
-> Corrigé le 4 novembre 2026 après tes précisions. Les quatre points que tu as redressés
-> sont exacts. Ce document remplace la version précédente de `GIT-FLOW.md`.
+> Version du 4 novembre 2026, corrigée deux fois. `pre-release-…` et `release-…`
+> ne sont pas des branches : **ce sont des étiquettes (tags)**.
 
 ---
 
-## 0. Ce que j'avais écrit de faux
+## 1. La règle
 
-| Mon affirmation | La réalité | Statut |
-|---|---|---|
-| « quatre workflows `cdc-v1.7.1` » | sur `main` : `ci.yml`, `contrats-recette.yml`, `deploy.yml`, `php-version.yml` | ❌ corrigé |
-| « uat / prd ne sont que des jobs » | `uat` = **un vrai site** `darkcyan-yak-151002.hostingersite.com` | ❌ corrigé |
-| « le déploiement réinstalle WordPress » | **SSH → rsync thème + plugin → WP-CLI**. Aucune réinstallation | ❌ corrigé |
-| « un badge vert à la place du site » | `pre-release-…` **met à jour le site d'essai** | ❌ corrigé |
-| « pas de dossiers dev/uat/prd donc pas d'environnements » | l'environnement est **un site entier**, pas un sous-dossier | ❌ corrigé |
+| Déclencheur | Nature | Cible | Commande |
+|---|---|---|---|
+| branche `develop` | **branche** | dev | `git push origin develop` |
+| étiquette `pre-release-x.y.z` | **tag** | uat | `git tag -a pre-release-0.3.0 -m "…" && git push origin pre-release-0.3.0` |
+| étiquette `release-x.y.z` | **tag** | prd | `git tag -a release-0.3.0 -m "…" && git push origin release-0.3.0` |
 
-J'ai lu un audit interne du 25/08 dans le thème et j'en ai tiré une conclusion sur
-l'architecture. C'était une erreur de méthode : **un document qui liste des défauts
-n'est pas un état des lieux**. Je ne le referai pas.
-
-Et j'ai comparé `…/uat/` (mon sous-dossier) à un site entier. Tu as raison :
-**ça mélange deux façons de ranger, pas deux niveaux de sérieux.**
-
----
-
-## 1. La conception à reproduire
-
-**Un environnement = un site entier.**
-
-```
-Branche              Environnement      Site
-────────────────────────────────────────────────────────────────
-develop              dev                dev.tuc.ma
-pre-release-x.y.z    uat                uat.tuc.ma
-release-x.y.z        prd                tuc.ma
-```
-
-Chaque site a **son WordPress, sa base, ses uploads, son `wp-config.php`**.
-Ce qui circule entre les branches, c'est **le thème et le plugin**, pas le site.
-
-### Le flux
-
-```
-développement local
-      │  git push origin develop
-      ▼
-   ┌─────────┐   rsync + WP-CLI    ┌──────────────┐
-   │ develop │ ──────────────────► │ dev.tuc.ma   │
-   └─────────┘                     └──────────────┘
-      │  git push origin pre-release-0.3.0
-      ▼
-   ┌──────────────────┐  rsync   ┌──────────────┐
-   │ pre-release-0.3.0│ ───────► │ uat.tuc.ma   │  ← TU TESTES ICI
-   └──────────────────┘          └──────────────┘
-      │  git push origin release-0.3.0
-      ▼
-   ┌───────────────┐  rsync + approbation  ┌──────────┐
-   │ release-0.3.0 │ ────────────────────► │ tuc.ma   │
-   └───────────────┘                       └──────────┘
-```
-
-Après la mise en prod, on ne touche **jamais** `tuc.ma` directement : la modification
-suivante repart de `develop` → `uat` → `release`.
-
----
-
-## 2. Le lien GitHub → WordPress
-
-**La clé SSH + `deploy.yml`. Aucun bouton dans wp-admin.**
+⚠️ **Pousser une branche nommée `pre-release-…` ne déploie rien.** Le workflow déclare :
 
 ```yaml
-# 1. qualite       php -l · CSS · JS · index.php présent
-# 2. cible         develop→dev | pre-release-*→uat | release-*→prd
-# 3. deploiement   rsync thème + plugin  →  wp theme activate
-#                  →  wp rewrite flush    →  wp litespeed-purge all
-# 4. fumigène      GET /wp-json/tuc/v1/sante  →  échoue si le site ne répond pas
+on:
+  push:
+    branches: [develop]
+    tags:
+      - 'pre-release-*'
+      - 'release-*'
 ```
 
-Aucune installation de WordPress dans le runner. **GitHub ne fait que pousser des
-fichiers sur l'hébergement via SSH.**
+Un tag ne peut pas être poussé par `git push origin develop` : il faut le créer puis
+le pousser explicitement.
 
 ---
 
-## 3. Ce qui est déjà fait
+## 2. Un environnement = un site entier
+
+```
+develop            →  dev.tuc.ma      site entier
+tag pre-release-*  →  uat.tuc.ma      site entier   ← on teste ici
+tag release-*      →  tuc.ma          site entier   ← approbation manuelle
+```
+
+Chaque site a son WordPress, sa base, ses uploads, son `wp-config.php`.
+**Ce qui circule entre les branches, c'est le thème et le plugin — pas le site.**
+
+---
+
+## 3. Le déploiement, étape par étape
+
+```
+1. qualite        php -l · CSS · JS · index.php + Version présents
+2. cible          develop→dev | tag pre-release-*→uat | tag release-*→prd
+3. deploiement    SSH → rsync thème (--delete)
+                  SSH → rsync plugin tuc-market-core (--delete)
+                  SSH → wp plugin activate tuc-market-core
+                        wp theme activate tuc-theme
+                        wp option update permalink_structure
+                        wp cache flush
+                        wp rewrite flush --hard
+                        wp litespeed-purge all
+4. fumigène       GET /wp-json/tuc/v1/sante   → doit répondre {"ok":true}
+```
+
+Aucune installation de WordPress dans le runner. **GitHub pousse des fichiers, rien de plus.**
+
+### Le module de santé
+
+`/wp-json/tuc/v1/sante` répond depuis le **plugin**, pas depuis le thème :
+
+```json
+{"ok":true,"plugin":"0.1.0","theme":"TUC Market","theme_ver":"0.1.0",
+ "wp":"7.1.4","php":"8.3.36","langues":["fr_FR","ltr"],"plugins_ko":[]}
+```
+
+- `ok` = thème **TUC Market** actif **et** plugin présent **et** aucun plugin requis manquant
+- si le thème est cassé, le plugin répond quand même → le CI distingue
+  « thème cassé » de « site mort »
+- réponse **503** quand `ok:false`, pour que le déploiement échoue proprement
+
+---
+
+## 4. État réel au 4 novembre 2026
 
 | | |
 |---|---|
-| Branches `develop`, `pre-release-0.2.0`, `release-0.2.0` | ✅ poussées |
-| `deploy.yml` 3 cibles | ✅ vert sur dev et uat |
-| Environnements GitHub `dev` / `uat` / `prd` | ✅ créés |
-| `prd` protégé (approbation + `release-*` only) | ✅ |
-| Secrets SSH + variables `URL_*` / `ROOT_*` | ✅ |
-| Thème actif sur dev et uat | ✅ |
+| Branches | `develop`, `main` |
+| Étiquettes | `pre-release-0.2.0`, `pre-release-0.2.1`, `release-0.2.0` |
+| Dernier déploiement uat | **tag `pre-release-0.2.1` → vert** |
+| Étapes | 9/9 · thème + plugin + activation + purge + fumigène |
+| Santé | `{"ok":true,…,"plugins_ko":[]}` |
 
 ---
 
-## 4. Ce qui manque : les 3 sites
+## 5. Ce qui reste, et qui n'est pas technique
 
-`tuc.ma` **ne résout pas** — le domaine n'est pas relié à l'hébergement.
-Aucun sous-domaine `dev.tuc.ma` / `uat.tuc.ma` n'existe.
+`tuc.ma`, `dev.tuc.ma`, `uat.tuc.ma` **ne résolvent pas**. Le domaine n'est pas rattaché
+à l'hébergement, et Hostinger n'a pas d'API pour les sous-domaines ni pour créer
+une base MySQL (`Access denied` en SSH).
 
-**Je ne peux pas les créer** : Hostinger n'expose pas d'API pour les sous-domaines,
-et le compte MySQL n'a pas le droit de créer une base depuis SSH (`Access denied`).
+**Tant que ces trois sites n'existent pas, le flux TUC n'est pas encore celui de pep.ma.**
+Il en a la mécanique, pas les trois environnements.
 
-### À faire dans hPanel (5 minutes)
+### 5 actions dans hPanel
 
-| # | Écran hPanel | Action |
-|---|---|---|
-| 1 | Domaines → Domaines | rattacher **tuc.ma** à l'hébergement |
-| 2 | Domaines → Sous-domaines | créer **dev.tuc.ma** → dossier `domains/dev.tuc.ma/public_html` |
-| 3 | Domaines → Sous-domaines | créer **uat.tuc.ma** → dossier `domains/uat.tuc.ma/public_html` |
-| 4 | Bases de données | créer **tuc_prd**, **tuc_uat**, **tuc_dev** |
-| 5 | Sites web → WordPress | installer WordPress sur les 3, ou me laisser le faire |
+1. `Domaines` → rattacher **tuc.ma**
+2. `Sous-domaines` → **dev.tuc.ma** → `domains/dev.tuc.ma/public_html`
+3. `Sous-domaines` → **uat.tuc.ma** → `domains/uat.tuc.ma/public_html`
+4. `Bases de données` → **tuc_prd**, **tuc_uat**, **tuc_dev**
+5. Prévenir — j'installe les 3 WordPress et je câble le reste
 
-### Ce que je fais dès que c'est fait
+### Ce que je fais ensuite
 
-1. Installer WordPress dans les 3 dossiers (WP-CLI, ~2 min chacun)
-2. Remplir `URL_PRD`/`ROOT_PRD`, `URL_UAT`/`ROOT_UAT`, `URL_DEV`/`ROOT_DEV`
-3. Poser les secrets SSH dans les 3 environnements GitHub
-4. Activer le thème + les 5 plugins sur chaque site
-5. Lancer `develop`, `pre-release-0.1.0`, `release-0.1.0`
-6. Te montrer les 3 URLs vertes
+Installer WordPress × 3 · remplir `URL_*` / `ROOT_*` · poser les secrets dans les
+3 environnements · activer thème + 5 plugins · pousser `develop`, taguer
+`pre-release-0.1.0` puis `release-0.1.0` · te montrer les 3 URLs vertes.
 
 ---
 
-## 5. En attendant : les 3 tournent déjà
+## 6. En attendant : le provisoire, assumé
 
-Pour ne pas bloquer, les trois cibles sont **opérationnelles dès maintenant** sur un
-site provisoire. Le jour où `tuc.ma` est branché, je remplace les chemins et les URLs
-dans les variables — **aucune ligne de code à changer**.
-
-| Environnement | Aujourd'hui | Demain |
+| Environnement | Site provisoire | Site cible |
 |---|---|---|
 | dev | `chocolate-gazelle-457691.hostingersite.com` | `dev.tuc.ma` |
-| uat | `chocolate-gazelle-457691.hostingersite.com/uat` | `uat.tuc.ma` |
+| uat | `…chocolate-gazelle…/uat` | `uat.tuc.ma` |
 | prd | *(non déployé)* | `tuc.ma` |
 
-> ⚠️ Le `/uat` d'aujourd'hui est dans un sous-dossier, **ce n'est pas la conception cible**.
-> C'est un dépannage, autorisé par le fait qu'aucune base MySQL ne peut être créée.
-> Le vrai `uat` sera un site entier, comme pep.ma.
-
----
-
-## 6. Différences assumées avec pep.ma
-
-| | pep.ma | TUC |
-|---|---|---|
-| dev/uat/prd | 3 sites | 3 sites ✅ identique |
-| Déploiement | SSH + rsync + WP-CLI | SSH + rsync + WP-CLI ✅ identique |
-| Déclencheur | étiquette de branche | étiquette de branche ✅ identique |
-| i18n | Polylang, fr/ar/en | 2 langues natives dans le thème, fr/ar |
-| Plugin métier | `partikulier-core` | `tuc-market-core` (à écrire) |
+Le `/uat` dans un sous-dossier **n'est pas le modèle** : c'est un dépannage rendu
+nécessaire par l'impossibilité de créer une base MySQL. Le jour où les sous-domaines
+existent, je change **deux variables** (`URL_UAT`, `ROOT_UAT`) — **zéro ligne de code**.
