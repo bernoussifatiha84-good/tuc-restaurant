@@ -1,0 +1,13 @@
+/*
+Theme Name: TUC Market
+Theme URI: https://tuc.ma
+Author: TUC
+Description: Thème officiel de la marketplace TUC — restaurants, mahlabas, snacks, cafés. Design system V2 : Manrope + IBM Plex Sans Arabic, teal #0E9E7E, jaune #FFC244, fond blanc pur.
+Version: 0.1.0
+Requires at least: 6.4
+Requires PHP: 8.1
+License: GPL-2.0-or-later
+Text Domain: tuc
+*/
+
+/* le CSS réel est dans assets/css/tuc.css — ce fichier ne sert qu'à déclarer le thème */
