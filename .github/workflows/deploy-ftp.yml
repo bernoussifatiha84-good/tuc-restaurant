@@ -1,0 +1,63 @@
+name: Déploiement FTP (secours)
+
+# Utilisé seulement si l'SSH est indisponible.
+# Port 21. Identifiants dans hPanel > Fichiers > Comptes FTP.
+on:
+  workflow_dispatch:
+    inputs:
+      cible:
+        description: 'Environnement'
+        required: true
+        default: dev
+        type: choice
+        options: [dev, prd]
+
+concurrency:
+  group: ftp-${{ inputs.cible }}
+  cancel-in-progress: true
+
+jobs:
+  ftp:
+    name: Envoi FTP vers ${{ inputs.cible }}
+    runs-on: ubuntu-latest
+    environment: ${{ inputs.cible }}
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Contrôle des secrets FTP
+        env:
+          F_SERVER: ${{ secrets.FTP_SERVER }}
+          F_USER: ${{ secrets.FTP_USERNAME }}
+          F_PASS: ${{ secrets.FTP_PASSWORD }}
+          F_DIR: ${{ secrets.FTP_DIR }}
+        run: |
+          manquant=0
+          for n in F_SERVER F_USER F_PASS F_DIR; do
+            eval "v=\$$n"
+            if [ -z "$v" ]; then echo "::error::$n manquant dans l'environnement ${{ inputs.cible }}"; manquant=1; fi
+          done
+          [ "$manquant" = "0" ] || exit 1
+          echo "Secrets FTP présents."
+
+      - name: Envoyer le thème
+        uses: SamKirkland/FTP-Deploy-Action@v4.3.5
+        with:
+          server: ${{ secrets.FTP_SERVER }}
+          username: ${{ secrets.FTP_USERNAME }}
+          password: ${{ secrets.FTP_PASSWORD }}
+          port: 21
+          protocol: ftp
+          local-dir: ./wordpress/tuc-theme/
+          server-dir: ${{ secrets.FTP_DIR }}/wp-content/themes/tuc-theme/
+          dangerous-clean-slate: false
+
+      - name: Fumigène
+        run: |
+          URL="${{ secrets.SITE_URL }}/wp-json/tuc/v1/sante"
+          for i in 1 2 3 4 5; do
+            BODY=$(curl -fsS --max-time 20 "$URL" 2>/dev/null) && break
+            sleep 8
+          done
+          echo "$BODY"
+          echo "$BODY" | grep -q '"ok":true' || { echo "❌ /sante ne répond pas"; exit 1; }
+          echo "✅ FTP vert"
