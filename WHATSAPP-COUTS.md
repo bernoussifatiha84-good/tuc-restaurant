@@ -131,3 +131,63 @@ un service qui n'a pas encore un seul client payant, c'est non.
 
 **Et ne jamais** utiliser Baileys/WAHA/Evolution pour économiser 0,21 MAD :
 le numéro serait banni et tu perdrais tous les comptes clients.
+
+---
+
+## 7. Le scénario 1 000 restaurants — le calcul qui tue l'idée
+
+Prenons ton hypothèse : **1 000 restos × 20 commandes/jour = 20 000 commandes/jour**.
+
+| Étape | Volume |
+|---|---|
+| 20 000 commandes/jour | 600 000 commandes/mois (30 j) |
+| 1 seule réponse WhatsApp par commande | 600 000 messages/mois |
+| **3 messages par commande** (accusé · en préparation · prête) | **1 800 000 messages/mois** |
+| Facturés (franchise 1 000/numéro déduite) | 1 799 000 |
+| Coût Meta à 0,0230 $ | **41 377 $/mois ≈ 420 000 MAD/mois** |
+
+### Ce que ça veut dire, en une ligne
+
+**420 000 MAD de WhatsApp par mois** — soit, même à 599 MAD le pack Livraison,
+**l'intégralité de la recette de ~700 restaurants** part chez Meta. Le produit
+n'aurait pas une marge dégradée : il n'aurait pas de marge du tout.
+
+Et ce n'est que le coût. Il y a pire :
+
+1. **La franchise est de 1 000 messages *par numéro*.** Avec 1 000 restos, il
+   faudrait **1 000 numéros WhatsApp** distincts — un WABA par resto. Meta
+   n'en donne pas 1 000 à une entreprise qui démarre, et l'administrer est un
+   métier à plein temps.
+2. **Aucun numéro ne peut servir deux restos** : le client reçoit la réponse
+   d'un numéro inconnu → c'est du premier contact → signalement → ban. Le
+   schéma Baileys à 1 000 numéros, c'est une hécatombe organisée.
+3. **L'alternative SMS ne sauve pas** : 0,33 MAD × 600 000 = **198 000 MAD/mois**
+   chez un agrégateur marocain. Trois fois moins cher que WhatsApp, toujours
+   impossible.
+
+### La réponse : ne pas envoyer de message du tout
+
+Le raisonnement « 20 000 commandes = 20 000 messages » suppose que **le canal de
+livraison de l'information doit être un message**. Or pour une commande :
+
+- **la caisse** n'a pas besoin de WhatsApp : elle a **le dashboard ouvert** sur
+  la tablette du comptoir → Web Push, **0 MAD**, **0 message** ;
+- **le client** a besoin de « c'est confirmé / c'est prêt » : il a **sa page de
+  suivi** ouverte sur son téléphone (il vient de commander dessus) → même Web
+  Push, **0 MAD**, **0 message**.
+
+Autrement dit : **le coût ne doit pas être linéaire en commandes.** Avec le
+dashboard, il est **constant** — il ne dépend que du nombre de restos connectés,
+pas du nombre de commandes.
+
+| Scénario | WhatsApp (3 msg/cmd) | PWA + Web Push |
+|---|---|---|
+| 1 resto × 20/jour | 1 800 msg → **0 MAD** (sous la franchise) | 0 MAD |
+| 10 restos × 20/jour | 18 000 → **3 570 MAD** | 0 MAD |
+| 100 restos × 20/jour | 180 000 → **37 590 MAD** | 0 MAD |
+| **1 000 restos × 20/jour** | 1 800 000 → **420 000 MAD** | **0 MAD** + serveur ~400–800 MAD |
+
+WhatsApp reste, mais **seulement** à sa place : le client qui écrit en premier
+pour créer son compte. Là, la réponse est dans la fenêtre 24 h, les messages
+entrants sont gratuits, et le volume est celui des **nouveaux clients**
+(quelques dizaines par jour), pas celui des commandes.

@@ -2,7 +2,7 @@
 /**
  * Plugin Name: TUC Market Core
  * Description: Cœur métier TUC : fiches restaurant, quartiers, commandes, QR de table, santé du site. Comme partikulier-core, il porte le module de santé que le déploiement interroge.
- * Version: 0.1.0
+ * Version: 0.8.0
  * Requires at least: 6.4
  * Requires PHP: 8.1
  * Author: TUC
@@ -15,7 +15,7 @@ if (!defined('ABSPATH')) {
     exit;
 }
 
-const TUC_CORE_VERSION = '0.1.0';
+const TUC_CORE_VERSION = '0.8.0';
 const TUC_CORE_FILE    = __FILE__;
 define('TUC_CORE_DIR', plugin_dir_path(__FILE__));
 
@@ -30,6 +30,8 @@ require_once TUC_CORE_DIR . 'includes/modules/class-tuc-geo.php';       // 8. qu
 require_once TUC_CORE_DIR . 'includes/modules/class-tuc-rewrite.php';   // 1b. slug racine /kfc
 require_once TUC_CORE_DIR . 'includes/modules/class-tuc-compte.php';    // 2b. comptes par numéro WhatsApp
 require_once TUC_CORE_DIR . 'includes/modules/class-tuc-wa-message.php'; // 2c. message pré-rempli (panier en texte)
+require_once TUC_CORE_DIR . 'includes/modules/class-tuc-push.php';      // 6a. Web Push natif (RFC 8291)
+require_once TUC_CORE_DIR . 'includes/modules/class-tuc-caisse.php';   // 6b. PWA de caisse — le canal de commande
 
 /**
  * Activation : on ne devine pas, on prépare le minimum et on le vérifie.
@@ -48,6 +50,7 @@ add_action('plugins_loaded', static function (): void {
     TUC_Geo::init();
     TUC_Rewrite::init();
     TUC_Compte::init();
+    TUC_Caisse::init();        // module 6 — le P0 : sans elle, une commande n'arrive nulle part
 }, 5);
 
 /**

@@ -20,12 +20,28 @@ final class TUC_Activator
             update_option('permalink_structure', '/%postname%/');
         }
 
+        // les routes de la caisse doivent exister dès la première visite
+        if (class_exists('TUC_Caisse')) {
+            TUC_Caisse::routes_reelles();
+        }
+        if (class_exists('TUC_Push')) {
+            TUC_Push::generer_cles();   // les clés VAPID ne se régénèrent pas
+        }
+
         flush_rewrite_rules();
         update_option('tuc_core_version', TUC_CORE_VERSION);
     }
 
     public static function deactivate(): void
     {
+        // les routes de la caisse doivent exister dès la première visite
+        if (class_exists('TUC_Caisse')) {
+            TUC_Caisse::routes_reelles();
+        }
+        if (class_exists('TUC_Push')) {
+            TUC_Push::generer_cles();   // les clés VAPID ne se régénèrent pas
+        }
+
         flush_rewrite_rules();
     }
 }

@@ -137,7 +137,8 @@ final class TUC_Rewrite
 
         // mots réservés par WordPress ou par TUC
         $reserves = ['admin', 'wp-admin', 'wp-json', 'api', 'qr', 'commande', 'panier',
-                     'connexion', 'promos', 'quartier', 'restaurant', 'mahlaba'];
+                     'connexion', 'promos', 'quartier', 'restaurant', 'mahlaba',
+                     'caisse', 'compte', 'suivi', 'creer-mon-compte'];
         if (in_array($slug, $reserves, true)) {
             return $slug . '-resto';
         }
