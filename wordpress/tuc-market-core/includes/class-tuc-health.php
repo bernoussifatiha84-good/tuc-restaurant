@@ -57,6 +57,12 @@ final class TUC_Health
             'php'         => PHP_VERSION,
             'langues'     => [get_locale(), is_rtl() ? 'rtl' : 'ltr'],
             'plugins_ko'  => $manques,
+            'modules'     => [
+                'cpt_resto'    => post_type_exists('tuc_resto'),
+                'cpt_menu'     => post_type_exists('tuc_menu_item'),
+                'cpt_commande' => post_type_exists('tuc_commande'),
+                'rest_commande' => (bool) apply_filters('tuc_module_commande', true),
+            ],
             'heure'       => current_time('c'),
         ], $ok ? 200 : 503);
     }

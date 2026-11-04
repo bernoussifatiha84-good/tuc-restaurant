@@ -22,6 +22,12 @@ define('TUC_CORE_DIR', plugin_dir_path(__FILE__));
 require_once TUC_CORE_DIR . 'includes/class-tuc-health.php';
 require_once TUC_CORE_DIR . 'includes/class-tuc-activator.php';
 
+// modules métier — tout dans un seul plugin, pas dix
+require_once TUC_CORE_DIR . 'includes/modules/class-tuc-cpt.php';       // 1. CPT resto + menu
+require_once TUC_CORE_DIR . 'includes/modules/class-tuc-commande.php';  // 4. REST commande
+require_once TUC_CORE_DIR . 'includes/modules/class-tuc-qr.php';        // 5. QR table
+require_once TUC_CORE_DIR . 'includes/modules/class-tuc-geo.php';       // 8. quartiers
+
 /**
  * Activation : on ne devine pas, on prépare le minimum et on le vérifie.
  */
@@ -31,6 +37,12 @@ register_deactivation_hook(__FILE__, ['TUC_Activator', 'deactivate']);
 add_action('plugins_loaded', static function (): void {
     // le module de santé doit répondre même si le thème n'est pas activé
     TUC_Health::init();
+
+    // le métier vit ici, pas dans le thème : il survit à un changement de design
+    TUC_CPT::init();
+    TUC_Commande::init();
+    TUC_QR::init();
+    TUC_Geo::init();
 }, 5);
 
 /**
