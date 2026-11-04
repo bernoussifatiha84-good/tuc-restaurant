@@ -74,7 +74,7 @@ jobs:
       - name: Contrôle des secrets
         env:
           S_HOST: ${{ secrets.SSH_HOST }}
-          S_USER: ${{ secrets.SSH_USER }}
+          S_USER: ${{ secrets.SSH_USERNAME || secrets.SSH_USER }}
           S_ROOT: ${{ secrets.WP_ROOT }}
           S_URL:  ${{ secrets.SITE_URL }}
           S_KEY:  ${{ secrets.SSH_PRIVATE_KEY }}
