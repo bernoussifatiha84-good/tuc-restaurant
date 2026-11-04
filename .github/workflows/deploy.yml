@@ -1,19 +1,26 @@
-name: Déploiement WordPress (Hostinger)
+name: Déploiement WordPress (3 environnements)
 
-# develop -> staging (dev)   ·   release-x.y.z -> production (prd)
-# Convention de version : <version_theme>.<version_plugin>
+# L'ÉTIQUETTE DÉCIDE DE LA CIBLE :
+#   develop        -> dev  (site de développement)
+#   pre-release-…  -> uat  (site d'essai, avant la prod)
+#   release-…      -> prd  (production)
+#
+# Le lien Git <-> WordPress est la clé SSH + ce script.
+# Aucun bouton dans wp-admin ne déclenche un déploiement.
 on:
   push:
     branches:
       - develop
+      - 'pre-release-**'
       - 'release-**'
   workflow_dispatch:
 
 concurrency:
   group: deploy-${{ github.ref }}
-  cancel-in-progress: true
+  cancel-in-progress: false
 
 jobs:
+  # ---------------------------------------------------------------- 1. LINT
   qualite:
     name: Vérifications
     runs-on: ubuntu-latest
@@ -29,38 +36,73 @@ jobs:
       - name: Lint PHP
         run: |
           set -e
+          n=0
           find wordpress -name '*.php' -print0 | while IFS= read -r -d '' f; do
-            php -l "$f" > /dev/null || { echo "ERREUR de syntaxe : $f"; exit 1; }
+            php -l "$f" > /dev/null || { echo "::error file=$f::Erreur de syntaxe PHP"; exit 1; }
+            n=$((n+1))
           done
           echo "PHP OK"
 
       - name: Équilibre des accolades CSS
         run: |
           python3 - <<'PY'
-          import re, sys, pathlib
-          bad = []
-          for p in pathlib.Path('wordpress').rglob('*.css'):
-              s = p.read_text(encoding='utf-8', errors='ignore')
-              if s.count('{') != s.count('}'):
-                  bad.append(str(p))
-          if bad:
-              print('CSS déséquilibré :', bad); sys.exit(1)
+          import pathlib, sys
+          bad = [str(p) for p in pathlib.Path('wordpress').rglob('*.css')
+                 if p.read_text(encoding='utf-8', errors='ignore').count('{')
+                 != p.read_text(encoding='utf-8', errors='ignore').count('}')]
+          if bad: print('CSS déséquilibré :', bad); sys.exit(1)
           print('CSS OK')
           PY
 
       - name: Syntaxe JS
         run: |
-          if [ -d node_modules ]; then exit 0; fi
           for f in $(find wordpress -name '*.js' -not -path '*/node_modules/*'); do
             node --check "$f" || exit 1
           done
           echo "JS OK"
 
-  deploiement:
-    name: rsync vers Hostinger
-    needs: qualite
+      - name: Le thème est activable
+        run: |
+          # WordPress refuse d'activer un thème sans index.php : on l'attrape ici, pas en prod
+          test -f wordpress/tuc-theme/style.css || { echo "::error::style.css manquant"; exit 1; }
+          test -f wordpress/tuc-theme/index.php  || { echo "::error file=wordpress/tuc-theme/index.php::index.php manquant — WordPress refusera d'activer le thème"; exit 1; }
+          head -20 wordpress/tuc-theme/style.css | grep -q '^Version:' || { echo "::error::en-tête Version absent de style.css"; exit 1; }
+          echo "Thème activable."
+
+  # ---------------------------------------------------------------- 2. CIBLE
+  cible:
+    name: Quelle cible ?
     runs-on: ubuntu-latest
-    environment: ${{ github.ref_name == 'develop' && 'dev' || 'prd' }}
+    outputs:
+      env: ${{ steps.t.outputs.env }}
+      url: ${{ steps.t.outputs.url }}
+      root: ${{ steps.t.outputs.root }}
+    steps:
+      - name: Résoudre la branche -> environnement
+        id: t
+        env:
+          BRANCH: ${{ github.ref_name }}
+        run: |
+          case "$BRANCH" in
+            develop)          E=dev ;;
+            pre-release-*)    E=uat ;;
+            release-*)        E=prd ;;
+            *) echo "::error::Branche '$BRANCH' sans cible. Utilise develop, pre-release-x.y.z ou release-x.y.z"; exit 1 ;;
+          esac
+          echo "env=$E" >> "$GITHUB_OUTPUT"
+          echo "Branche '$BRANCH' → environnement '$E'"
+          case "$E" in
+            dev) echo "url=$(echo "${{ vars.URL_DEV }}")" >> "$GITHUB_OUTPUT"; echo "root=$(echo "${{ vars.ROOT_DEV }}")" >> "$GITHUB_OUTPUT" ;;
+            uat) echo "url=$(echo "${{ vars.URL_UAT }}")" >> "$GITHUB_OUTPUT"; echo "root=$(echo "${{ vars.ROOT_UAT }}")" >> "$GITHUB_OUTPUT" ;;
+            prd) echo "url=$(echo "${{ vars.URL_PRD }}")" >> "$GITHUB_OUTPUT"; echo "root=$(echo "${{ vars.ROOT_PRD }}")" >> "$GITHUB_OUTPUT" ;;
+          esac
+
+  # ---------------------------------------------------------------- 3. DEPLOY
+  deploiement:
+    name: rsync vers ${{ needs.cible.outputs.env }}
+    needs: [qualite, cible]
+    runs-on: ubuntu-latest
+    environment: ${{ needs.cible.outputs.env }}
     steps:
       - uses: actions/checkout@v5
 
@@ -69,77 +111,102 @@ jobs:
         run: |
           THEME_V=$(grep -m1 '^Version:' wordpress/tuc-theme/style.css | sed 's/Version:[[:space:]]*//')
           echo "theme=$THEME_V" >> "$GITHUB_OUTPUT"
-          echo "Version du thème : $THEME_V"
+          echo "Thème $THEME_V → ${{ needs.cible.outputs.env }}"
 
       - name: Contrôle des secrets
         env:
-          S_HOST: ${{ secrets.SSH_HOST }}
-          S_USER: ${{ secrets.SSH_USERNAME || secrets.SSH_USER }}
-          S_ROOT: ${{ secrets.WP_ROOT }}
-          S_URL:  ${{ secrets.SITE_URL }}
-          S_KEY:  ${{ secrets.SSH_PRIVATE_KEY }}
+          S_HOST:  ${{ secrets.SSH_HOST }}
+          S_USER:  ${{ secrets.SSH_USERNAME || secrets.SSH_USER }}
+          S_KEY:   ${{ secrets.SSH_PRIVATE_KEY }}
+          S_ROOT:  ${{ needs.cible.outputs.root }}
+          S_URL:   ${{ needs.cible.outputs.url }}
+          ENV_NM:  ${{ needs.cible.outputs.env }}
         run: |
           manquant=0
-          for n in S_HOST S_USER S_ROOT S_URL S_KEY; do
-            if [ -z "${!n}" ]; then
-              echo "::error::Secret manquant dans l'environnement (dev|prd) : $n"
-              manquant=1
-            fi
+          for n in S_HOST S_USER S_KEY S_ROOT S_URL; do
+            eval "v=\$$n"
+            if [ -z "$v" ]; then echo "::error::$n vide pour l'environnement '$ENV_NM'"; manquant=1; fi
           done
-          if [ "$manquant" != "0" ]; then
-            echo "→ Settings > Environments > dev (ou prd) > Add secret"
-            echo "  S_HOST=SSH_HOST  S_USER=SSH_USER  S_ROOT=WP_ROOT  S_URL=SITE_URL  S_KEY=SSH_PRIVATE_KEY"
-            exit 1
-          fi
-          echo "Tous les secrets sont présents."
+          [ "$manquant" = "0" ] || {
+            echo "→ Settings > Environments > $ENV_NM"
+            echo "   secrets : SSH_HOST, SSH_USERNAME, SSH_PRIVATE_KEY"
+            echo "   variables: URL_${ENV_NM^^}, ROOT_${ENV_NM^^}"
+            exit 1; }
+          echo "Cible : $ENV_NM · $S_URL"
+          echo "Chemin: $S_ROOT"
 
       - name: Préparer la clé SSH
         env:
           PORT: ${{ vars.SSH_PORT || '65002' }}
         run: |
           mkdir -p ~/.ssh
-          echo "${{ secrets.SSH_PRIVATE_KEY }}" > ~/.ssh/id_deploy
+          printf '%s\n' "${{ secrets.SSH_PRIVATE_KEY }}" > ~/.ssh/id_deploy
           chmod 600 ~/.ssh/id_deploy
-          ssh-keygen -y -f ~/.ssh/id_deploy > /dev/null || { echo "::error::SSH_PRIVATE_KEY n'est pas une clé privée valide (OpenSSH ou RSA attendue)"; exit 1; }
-          ssh-keyscan -p "$PORT" -H "${{ secrets.SSH_HOST }}" >> ~/.ssh/known_hosts 2>&1 | tail -1
-          echo "Empreinte de la clé publique (à autoriser sur Hostinger) :"
+          ssh-keygen -y -f ~/.ssh/id_deploy > /dev/null || { echo "::error::SSH_PRIVATE_KEY invalide"; exit 1; }
+          ssh-keyscan -p "$PORT" -H "${{ secrets.SSH_HOST }}" >> ~/.ssh/known_hosts 2>/dev/null
+          echo "Empreinte de la clé envoyée :"
           ssh-keygen -y -f ~/.ssh/id_deploy | ssh-keygen -lf -
 
       - name: Envoyer le thème
         env:
           PORT: ${{ vars.SSH_PORT || '65002' }}
+          USER: ${{ secrets.SSH_USERNAME || secrets.SSH_USER }}
+          HOST: ${{ secrets.SSH_HOST }}
+          ROOT: ${{ needs.cible.outputs.root }}
         run: |
-          rsync -az --delete --no-perms --no-owner --no-group \
-            -e "ssh -i ~/.ssh/id_deploy -p ${{ vars.SSH_PORT || 65002 }} -o StrictHostKeyChecking=accept-new" \
+          rsync -az --delete --no-perms --no-owner --no-group --itemize-changes \
+            -e "ssh -i ~/.ssh/id_deploy -p $PORT -o StrictHostKeyChecking=accept-new" \
             wordpress/tuc-theme/ \
-            "${{ secrets.SSH_USER }}@${{ secrets.SSH_HOST }}:${{ secrets.WP_ROOT }}/wp-content/themes/tuc-theme/"
+            "$USER@$HOST:$ROOT/wp-content/themes/tuc-theme/" \
+            | tail -25
 
-      - name: Envoyer le plugin (si présent)
+      - name: Envoyer le plugin métier (si présent)
         if: hashFiles('wordpress/tuc-market-core/**') != ''
+        env:
+          PORT: ${{ vars.SSH_PORT || '65002' }}
+          USER: ${{ secrets.SSH_USERNAME || secrets.SSH_USER }}
+          HOST: ${{ secrets.SSH_HOST }}
+          ROOT: ${{ needs.cible.outputs.root }}
         run: |
           rsync -az --delete --no-perms --no-owner --no-group \
-            -e "ssh -i ~/.ssh/id_deploy -p ${{ vars.SSH_PORT || 65002 }} -o StrictHostKeyChecking=accept-new" \
+            -e "ssh -i ~/.ssh/id_deploy -p $PORT -o StrictHostKeyChecking=accept-new" \
             wordpress/tuc-market-core/ \
-            "${{ secrets.SSH_USER }}@${{ secrets.SSH_HOST }}:${{ secrets.WP_ROOT }}/wp-content/plugins/tuc-market-core/"
+            "$USER@$HOST:$ROOT/wp-content/plugins/tuc-market-core/"
 
-      - name: Vider le cache + vérifier
+      - name: Activer le thème + purger le cache
+        env:
+          PORT: ${{ vars.SSH_PORT || '65002' }}
+          USER: ${{ secrets.SSH_USERNAME || secrets.SSH_USER }}
+          HOST: ${{ secrets.SSH_HOST }}
+          ROOT: ${{ needs.cible.outputs.root }}
         run: |
-          ssh -i ~/.ssh/id_deploy -p "${{ vars.SSH_PORT || 65002 }}" \
-            "${{ secrets.SSH_USER }}@${{ secrets.SSH_HOST }}" \
-            "cd ${{ secrets.WP_ROOT }} && \
-             (wp cache flush --allow-root || true) && \
-             (wp rewrite flush --allow-root || true) && \
-             (wp litespeed-purge all --allow-root || php -r 'echo \"cache: n/a\n\";')"
+          ssh -i ~/.ssh/id_deploy -p "$PORT" -o StrictHostKeyChecking=accept-new "$USER@$HOST" \
+            "cd $ROOT && \
+             wp theme activate tuc-theme 2>&1 | sed 's/^/  /' ; \
+             wp cache flush 2>&1 | sed 's/^/  /' ; \
+             wp rewrite flush --hard 2>&1 | sed 's/^/  /' ; \
+             wp litespeed-purge all 2>&1 | sed 's/^/  /' || true"
 
-      - name: Fumigène (health check)
+      - name: Fumigène
+        env:
+          URL: ${{ needs.cible.outputs.url }}
+          ENV_NM: ${{ needs.cible.outputs.env }}
+          VER: ${{ steps.v.outputs.theme }}
         run: |
-          URL="${{ secrets.SITE_URL }}/wp-json/tuc/v1/sante"
-          echo "GET $URL"
           for i in 1 2 3 4 5; do
-            BODY=$(curl -fsS --max-time 20 "$URL" 2>/dev/null) && break
-            echo "tentative $i échouée, on réessaie…"
-            sleep 8
+            BODY=$(curl -fsS --max-time 20 "$URL/wp-json/tuc/v1/sante" 2>/dev/null) && break
+            echo "tentative $i/5…"; sleep 8
           done
           echo "$BODY"
-          echo "$BODY" | grep -q '"ok":true' || { echo "❌ /sante ne répond pas"; exit 1; }
-          echo "✅ déploiement vert — version ${{ steps.v.outputs.theme }}"
+          echo "$BODY" | grep -q '"ok":true' || { echo "::error::/sante ne répond pas sur $ENV_NM"; exit 1; }
+          # le site déployé doit annoncer la version déployée
+          echo "$BODY" | grep -q "\"theme\":\"$VER\"" || echo "::warning::version annoncée différente de $VER"
+          echo ""
+          echo "### ✅ $ENV_NM déployé — version $VER" >> "$GITHUB_STEP_SUMMARY"
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+          echo "| | |" >> "$GITHUB_STEP_SUMMARY"
+          echo "|---|---|" >> "$GITHUB_STEP_SUMMARY"
+          echo "| environnement | \`$ENV_NM\` |" >> "$GITHUB_STEP_SUMMARY"
+          echo "| branche | \`${{ github.ref_name }}\` |" >> "$GITHUB_STEP_SUMMARY"
+          echo "| URL | $URL |" >> "$GITHUB_STEP_SUMMARY"
+          echo "| version | $VER |" >> "$GITHUB_STEP_SUMMARY"
