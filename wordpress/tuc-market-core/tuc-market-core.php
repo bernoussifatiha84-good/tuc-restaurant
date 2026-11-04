@@ -27,6 +27,7 @@ require_once TUC_CORE_DIR . 'includes/modules/class-tuc-cpt.php';       // 1. CP
 require_once TUC_CORE_DIR . 'includes/modules/class-tuc-commande.php';  // 4. REST commande
 require_once TUC_CORE_DIR . 'includes/modules/class-tuc-qr.php';        // 5. QR table
 require_once TUC_CORE_DIR . 'includes/modules/class-tuc-geo.php';       // 8. quartiers
+require_once TUC_CORE_DIR . 'includes/modules/class-tuc-rewrite.php';   // 1b. slug racine /kfc
 
 /**
  * Activation : on ne devine pas, on prépare le minimum et on le vérifie.
@@ -43,6 +44,7 @@ add_action('plugins_loaded', static function (): void {
     TUC_Commande::init();
     TUC_QR::init();
     TUC_Geo::init();
+    TUC_Rewrite::init();
 }, 5);
 
 /**

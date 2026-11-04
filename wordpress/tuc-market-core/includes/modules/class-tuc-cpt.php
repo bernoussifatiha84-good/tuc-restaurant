@@ -43,8 +43,8 @@ final class TUC_CPT
             'menu_icon'     => 'dashicons-store',
             'menu_position' => 5,
             'supports'      => ['title', 'editor', 'thumbnail', 'excerpt', 'custom-fields'],
-            // slug racine : tuc.ma/kfc — voir class-tuc-rewrite.php
-            'rewrite'       => ['slug' => '', 'with_front' => false],
+            // racine tuc.ma/kfc : géré par TUC_Rewrite, pas par WordPress
+            'rewrite'       => false,
             'taxonomies'    => ['tuc_quartier_cat'],
         ]);
 
