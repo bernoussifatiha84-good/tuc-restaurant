@@ -55,3 +55,4 @@ require_once TUC_DIR . '/inc/template-tags.php';
 
 /* ---------------------------------------------------------------- REST */
 require_once TUC_DIR . '/inc/rest.php';
+require_once TUC_DIR . '/inc/picture.php';
