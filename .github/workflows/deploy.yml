@@ -183,6 +183,7 @@ jobs:
           ssh -i ~/.ssh/id_deploy -p "$PORT" -o StrictHostKeyChecking=accept-new "$USER@$HOST" \
             "cd $ROOT && \
              wp theme activate tuc-theme 2>&1 | sed 's/^/  /' ; \
+             wp option update permalink_structure '/%postname%/' 2>&1 | sed 's/^/  /' ; \
              wp cache flush 2>&1 | sed 's/^/  /' ; \
              wp rewrite flush --hard 2>&1 | sed 's/^/  /' ; \
              wp litespeed-purge all 2>&1 | sed 's/^/  /' || true"
@@ -193,8 +194,10 @@ jobs:
           ENV_NM: ${{ needs.cible.outputs.env }}
           VER: ${{ steps.v.outputs.theme }}
         run: |
+          BODY=""
           for i in 1 2 3 4 5; do
             BODY=$(curl -fsS --max-time 20 "$URL/wp-json/tuc/v1/sante" 2>/dev/null) && break
+            BODY=$(curl -fsS --max-time 20 "$URL/?rest_route=/tuc/v1/sante" 2>/dev/null) && break
             echo "tentative $i/5…"; sleep 8
           done
           echo "$BODY"
