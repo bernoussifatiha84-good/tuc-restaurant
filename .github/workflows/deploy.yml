@@ -1,9 +1,13 @@
 name: Déploiement WordPress (3 environnements)
 
 # L'ÉTIQUETTE DÉCIDE DE LA CIBLE :
-#   develop        -> dev  (site de développement)
-#   pre-release-…  -> uat  (site d'essai, avant la prod)
-#   release-…      -> prd  (production)
+#   branche develop       -> dev  (site de développement)
+#   tag pre-release-x.y.z -> uat  (site d'essai)
+#   tag release-x.y.z     -> prd  (production, avec approbation)
+#
+# ⚠️ pre-release-… et release-… sont des ÉTIQUETTES (tags), pas des branches.
+#    Pousser une branche qui porte ce nom ne déploie RIEN. Il faut :
+#       git tag -a pre-release-0.3.0 -m "…" && git push origin pre-release-0.3.0
 #
 # Le lien Git <-> WordPress est la clé SSH + ce script.
 # Aucun bouton dans wp-admin ne déclenche un déploiement.
@@ -11,8 +15,9 @@ on:
   push:
     branches:
       - develop
-      - 'pre-release-**'
-      - 'release-**'
+    tags:
+      - 'pre-release-*'
+      - 'release-*'
   workflow_dispatch:
 
 concurrency:
@@ -81,16 +86,16 @@ jobs:
       - name: Résoudre la branche -> environnement
         id: t
         env:
-          BRANCH: ${{ github.ref_name }}
+          REF: ${{ github.ref_name }}
         run: |
-          case "$BRANCH" in
-            develop)          E=dev ;;
-            pre-release-*)    E=uat ;;
-            release-*)        E=prd ;;
-            *) echo "::error::Branche '$BRANCH' sans cible. Utilise develop, pre-release-x.y.z ou release-x.y.z"; exit 1 ;;
+          case "$REF" in
+            develop)          E=dev;  Q="branche" ;;
+            pre-release-*)    E=uat;  Q="étiquette" ;;
+            release-*)        E=prd;  Q="étiquette" ;;
+            *) echo "::error::'$REF' sans cible. Attendu : branche develop, tag pre-release-x.y.z ou tag release-x.y.z"; exit 1 ;;
           esac
           echo "env=$E" >> "$GITHUB_OUTPUT"
-          echo "Branche '$BRANCH' → environnement '$E'"
+          echo "$Q '$REF' → environnement '$E'"
           case "$E" in
             dev) echo "url=$(echo "${{ vars.URL_DEV }}")" >> "$GITHUB_OUTPUT"; echo "root=$(echo "${{ vars.ROOT_DEV }}")" >> "$GITHUB_OUTPUT" ;;
             uat) echo "url=$(echo "${{ vars.URL_UAT }}")" >> "$GITHUB_OUTPUT"; echo "root=$(echo "${{ vars.ROOT_UAT }}")" >> "$GITHUB_OUTPUT" ;;
@@ -173,7 +178,7 @@ jobs:
             wordpress/tuc-market-core/ \
             "$USER@$HOST:$ROOT/wp-content/plugins/tuc-market-core/"
 
-      - name: Activer le thème + purger le cache
+      - name: Activer plugin + thème, puis purger le cache
         env:
           PORT: ${{ vars.SSH_PORT || '65002' }}
           USER: ${{ secrets.SSH_USERNAME || secrets.SSH_USER }}
@@ -182,11 +187,12 @@ jobs:
         run: |
           ssh -i ~/.ssh/id_deploy -p "$PORT" -o StrictHostKeyChecking=accept-new "$USER@$HOST" \
             "cd $ROOT && \
-             wp theme activate tuc-theme 2>&1 | sed 's/^/  /' ; \
-             wp option update permalink_structure '/%postname%/' 2>&1 | sed 's/^/  /' ; \
-             wp cache flush 2>&1 | sed 's/^/  /' ; \
-             wp rewrite flush --hard 2>&1 | sed 's/^/  /' ; \
-             wp litespeed-purge all 2>&1 | sed 's/^/  /' || true"
+             wp plugin activate tuc-market-core 2>&1 | sed 's/^/  plugin: /' ; \
+             wp theme activate tuc-theme 2>&1 | sed 's/^/  thème : /' ; \
+             wp option update permalink_structure '/%postname%/' 2>&1 | sed 's/^/  liens : /' ; \
+             wp cache flush 2>&1 | sed 's/^/  cache : /' ; \
+             wp rewrite flush --hard 2>&1 | sed 's/^/  règles: /' ; \
+             wp litespeed-purge all 2>&1 | sed 's/^/  ls    : /' || true"
 
       - name: Fumigène
         env:
@@ -201,7 +207,8 @@ jobs:
             echo "tentative $i/5…"; sleep 8
           done
           echo "$BODY"
-          echo "$BODY" | grep -q '"ok":true' || { echo "::error::/sante ne répond pas sur $ENV_NM"; exit 1; }
+          echo "$BODY" | grep -q '"ok":true' || {
+            echo "::error::/sante ne dit pas ok sur $ENV_NM — lire plugins_ko et theme ci-dessus"; exit 1; }
           # le site déployé doit annoncer la version déployée
           echo "$BODY" | grep -q "\"theme\":\"$VER\"" || echo "::warning::version annoncée différente de $VER"
           echo ""
