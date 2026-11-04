@@ -1,6 +1,6 @@
 # Brancher GitHub → Hostinger
 
-Tout est déjà poussé. Il reste **6 étapes** côté Hostinger + **1 étape** côté GitHub.
+Tout est déjà poussé. Il reste **7 étapes** côté Hostinger + GitHub.
 Compte 15 minutes.
 
 ---
@@ -9,46 +9,34 @@ Compte 15 minutes.
 
 `hPanel` → `Avancé` → `Accès SSH`
 
-1. Ouvre le panneau **Accès SSH**
-2. Note les 3 informations affichées :
+Note les 3 informations affichées :
 
 ```
-Hôte SSH   : srvXXX.hostinger.com      ← ou une IP
-Utilisateur: u123456789
-Port       : 65002
+Hôte SSH    : srvXXX.hostinger.com      (ou une IP)
+Utilisateur : u123456789
+Port        : 65002
 ```
 
-3. Si l'accès SSH est désactivé, clique **Activer**
+Si l'accès SSH est désactivé, clique **Activer**.
 
-> ⚠️ Ne confonds pas avec le **FTP**. Le FTP c'est le port 21, l'SSH c'est 65002.
-> C'est l'SSH dont le CI a besoin.
+> Ne confonds pas avec le **FTP** (port 21). Le CI a besoin de l'**SSH** (65002).
 
 ---
 
 ## ÉTAPE 2 · Autoriser la clé publique
 
-Toujours dans `Avancé` → `Accès SSH`, section **Clés SSH** :
+Même écran, section **Clés SSH** → **Gérer les clés** → **Ajouter**
 
-1. Clique **Gérer les clés** / **Ajouter une clé**
-2. Colle **toute cette ligne** (une seule ligne, en entier) :
+Colle **cette ligne, en entier** :
 
 ```
 ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAICLqP0eBSZ/OE3HLUccMckN7SwcLUL2P0y/ZLE4Zbiv/ arena-agent@tuc.ma
 ```
 
-3. Nom : `github-actions-tuc`
-4. **Enregistrer**
+Nom : `github-actions-tuc` → **Enregistrer**
 
 > La clé **privée** correspondante est déjà dans le secret GitHub `SSH_PRIVATE_KEY`.
-> Ne la colle nulle part ailleurs. Ne la mets jamais dans le repo.
-
-**Vérification** (facultatif, depuis ton Mac) :
-
-```bash
-ssh -i ~/.ssh/tuc_deploy -p 65002 u123456789@srvXXX.hostinger.com "echo OK"
-```
-
-Si tu n'as pas la clé privée sur ton Mac, saute cette vérification : le CI la fera.
+> Ne la colle nulle part ailleurs, jamais dans le repo.
 
 ---
 
@@ -56,60 +44,50 @@ Si tu n'as pas la clé privée sur ton Mac, saute cette vérification : le CI la
 
 C'est l'erreur n°1 des déploiements qui échouent : un `WP_ROOT` faux.
 
-**Méthode A — terminal Hostinger** (`hPanel` → `Avancé` → `Terminal` ou `Accès SSH`) :
+`hPanel` → `Avancé` → `Terminal` (ou connexion SSH) :
 
 ```bash
 ls ~/domains
-```
-
-Tu verras un dossier par site. Puis :
-
-```bash
 ls ~/domains/tuc.ma/public_html | head
 ```
 
 Si tu vois `wp-config.php`, `wp-content`, `wp-admin` → **c'est le bon dossier**.
 
-**Méthode B — gestionnaire de fichiers** : ouvre `public_html`, cherche `wp-config.php`.
-
-Le `WP_ROOT` à utiliser dans le secret dépend de ce que tu trouves :
-
-| Ce que tu vois | Valeur de `WP_ROOT` |
+| Ce que tu trouves | Valeur de `WP_ROOT` |
 |---|---|
 | `domains/tuc.ma/public_html` | `domains/tuc.ma/public_html` |
-| `public_html` directement à la racine | `public_html` |
+| `public_html` à la racine | `public_html` |
 
-> Le rsync utilise `WP_ROOT` **sans** `~` devant, relatif au dossier utilisateur.
+> Sans `~` devant. Relatif au dossier utilisateur.
 
 ---
 
-## ÉTAPE 4 · Créer le sous-domaine de test (recommandé)
+## ÉTAPE 4 · Créer le sous-domaine de test (obligatoire)
 
 `hPanel` → `Domaines` → `Sous-domaines`
 
 ```
 Sous-domaine : dev.tuc.ma
-Dossier      : domains/dev.tuc.ma/public_html   (ou public_html/dev)
+Dossier      : domains/dev.tuc.ma/public_html
 ```
 
-Installe WordPress dessus (voir étape 5), puis `SITE_URL` = `https://dev.tuc.ma`.
+Installe WordPress dessus à l'étape 5, puis `SITE_URL` = `https://dev.tuc.ma`.
 
-> Sans sous-domaine de test, ton `develop` écraserait la prod. Ne fais pas ça.
+> Sans sous-domaine de test, ton `develop` écraserait la prod.
 
 ---
 
-## ÉTAPE 5 · Installer WordPress (si pas déjà fait)
+## ÉTAPE 5 · Installer WordPress
 
 `hPanel` → `Sites web` → `Gérer` → `WordPress` → **Installer**
 
 - Langue : **Français**
 - Nom du site : `TUC`
-- Utilisateur : note-le, il n'est pas dans le CI
+- Note l'utilisateur admin (il n'est pas dans le CI)
 
 Puis dans `wp-admin` :
-
 `Réglages` → `Permaliens` → **Nom de l'article** → Enregistrer
-→ indispensable pour que `/wp-json/` fonctionne.
+→ sans ça, `/wp-json/` renvoie 404.
 
 ---
 
@@ -117,37 +95,32 @@ Puis dans `wp-admin` :
 
 `github.com/bernoussifatiha84-good/tuc-restaurant` → `Settings` → `Environments`
 
-Tu as déjà deux environnements : **`dev`** et **`prd`** (je les ai créés).
+Deux environnements existent déjà : **`dev`** et **`prd`**.
 
 ### Environnement `dev`
 
-| Nom | Valeur | Déjà fait ? |
+| Nom | Valeur | État |
 |---|---|---|
-| `SSH_PRIVATE_KEY` | *(la clé ed25519)* | ✅ **déjà en place** |
+| `SSH_PRIVATE_KEY` | *(clé ed25519)* | ✅ **déjà en place** |
 | `SSH_HOST` | `srvXXX.hostinger.com` | ⬜ à toi |
 | `SSH_USER` | `u123456789` | ⬜ à toi |
 | `WP_ROOT` | `domains/dev.tuc.ma/public_html` | ⬜ à toi |
 | `SITE_URL` | `https://dev.tuc.ma` | ⬜ à toi |
 
-Variable (onglet **Variables**, pas Secrets) — déjà en place :
-
-| Nom | Valeur |
-|---|---|
-| `SSH_PORT` | `65002` ✅ |
+Variable déjà en place (onglet **Variables**) : `SSH_PORT` = `65002` ✅
 
 ### Environnement `prd`
 
-Mêmes 4 secrets, mais :
+Mêmes secrets, avec :
 
 | Nom | Valeur |
 |---|---|
 | `WP_ROOT` | `domains/tuc.ma/public_html` |
 | `SITE_URL` | `https://tuc.ma` |
 
-> `SSH_PRIVATE_KEY` est **par environnement**, pas global. Il faudra la recoller aussi dans `prd`.
-> Le workflow lit l'environnement `dev` pour `develop`, `prd` pour `release-*`.
+> `SSH_PRIVATE_KEY` est **par environnement**. Il faut la recoller dans `prd` aussi.
 
-### En ligne de commande (si tu préfères)
+### En ligne de commande
 
 ```bash
 gh secret set SSH_HOST -R bernoussifatiha84-good/tuc-restaurant --env dev --body "srvXXX.hostinger.com"
@@ -158,7 +131,7 @@ gh secret set SITE_URL -R bernoussifatiha84-good/tuc-restaurant --env dev --body
 
 ---
 
-## ÉTAPE 7 · Lancer et activer le thème
+## ÉTAPE 7 · Lancer, puis activer le thème
 
 ```bash
 git checkout develop
@@ -166,24 +139,21 @@ git commit --allow-empty -m "test: premier déploiement"
 git push origin develop
 ```
 
-Puis `Actions` → le run doit finir **vert**.
+`Actions` → le run doit finir **vert**.
 
-Ensuite, **une seule fois**, dans `wp-admin` :
+Puis **une seule fois** dans `wp-admin` :
 
-`Apparence` → `Thèmes` → **TUC Market** → **Activer**
-
-Et : `Réglages` → `Lecture` → page d'accueil = **une page statique vide**
-→ c'est `front-page.php` qui rend l'accueil.
+1. `Apparence` → `Thèmes` → **TUC Market** → **Activer**
+2. `Réglages` → `Lecture` → page d'accueil = **une page statique vide**
+   (c'est `front-page.php` qui rend l'accueil)
 
 ---
 
-## Vérifier que ça marche
+## Vérifier
 
 ```bash
 curl https://dev.tuc.ma/wp-json/tuc/v1/sante
 ```
-
-Réponse attendue :
 
 ```json
 {"ok":true,"theme":"0.1.0","heure":"2026-11-04T20:00:00+01:00","restos":28}
@@ -195,13 +165,13 @@ Réponse attendue :
 
 | Message dans Actions | Cause | Solution |
 |---|---|---|
-| `Secret manquant : S_HOST` | step 6 pas fait | ajouter les 4 secrets |
-| `Permission denied (publickey)` | clé publique non autorisée | refaire étape 2 |
-| `rsync: change_dir failed` | `WP_ROOT` faux | refaire étape 3 (`pwd` en SSH) |
-| `Connection refused` | mauvais port | `SSH_PORT` = `65002` (pas 22, pas 21) |
-| `/sante` répond 404 | thème non activé | étape 7, activer TUC Market |
-| `/sante` répond 500 | permaliens | `Réglages > Permaliens > Enregistrer` |
-| `bash: wp: command not found` | WP-CLI absent | **non bloquant**, le workflow continue |
+| `Secret manquant : S_HOST` | étape 6 pas faite | ajouter les 4 secrets |
+| `Permission denied (publickey)` | clé non autorisée | refaire étape 2 |
+| `rsync: change_dir failed` | `WP_ROOT` faux | étape 3 (`pwd` en SSH) |
+| `Connection refused` | mauvais port | `SSH_PORT` = `65002` |
+| `/sante` → 404 | thème non activé | étape 7 |
+| `/sante` → 500 | permaliens | `Réglages > Permaliens > Enregistrer` |
+| `bash: wp: command not found` | WP-CLI absent | **non bloquant** |
 
 ---
 
@@ -209,23 +179,23 @@ Réponse attendue :
 
 ```
 push develop
-  └─ 1. php -l  sur 7 fichiers PHP          → échoue si une virgule manque
-  └─ 2. accolades CSS équilibrées           → échoue si une accolade est ouverte
-  └─ 3. node --check sur les JS             → échoue si une parenthèse manque
-  └─ 4. présence des 5 secrets              → échoue en te disant lequel manque
-  └─ 5. rsync --delete du thème             → miroir exact, pas de fichier fantôme
-  └─ 6. purge cache + permaliens            → si wp-cli existe
-  └─ 7. GET /wp-json/tuc/v1/sante           → échoue si le site ne répond pas
+  ├─ 1. php -l sur 8 fichiers PHP          échoue si une virgule manque
+  ├─ 2. accolades CSS équilibrées          échoue si une accolade est ouverte
+  ├─ 3. node --check sur les JS            échoue si une parenthèse manque
+  ├─ 4. présence des 5 secrets             échoue en disant lequel manque
+  ├─ 5. rsync --delete du thème            miroir exact, zéro fichier fantôme
+  ├─ 6. purge cache + permaliens           si wp-cli existe
+  └─ 7. GET /wp-json/tuc/v1/sante          échoue si le site ne répond pas
 ```
 
-**Le point important** : le déploiement est **rouge** si le site est cassé.
+**Le point clé** : le déploiement est **rouge** si le site est cassé.
 Pas de « c'est vert mais la page est blanche ».
 
 ---
 
-## Récapitulatif des branches
+## Branches
 
-| Branche | Environnement GitHub | Cible |
+| Branche | Environnement | Cible |
 |---|---|---|
 | `develop` | `dev` | sous-domaine de test |
 | `release-0.2.0` | `prd` | `tuc.ma` |
