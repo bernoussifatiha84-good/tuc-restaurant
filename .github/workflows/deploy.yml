@@ -18,7 +18,7 @@ jobs:
     name: Vérifications
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       - name: PHP 8.2
         uses: shivammathur/setup-php@v2
@@ -62,7 +62,7 @@ jobs:
     runs-on: ubuntu-latest
     environment: ${{ github.ref_name == 'develop' && 'dev' || 'prd' }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       - name: Version du thème
         id: v
@@ -71,17 +71,35 @@ jobs:
           echo "theme=$THEME_V" >> "$GITHUB_OUTPUT"
           echo "Version du thème : $THEME_V"
 
+      - name: Contrôle des secrets
+        run: |
+          manquant=0
+          for s in SSH_HOST SSH_USER WP_ROOT SITE_URL; do
+            v=$(eval echo "\${{ secrets.$s }}")
+            if [ -z "$v" ]; then echo "::error::Secret manquant dans l'environnement '${{ github.ref_name == 'develop' && 'dev' || 'prd' }}' : $s"; manquant=1; fi
+          done
+          [ -n "${{ secrets.SSH_PRIVATE_KEY }}" ] || { echo "::error::Secret manquant : SSH_PRIVATE_KEY"; manquant=1; }
+          [ "$manquant" = "0" ] || { echo "→ Settings > Environments > dev|prd > Add secret"; exit 1; }
+          echo "Tous les secrets sont présents."
+
       - name: Préparer la clé SSH
+        env:
+          PORT: ${{ vars.SSH_PORT || '65002' }}
         run: |
           mkdir -p ~/.ssh
           echo "${{ secrets.SSH_PRIVATE_KEY }}" > ~/.ssh/id_deploy
           chmod 600 ~/.ssh/id_deploy
-          ssh-keyscan -p "${{ secrets.SSH_PORT || 65002 }}" -H "${{ secrets.SSH_HOST }}" >> ~/.ssh/known_hosts 2>/dev/null
+          ssh-keygen -y -f ~/.ssh/id_deploy > /dev/null || { echo "::error::SSH_PRIVATE_KEY n'est pas une clé privée valide (OpenSSH ou RSA attendue)"; exit 1; }
+          ssh-keyscan -p "$PORT" -H "${{ secrets.SSH_HOST }}" >> ~/.ssh/known_hosts 2>&1 | tail -1
+          echo "Empreinte de la clé publique (à autoriser sur Hostinger) :"
+          ssh-keygen -y -f ~/.ssh/id_deploy | ssh-keygen -lf -
 
       - name: Envoyer le thème
+        env:
+          PORT: ${{ vars.SSH_PORT || '65002' }}
         run: |
           rsync -az --delete --no-perms --no-owner --no-group \
-            -e "ssh -i ~/.ssh/id_deploy -p ${{ secrets.SSH_PORT || 65002 }} -o StrictHostKeyChecking=accept-new" \
+            -e "ssh -i ~/.ssh/id_deploy -p ${{ vars.SSH_PORT || 65002 }} -o StrictHostKeyChecking=accept-new" \
             wordpress/tuc-theme/ \
             "${{ secrets.SSH_USER }}@${{ secrets.SSH_HOST }}:${{ secrets.WP_ROOT }}/wp-content/themes/tuc-theme/"
 
@@ -89,13 +107,13 @@ jobs:
         if: hashFiles('wordpress/tuc-market-core/**') != ''
         run: |
           rsync -az --delete --no-perms --no-owner --no-group \
-            -e "ssh -i ~/.ssh/id_deploy -p ${{ secrets.SSH_PORT || 65002 }} -o StrictHostKeyChecking=accept-new" \
+            -e "ssh -i ~/.ssh/id_deploy -p ${{ vars.SSH_PORT || 65002 }} -o StrictHostKeyChecking=accept-new" \
             wordpress/tuc-market-core/ \
             "${{ secrets.SSH_USER }}@${{ secrets.SSH_HOST }}:${{ secrets.WP_ROOT }}/wp-content/plugins/tuc-market-core/"
 
       - name: Vider le cache + vérifier
         run: |
-          ssh -i ~/.ssh/id_deploy -p "${{ secrets.SSH_PORT || 65002 }}" \
+          ssh -i ~/.ssh/id_deploy -p "${{ vars.SSH_PORT || 65002 }}" \
             "${{ secrets.SSH_USER }}@${{ secrets.SSH_HOST }}" \
             "cd ${{ secrets.WP_ROOT }} && \
              (wp cache flush --allow-root || true) && \
