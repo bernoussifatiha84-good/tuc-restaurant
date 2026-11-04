@@ -1,126 +1,118 @@
-# Git Flow TUC — conception pep.ma
+# Git Flow TUC — état réel
 
-> Version du 4 novembre 2026, corrigée deux fois. `pre-release-…` et `release-…`
-> ne sont pas des branches : **ce sont des étiquettes (tags)**.
+> 4 novembre 2026. Ce document décrit **ce qui existe**, pas ce que je voudrais qui existe.
 
 ---
 
-## 1. La règle
+## 1. Trois noms d'environnement GitHub. Ce ne sont pas trois sites.
 
-| Déclencheur | Nature | Cible | Commande |
+| Environnement GitHub | Adresse | Branché ? | Ce qui l'atteint |
 |---|---|---|---|
-| branche `develop` | **branche** | dev | `git push origin develop` |
-| étiquette `pre-release-x.y.z` | **tag** | uat | `git tag -a pre-release-0.3.0 -m "…" && git push origin pre-release-0.3.0` |
-| étiquette `release-x.y.z` | **tag** | prd | `git tag -a release-0.3.0 -m "…" && git push origin release-0.3.0` |
+| `dev` | `chocolate-gazelle-457691.hostingersite.com` | ✅ | branche `develop` |
+| `uat` | `chocolate-gazelle-457691.hostingersite.com/uat` | ✅ | tag `pre-release-*` |
+| `prd` | *(aucune)* | ⛔ **non branché** | tag `release-*` |
 
-⚠️ **Pousser une branche nommée `pre-release-…` ne déploie rien.** Le workflow déclare :
+**Le tag ne crée pas un WordPress.** Il choisit **quel nom d'environnement** lance le flux.
+Aujourd'hui `develop` et `pre-release-…` déposent le code **sur le même hébergement** —
+l'un à la racine, l'autre dans `/uat`. C'est la configuration actuelle, assumée.
+
+`prd` s'activera quand **`tuc.ma`** sera rattaché à l'hébergement.
+
+---
+
+## 2. Les trois déclencheurs
+
+| Déclencheur | Nature | Environnement | Commande |
+|---|---|---|---|
+| `develop` | branche | `dev` | `git push origin develop` |
+| `pre-release-x.y.z` | **tag** | `uat` | `git tag -a pre-release-0.3.0 -m "…" && git push origin pre-release-0.3.0` |
+| `release-x.y.z` | **tag** | `prd` | `git tag -a release-0.3.0 -m "…" && git push origin release-0.3.0` |
 
 ```yaml
 on:
   push:
     branches: [develop]
-    tags:
-      - 'pre-release-*'
-      - 'release-*'
+    tags: ['pre-release-*', 'release-*']
 ```
 
-Un tag ne peut pas être poussé par `git push origin develop` : il faut le créer puis
-le pousser explicitement.
+⚠️ **Pousser une branche nommée `pre-release-…` ne déploie rien.** Il faut créer le tag
+puis le pousser. Les branches homonymes ont été supprimées du dépôt.
 
 ---
 
-## 2. Un environnement = un site entier
+## 3. Le flux, tel qu'il tourne
 
 ```
-develop            →  dev.tuc.ma      site entier
-tag pre-release-*  →  uat.tuc.ma      site entier   ← on teste ici
-tag release-*      →  tuc.ma          site entier   ← approbation manuelle
+1. Vérifications      php -l · CSS · JS · index.php + Version
+2. Quelle cible ?     develop→dev | tag pre-release-*→uat | tag release-*→prd
+3. rsync              thème (--delete) + plugin tuc-market-core (--delete)
+                      puis WP-CLI : activate plugin, activate thème,
+                      permaliens, cache flush, rewrite flush, litespeed purge
+4. Fumigène           GET /wp-json/tuc/v1/sante  → doit répondre {"ok":true}
 ```
 
-Chaque site a son WordPress, sa base, ses uploads, son `wp-config.php`.
-**Ce qui circule entre les branches, c'est le thème et le plugin — pas le site.**
+**Rien n'est installé dans le runner.** GitHub pousse des fichiers par SSH, puis lance WP-CLI.
 
 ---
 
-## 3. Le déploiement, étape par étape
+## 4. `prd` : ce qui se passe si on tague `release-*` aujourd'hui
 
+Deux garde-fous, dans cet ordre :
+
+**① L'environnement `prd` exige une approbation**
+`typologie : required_reviewers` → le run s'arrête sur **« Waiting for approval »**.
+Tu peux approuver, ou annuler.
+
+**② Si on approuve, le contrôle de branchement intervient**
 ```
-1. qualite        php -l · CSS · JS · index.php + Version présents
-2. cible          develop→dev | tag pre-release-*→uat | tag release-*→prd
-3. deploiement    SSH → rsync thème (--delete)
-                  SSH → rsync plugin tuc-market-core (--delete)
-                  SSH → wp plugin activate tuc-market-core
-                        wp theme activate tuc-theme
-                        wp option update permalink_structure
-                        wp cache flush
-                        wp rewrite flush --hard
-                        wp litespeed-purge all
-4. fumigène       GET /wp-json/tuc/v1/sante   → doit répondre {"ok":true}
-```
-
-Aucune installation de WordPress dans le runner. **GitHub pousse des fichiers, rien de plus.**
-
-### Le module de santé
-
-`/wp-json/tuc/v1/sante` répond depuis le **plugin**, pas depuis le thème :
-
-```json
-{"ok":true,"plugin":"0.1.0","theme":"TUC Market","theme_ver":"0.1.0",
- "wp":"7.1.4","php":"8.3.36","langues":["fr_FR","ltr"],"plugins_ko":[]}
+::error::La cible 'prd' n'est pas encore branchée.
+  Aujourd'hui : dev et uat déposent le code sur le même hébergement.
+  'prd' s'activera quand tuc.ma sera rattaché.
 ```
 
-- `ok` = thème **TUC Market** actif **et** plugin présent **et** aucun plugin requis manquant
-- si le thème est cassé, le plugin répond quand même → le CI distingue
-  « thème cassé » de « site mort »
-- réponse **503** quand `ok:false`, pour que le déploiement échoue proprement
+Rien ne part vers une adresse qui n'existe pas.
+
+> ⚠️ Détail trouvé en testant : la protection de `prd` filtrait sur `type: branch`.
+> Un **tag** `release-*` était donc refusé par GitHub lui-même
+> (`Tag "release-0.2.1" is not allowed to deploy to prd`). La règle est maintenant
+> **`type: tag`** — `release-*` accepté en tant qu'étiquette.
 
 ---
 
-## 4. État réel au 4 novembre 2026
+## 5. Quand `tuc.ma` sera prêt
 
-| | |
-|---|---|
-| Branches | `develop`, `main` |
-| Étiquettes | `pre-release-0.2.0`, `pre-release-0.2.1`, `release-0.2.0` |
-| Dernier déploiement uat | **tag `pre-release-0.2.1` → vert** |
-| Étapes | 9/9 · thème + plugin + activation + purge + fumigène |
-| Santé | `{"ok":true,…,"plugins_ko":[]}` |
+Trois opérations, et `prd` devient fonctionnel **sans toucher au code** :
 
----
+```bash
+# 1. rattacher tuc.ma dans hPanel + installer WordPress dessus
+# 2. régler les deux variables
+gh variable set URL_PRD  -R bernoussifatiha84-good/tuc-restaurant --body "https://tuc.ma"
+gh variable set ROOT_PRD -R bernoussifatiha84-good/tuc-restaurant \
+   --body "domains/tuc.ma/public_html"
+# 3. poser les secrets SSH dans l'environnement prd
+gh secret set SSH_HOST     -R … --env prd --body "145.223.38.175"
+gh secret set SSH_USERNAME -R … --env prd --body "u987613820"
+gh secret set SSH_PRIVATE_KEY -R … --env prd < tuc_deploy
+```
 
-## 5. Ce qui reste, et qui n'est pas technique
-
-`tuc.ma`, `dev.tuc.ma`, `uat.tuc.ma` **ne résolvent pas**. Le domaine n'est pas rattaché
-à l'hébergement, et Hostinger n'a pas d'API pour les sous-domaines ni pour créer
-une base MySQL (`Access denied` en SSH).
-
-**Tant que ces trois sites n'existent pas, le flux TUC n'est pas encore celui de pep.ma.**
-Il en a la mécanique, pas les trois environnements.
-
-### 5 actions dans hPanel
-
-1. `Domaines` → rattacher **tuc.ma**
-2. `Sous-domaines` → **dev.tuc.ma** → `domains/dev.tuc.ma/public_html`
-3. `Sous-domaines` → **uat.tuc.ma** → `domains/uat.tuc.ma/public_html`
-4. `Bases de données` → **tuc_prd**, **tuc_uat**, **tuc_dev**
-5. Prévenir — j'installe les 3 WordPress et je câble le reste
-
-### Ce que je fais ensuite
-
-Installer WordPress × 3 · remplir `URL_*` / `ROOT_*` · poser les secrets dans les
-3 environnements · activer thème + 5 plugins · pousser `develop`, taguer
-`pre-release-0.1.0` puis `release-0.1.0` · te montrer les 3 URLs vertes.
+Puis `git tag -a release-1.0.0 && git push origin release-1.0.0` →
+approbation → déploiement réel sur `tuc.ma`.
 
 ---
 
-## 6. En attendant : le provisoire, assumé
+## 6. Ce qui n'est pas encore au niveau pep.ma
 
-| Environnement | Site provisoire | Site cible |
+| | pep.ma | TUC aujourd'hui |
 |---|---|---|
-| dev | `chocolate-gazelle-457691.hostingersite.com` | `dev.tuc.ma` |
-| uat | `…chocolate-gazelle…/uat` | `uat.tuc.ma` |
-| prd | *(non déployé)* | `tuc.ma` |
+| 3 noms d'environnement | ✅ | ✅ |
+| Déclencheur par étiquette | ✅ | ✅ |
+| SSH + rsync + WP-CLI | ✅ | ✅ |
+| Plugin métier + santé | ✅ `partikulier-core` | ✅ `tuc-market-core` |
+| **3 sites séparés** | ✅ | ⛔ dev et uat partagent un hébergement |
+| **prod branchée** | ✅ | ⛔ attend `tuc.ma` |
 
-Le `/uat` dans un sous-dossier **n'est pas le modèle** : c'est un dépannage rendu
-nécessaire par l'impossibilité de créer une base MySQL. Le jour où les sous-domaines
-existent, je change **deux variables** (`URL_UAT`, `ROOT_UAT`) — **zéro ligne de code**.
+Les quatre premières lignes sont faites. Les deux dernières dépendent de toi — et la
+seconde (`tuc.ma`) est celle qui compte : **elle débloque la prod**.
+
+Quand `tuc.ma` sera là : `tuc.ma` = prd, et on décidera alors si `uat` devient
+`uat.tuc.ma` (site entier) ou reste l'essai partagé actuel.
