@@ -10,7 +10,7 @@ Cette note décrit le modèle de déploiement du projet, pas les identifiants du
 | `uat` | tag `pre-release-*` | validation avant release |
 | `prd` | tag `release-*` | production; à protéger par approbation |
 
-La passation indique que `dev` et `uat` utilisent des racines WordPress distinctes sur un même hébergement et que la production n’était pas encore raccordée. Cet état n’a pas été vérifié en direct et peut avoir changé.
+La passation indiquait que `dev` et `uat` utilisent des racines WordPress distinctes sur un même hébergement et que la production n’était pas encore raccordée. Lors du déploiement UAT du 5 novembre 2026 (tag `pre-release-0.8.5-uat.1`), le workflow a vérifié que l’URL WordPress lue à `ROOT_UAT` correspond à `URL_UAT`; la sauvegarde des répertoires, le transfert, l’activation et le health check ont réussi. Le garde-fou compare aussi URL/racine UAT à PRD si les variables PRD sont configurées. Ce contrôle ponctuel ne remplace pas un audit complet de l’hébergement.
 
 ## Configuration à conserver hors du dépôt
 

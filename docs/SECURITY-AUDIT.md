@@ -6,9 +6,9 @@
 
 ## Synthèse
 
-La revue a identifié des contrôles insuffisants sur les permissions de caisse/statut, le prix affiché dans le parcours WhatsApp, le polling du lien magique, la validation des endpoints Web Push et plusieurs validations/limites de requêtes publiques. Les correctifs initiaux ont passé le workflow Docker WordPress sur le commit `798a6481409fa1191a24b5055aa620ae922d0fad` (run [42092149867](https://github.com/bernoussifatiha84-good/tuc-restaurant/actions/runs/42092149867)). Un complément ajoute maintenant HMAC/timestamp/rejeu et une exécution n8n éphémère dans la CI; cette nouvelle partie reste à valider par son run GitHub.
+La revue a identifié des contrôles insuffisants sur les permissions de caisse/statut, le prix affiché dans le parcours WhatsApp, le polling du lien magique, la validation des endpoints Web Push et plusieurs validations/limites de requêtes publiques. Les correctifs initiaux ont passé le workflow Docker WordPress; le complément HMAC/timestamp/anti-rejeu et le parcours n8n éphémère ont également réussi au run [42100751443](https://github.com/bernoussifatiha84-good/tuc-restaurant/actions/runs/42100751443).
 
-Aucun merge, déploiement, accès UAT/production ou appel au fournisseur WhatsApp n’a été effectué. Les points résiduels ci-dessous empêchent de considérer le parcours multi-commerce et l’authentification WhatsApp comme prêts pour la production.
+Aucun merge ni déploiement en production n’a été effectué. Un déploiement sur l’environnement UAT temporaire a réussi via le tag `pre-release-0.8.5-uat.1` (run [42105461215](https://github.com/bernoussifatiha84-good/tuc-restaurant/actions/runs/42105461215)); la cible WordPress a été vérifiée, les répertoires précédents sauvegardés, et le contrôle de santé/version a réussi. Aucun fournisseur WhatsApp réel n’a été appelé. Les points résiduels ci-dessous empêchent de considérer le parcours multi-commerce et l’authentification WhatsApp comme prêts pour la production.
 
 ## Constats et traitement
 
@@ -36,7 +36,8 @@ Aucun merge, déploiement, accès UAT/production ou appel au fournisseur WhatsAp
 - `git diff --check` : réussi avant les commits.
 - PHP local : non disponible dans le sandbox; syntaxe PHP vérifiée dans l’image WP-CLI PHP 8.2 du runner.
 - Workflow Docker WordPress sans n8n : **réussi** au run [42092149867](https://github.com/bernoussifatiha84-good/tuc-restaurant/actions/runs/42092149867), commit `798a6481409fa1191a24b5055aa620ae922d0fad`.
-- Extension HMAC + n8n E2E : **en attente du run GitHub** sur cette modification; ne pas annoncer comme validée avant son succès.
+- HMAC + n8n E2E : **réussi** au run [42100751443](https://github.com/bernoussifatiha84-good/tuc-restaurant/actions/runs/42100751443) : toutes les étapes du job, y compris le test du webhook signé, l’anti-rejeu et le lien magique, sont passées.
+- Déploiement UAT temporaire : **réussi** au run [42105461215](https://github.com/bernoussifatiha84-good/tuc-restaurant/actions/runs/42105461215), tag `pre-release-0.8.5-uat.1`; précontrôle URL/racine, sauvegarde, transfert, activation et health check/version ont passé.
 
 ## Fichiers examinés/corrigés
 
