@@ -4,8 +4,6 @@
  * Exécution : wp eval-file /opt/tuc-tests/wp-docker-regression.php
  */
 
-declare(strict_types=1);
-
 if (!class_exists('WP_CLI')) {
     fwrite(STDERR, "Ce script doit être exécuté avec WP-CLI.\n");
     exit(1);
