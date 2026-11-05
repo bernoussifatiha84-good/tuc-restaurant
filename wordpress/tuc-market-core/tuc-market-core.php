@@ -21,6 +21,7 @@ define('TUC_CORE_DIR', plugin_dir_path(__FILE__));
 
 require_once TUC_CORE_DIR . 'includes/class-tuc-health.php';
 require_once TUC_CORE_DIR . 'includes/class-tuc-activator.php';
+require_once TUC_CORE_DIR . 'includes/class-tuc-roles.php';
 
 // modules métier — tout dans un seul plugin, pas dix
 require_once TUC_CORE_DIR . 'includes/modules/class-tuc-cpt.php';       // 1. CPT resto + menu
@@ -40,6 +41,8 @@ register_activation_hook(__FILE__, ['TUC_Activator', 'activate']);
 register_deactivation_hook(__FILE__, ['TUC_Activator', 'deactivate']);
 
 add_action('plugins_loaded', static function (): void {
+    TUC_Roles::init();
+
     // le module de santé doit répondre même si le thème n'est pas activé
     TUC_Health::init();
 

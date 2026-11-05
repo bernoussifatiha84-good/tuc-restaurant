@@ -33,12 +33,74 @@ if (!defined('ABSPATH')) {
 
 final class TUC_Caisse
 {
-    /**
-     * Capacité minimale sûre tant que les rôles owner/manager/cashier et leur
-     * rattachement à une boutique ne sont pas déployés. `edit_posts` inclut
-     * auteurs/éditeurs WordPress et ne constitue pas une autorisation de caisse.
-     */
-    public const CAP = 'manage_options';
+    /** Capacité dédiée de caisse; les rôles WP génériques ne donnent pas accès. */
+    public const CAP = TUC_Roles::CAP_ACCESS_CAISSE;
+
+    public static function peut_acceder(): bool
+    {
+        return current_user_can('manage_options')
+            || (current_user_can(self::CAP) && self::mon_resto() !== null);
+    }
+
+    public static function peut_voir_commandes(): bool
+    {
+        return current_user_can('manage_options')
+            || (current_user_can(TUC_Roles::CAP_VIEW_ORDERS) && self::mon_resto() !== null);
+    }
+
+    public static function peut_modifier_commandes(): bool
+    {
+        return current_user_can('manage_options')
+            || (current_user_can(TUC_Roles::CAP_UPDATE_ORDERS) && self::mon_resto() !== null);
+    }
+
+    public static function peut_gerer_restaurant(): bool
+    {
+        return current_user_can('manage_options')
+            || (current_user_can(TUC_Roles::CAP_MANAGE_RESTAURANT) && self::mon_resto() !== null);
+    }
+
+    /** Vérifie la capacité métier et l'affectation explicite au restaurant. */
+    public static function utilisateur_autorise_restaurant(int $user_id, int $restaurant_id, string $capability): bool
+    {
+        if ($user_id <= 0 || $restaurant_id <= 0) {
+            return false;
+        }
+        if (user_can($user_id, 'manage_options')) {
+            return true;
+        }
+        if (!user_can($user_id, $capability)) {
+            return false;
+        }
+
+        $restaurant = get_post($restaurant_id);
+        if (!$restaurant instanceof WP_Post || $restaurant->post_type !== 'tuc_resto' || $restaurant->post_status !== 'publish') {
+            return false;
+        }
+
+        return (int) get_user_meta($user_id, 'tuc_resto_id', true) === $restaurant_id;
+    }
+
+    /** Permission de la route historique, désormais limitée au restaurant assigné. */
+    public static function permission_statut_commande(?WP_REST_Request $request = null): bool
+    {
+        if (current_user_can('manage_options')) {
+            return true;
+        }
+        if ($request === null) {
+            return false;
+        }
+        $commande = get_post((int) $request->get_param('id'));
+        if (!$commande instanceof WP_Post || $commande->post_type !== TUC_Commande::CPT) {
+            return false;
+        }
+        $restaurant_id = (int) get_post_meta($commande->ID, 'tuc_resto', true);
+        return self::utilisateur_autorise_restaurant(
+            get_current_user_id(),
+            $restaurant_id,
+            TUC_Roles::CAP_UPDATE_ORDERS
+        );
+    }
 
     public static function init(): void
     {
@@ -202,7 +264,7 @@ final class TUC_Caisse
         nocache_headers();
         header('Content-Type: text/html; charset=utf-8');
 
-        $connecte = is_user_logged_in() && current_user_can(self::CAP);
+        $connecte = is_user_logged_in() && self::peut_acceder();
 
         include TUC_CORE_DIR . 'includes/vues/caisse.php';
     }
@@ -219,14 +281,17 @@ final class TUC_Caisse
         $id = (int) get_user_meta($user_id, 'tuc_resto_id', true);
         if ($id > 0) {
             $p = get_post($id);
-            if ($p instanceof WP_Post && $p->post_type === 'tuc_resto') {
+            if ($p instanceof WP_Post && $p->post_type === 'tuc_resto' && $p->post_status === 'publish') {
                 return $p;
             }
+            return null; // une affectation invalide ne doit jamais retomber sur un autre commerce.
         }
 
-        // 2. sinon, si le site n'a qu'un seul resto publiable, c'est celui-là.
-        //    C'est le cas au lancement (un resto pilote) : ça évite de créer
-        //    une usine à gaz de rattachement avant d'avoir un client.
+        // Les rôles métier doivent toujours avoir une affectation explicite.
+        // Le fallback historique est réservé aux administrateurs globaux.
+        if (!user_can($user_id, 'manage_options')) {
+            return null;
+        }
         $tous = get_posts([
             'post_type'      => 'tuc_resto',
             'post_status'    => 'publish',
@@ -247,7 +312,10 @@ final class TUC_Caisse
 
     public static function rest(): void
     {
-        $auth = static fn(): bool => current_user_can(self::CAP);
+        $auth = static fn(): bool => self::peut_acceder();
+        $viewOrders = static fn(): bool => self::peut_voir_commandes();
+        $updateOrders = static fn(): bool => self::peut_modifier_commandes();
+        $manageRestaurant = static fn(): bool => self::peut_gerer_restaurant();
 
         register_rest_route('tuc/v1', '/caisse/moi', [
             'methods'             => 'GET',
@@ -257,19 +325,19 @@ final class TUC_Caisse
 
         register_rest_route('tuc/v1', '/caisse/commandes', [
             'methods'             => 'GET',
-            'permission_callback' => $auth,
+            'permission_callback' => $viewOrders,
             'callback'            => [self::class, 'commandes'],
         ]);
 
         register_rest_route('tuc/v1', '/caisse/statut', [
             'methods'             => 'POST',
-            'permission_callback' => $auth,
+            'permission_callback' => $updateOrders,
             'callback'            => [self::class, 'statut'],
         ]);
 
         register_rest_route('tuc/v1', '/caisse/ouverture', [
             'methods'             => 'POST',
-            'permission_callback' => $auth,
+            'permission_callback' => $manageRestaurant,
             'callback'            => [self::class, 'ouverture'],
         ]);
 
@@ -314,6 +382,9 @@ final class TUC_Caisse
     /** La liste des commandes, filtrée par statut. */
     public static function commandes(WP_REST_Request $req): WP_REST_Response
     {
+        if (!self::peut_voir_commandes()) {
+            return new WP_REST_Response(['ok' => false], 403);
+        }
         $resto = self::mon_resto();
         if ($resto === null) {
             return new WP_REST_Response(['ok' => false, 'erreur' => 'Aucun restaurant rattaché à ce compte.'], 409);
@@ -364,14 +435,12 @@ final class TUC_Caisse
         return new WP_REST_Response(['ok' => true, 'commandes' => $sortie, 'nb' => count($sortie)], 200);
     }
 
-    /**
-     * Changement de statut depuis la caisse.
-     * On ne réutilise pas `/commande/{id}/statut` : cette route-là ne vérifie
-     * pas à quel restaurant appartient la commande, donc un gérant pourrait
-     * modifier la commande du voisin en changeant l'ID.
-     */
+    /** Changement de statut depuis la caisse, limité au restaurant assigné. */
     public static function statut(WP_REST_Request $req): WP_REST_Response
     {
+        if (!self::peut_modifier_commandes()) {
+            return new WP_REST_Response(['ok' => false], 403);
+        }
         $id    = (int) $req->get_param('id');
         $vers  = sanitize_key((string) $req->get_param('statut'));
         $resto = self::mon_resto();
@@ -402,6 +471,9 @@ final class TUC_Caisse
     /** Pause / reprise : le restaurant arrête de prendre des commandes en un tap. */
     public static function ouverture(WP_REST_Request $req): WP_REST_Response
     {
+        if (!self::peut_gerer_restaurant()) {
+            return new WP_REST_Response(['ok' => false], 403);
+        }
         $resto = self::mon_resto();
         if ($resto === null) {
             return new WP_REST_Response(['ok' => false], 409);

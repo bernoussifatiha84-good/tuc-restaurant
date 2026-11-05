@@ -50,11 +50,11 @@ final class TUC_Commande
             'callback'            => [self::class, 'creer'],
         ]);
 
-        // Route administrative historique. Le statut opérationnel de caisse
-        // passe par TUC_Caisse::statut(), qui vérifie aussi la boutique.
+        // Route historique : les rôles métier sont filtrés par capacité et
+        // affectation restaurant dans la permission et dans le callback.
         register_rest_route('tuc/v1', '/commande/(?P<id>\d+)/statut', [
             'methods'             => 'POST',
-            'permission_callback' => static fn(): bool => current_user_can('manage_options'),
+            'permission_callback' => [TUC_Caisse::class, 'permission_statut_commande'],
             'callback'            => [self::class, 'changer_statut'],
         ]);
     }
@@ -261,6 +261,14 @@ final class TUC_Commande
         $commande = get_post($id);
         if (!$commande instanceof WP_Post || $commande->post_type !== self::CPT) {
             return new WP_Error('tuc_commande', 'Commande inconnue.', ['status' => 404]);
+        }
+        $restaurant_id = (int) get_post_meta($id, 'tuc_resto', true);
+        if (!TUC_Caisse::utilisateur_autorise_restaurant(
+            get_current_user_id(),
+            $restaurant_id,
+            TUC_Roles::CAP_UPDATE_ORDERS
+        )) {
+            return new WP_Error('rest_forbidden', 'Cette commande n’appartient pas à votre restaurant.', ['status' => 403]);
         }
 
         if (!in_array($vers, self::STATUTS, true)) {

@@ -107,10 +107,24 @@ try {
     $assert(has_action('rest_api_init', [TUC_Commande::class, 'routes']) !== false, 'routes de commande branchées sur rest_api_init');
     $registeredRoutes = rest_get_server()->get_routes();
     $cashierRoute = $registeredRoutes['/tuc/v1/caisse/commandes'][0] ?? [];
+    $openingRoute = $registeredRoutes['/tuc/v1/caisse/ouverture'][0] ?? [];
     $legacyStatusRoute = $registeredRoutes['/tuc/v1/commande/(?P<id>\d+)/statut'][0] ?? [];
     $assert(is_callable($cashierRoute['permission_callback'] ?? null)
+        && is_callable($openingRoute['permission_callback'] ?? null)
         && is_callable($legacyStatusRoute['permission_callback'] ?? null), 'les endpoints caisse/statut sont effectivement enregistrés avec permission_callback');
-    $assert(TUC_Caisse::CAP === 'manage_options', 'la caisse exige la capacité administrateur en attendant les rôles métier');
+    TUC_Roles::synchroniser();
+    $ownerRole = get_role('tuc_restaurateur');
+    $managerRole = get_role('tuc_gestionnaire');
+    $cashierRole = get_role('tuc_caissier');
+    $serverRole = get_role('tuc_serveur');
+    $assert($ownerRole !== null && $managerRole !== null && $cashierRole !== null && $serverRole !== null, 'les quatre rôles métier TUC sont définis');
+    $assert($ownerRole->has_cap(TUC_Roles::CAP_MANAGE_STAFF)
+        && !$managerRole->has_cap(TUC_Roles::CAP_MANAGE_STAFF)
+        && $cashierRole->has_cap(TUC_Roles::CAP_UPDATE_ORDERS)
+        && !$serverRole->has_cap(TUC_Roles::CAP_ACCESS_CAISSE), 'les capacités métier suivent le moindre privilège');
+    $assert(!$ownerRole->has_cap('manage_options') && !$managerRole->has_cap('manage_options')
+        && !$cashierRole->has_cap('manage_options') && !$serverRole->has_cap('manage_options'), 'aucun rôle restaurateur ne reçoit les droits administrateur WordPress');
+    $assert(TUC_Caisse::CAP === TUC_Roles::CAP_ACCESS_CAISSE, 'la caisse s’appuie sur une capacité métier dédiée');
     $assert(!TUC_Push::endpoint_valide('http://127.0.0.1/internal')
         && !TUC_Push::endpoint_valide('https://localhost/push')
         && !TUC_Push::endpoint_valide('https://127.0.0.1:8443/push'), 'les endpoints Web Push locaux/non HTTPS sont rejetés');
@@ -296,6 +310,111 @@ try {
     $crossStore['cle'] = 'cross-store-' . $suffix;
     $assert($rest('/tuc/v1/commande', $crossStore)->get_status() === 422, 'un article d’un autre commerce est refusé');
 
+    update_post_meta($otherRestaurantId, 'tuc_ferme', '0');
+    update_post_meta($otherRestaurantId, 'tuc_frais', 0);
+    update_post_meta($otherRestaurantId, 'tuc_minimum', 0);
+    $otherItemId = wp_insert_post([
+        'post_type'   => 'tuc_menu_item',
+        'post_status' => 'publish',
+        'post_title'  => 'Plat deuxième commerce ' . $suffix,
+    ], true);
+    $assert(!is_wp_error($otherItemId), 'fixture plat du deuxième commerce créée');
+    $created['items'][] = (int) $otherItemId;
+    update_post_meta($otherItemId, 'tuc_resto_id', (int) $otherRestaurantId);
+    update_post_meta($otherItemId, 'tuc_prix', 7);
+    update_post_meta($otherItemId, 'tuc_dispo', '1');
+    $otherOrderPhone = '+212600000020';
+    $ratePhones[] = $otherOrderPhone;
+    $otherOrderResponse = $rest('/tuc/v1/commande', [
+        'resto' => (string) get_post($otherRestaurantId)->post_name,
+        'table' => 0,
+        'tel'   => $otherOrderPhone,
+        'total' => 7,
+        'cle'   => 'second-restaurant-' . $suffix,
+        'items' => [['id' => (int) $otherItemId, 'q' => 1]],
+    ]);
+    $assert($otherOrderResponse->get_status() === 201, 'une commande de test distincte est créée pour le deuxième commerce');
+    $otherOrderId = (int) ($otherOrderResponse->get_data()['commande'] ?? 0);
+    $created['orders'][] = $otherOrderId;
+
+    $ownerUserId = wp_insert_user([
+        'user_login' => 'tuc-owner-' . substr($suffix, 0, 8),
+        'user_pass' => wp_generate_password(32, true, true),
+        'user_email' => 'tuc-owner-' . substr($suffix, 0, 8) . '@example.invalid',
+        'role' => 'tuc_restaurateur',
+    ]);
+    $managerUserId = wp_insert_user([
+        'user_login' => 'tuc-manager-' . substr($suffix, 0, 8),
+        'user_pass' => wp_generate_password(32, true, true),
+        'user_email' => 'tuc-manager-' . substr($suffix, 0, 8) . '@example.invalid',
+        'role' => 'tuc_gestionnaire',
+    ]);
+    $cashierUserId = wp_insert_user([
+        'user_login' => 'tuc-cashier-' . substr($suffix, 0, 8),
+        'user_pass' => wp_generate_password(32, true, true),
+        'user_email' => 'tuc-cashier-' . substr($suffix, 0, 8) . '@example.invalid',
+        'role' => 'tuc_caissier',
+    ]);
+    $unassignedUserId = wp_insert_user([
+        'user_login' => 'tuc-unassigned-' . substr($suffix, 0, 8),
+        'user_pass' => wp_generate_password(32, true, true),
+        'user_email' => 'tuc-unassigned-' . substr($suffix, 0, 8) . '@example.invalid',
+        'role' => 'tuc_caissier',
+    ]);
+    foreach ([$ownerUserId, $managerUserId, $cashierUserId, $unassignedUserId] as $roleUserId) {
+        $assert(!is_wp_error($roleUserId), 'fixture utilisateur métier créée');
+        $created['users'][] = (int) $roleUserId;
+    }
+    update_user_meta((int) $ownerUserId, 'tuc_resto_id', (int) $restaurantId);
+    update_user_meta((int) $managerUserId, 'tuc_resto_id', (int) $otherRestaurantId);
+    update_user_meta((int) $cashierUserId, 'tuc_resto_id', (int) $restaurantId);
+
+    wp_set_current_user((int) $ownerUserId);
+    $ownerOrders = TUC_Caisse::commandes(new WP_REST_Request('GET', '/tuc/v1/caisse/commandes'))->get_data()['commandes'] ?? [];
+    $ownerOrderIds = array_map(static fn(array $order): int => (int) $order['id'], $ownerOrders);
+    $assert(TUC_Caisse::peut_acceder() && TUC_Caisse::mon_resto()->ID === (int) $restaurantId
+        && in_array((int) $orderId, $ownerOrderIds, true)
+        && !in_array($otherOrderId, $ownerOrderIds, true), 'le restaurateur ne voit que les commandes de son restaurant');
+
+    $ownStatusRequest = new WP_REST_Request('POST', '/tuc/v1/commande/' . $orderId . '/statut');
+    $ownStatusRequest->set_param('id', (int) $orderId);
+    $ownStatusRequest->set_param('statut', 'preparation');
+    $assert(call_user_func($legacyStatusRoute['permission_callback'], $ownStatusRequest) === true,
+        'la capacité commande autorise le statut dans le restaurant assigné');
+    $ownRoleStatus = TUC_Commande::changer_statut($ownStatusRequest);
+    $assert($ownRoleStatus instanceof WP_REST_Response && $ownRoleStatus->get_status() === 200,
+        'le restaurateur peut mettre à jour une commande de son restaurant');
+    update_post_meta($orderId, 'tuc_statut', 'nouvelle');
+
+    wp_set_current_user((int) $managerUserId);
+    $managerOrders = TUC_Caisse::commandes(new WP_REST_Request('GET', '/tuc/v1/caisse/commandes'))->get_data()['commandes'] ?? [];
+    $managerOrderIds = array_map(static fn(array $order): int => (int) $order['id'], $managerOrders);
+    $assert(TUC_Caisse::mon_resto()->ID === (int) $otherRestaurantId
+        && in_array($otherOrderId, $managerOrderIds, true)
+        && !in_array((int) $orderId, $managerOrderIds, true), 'le gestionnaire ne voit que les commandes de son restaurant');
+    $foreignStatusRequest = new WP_REST_Request('POST', '/tuc/v1/commande/' . $orderId . '/statut');
+    $foreignStatusRequest->set_param('id', (int) $orderId);
+    $foreignStatusRequest->set_param('statut', 'preparation');
+    $foreignStatusResult = TUC_Commande::changer_statut($foreignStatusRequest);
+    $assert(is_wp_error($foreignStatusResult)
+        && (int) ($foreignStatusResult->get_error_data()['status'] ?? 0) === 403
+        && get_post_meta($orderId, 'tuc_statut', true) === 'nouvelle', 'un gestionnaire ne peut pas modifier la commande du restaurant voisin');
+    $assert(call_user_func($legacyStatusRoute['permission_callback'], $foreignStatusRequest) === false,
+        'la permission REST refuse aussi la commande d’un autre restaurant');
+    $foreignCashierStatus = TUC_Caisse::statut($foreignStatusRequest);
+    $assert($foreignCashierStatus->get_status() === 403
+        && get_post_meta($orderId, 'tuc_statut', true) === 'nouvelle', 'la route de caisse refuse elle aussi une commande hors tenant');
+
+    wp_set_current_user((int) $cashierUserId);
+    $assert(TUC_Caisse::peut_acceder() && TUC_Caisse::peut_modifier_commandes()
+        && !TUC_Caisse::peut_gerer_restaurant()
+        && call_user_func($openingRoute['permission_callback']) === false, 'le caissier peut traiter les commandes mais ne peut pas modifier les paramètres du commerce');
+    wp_set_current_user((int) $unassignedUserId);
+    $assert(TUC_Caisse::mon_resto() === null
+        && TUC_Caisse::commandes(new WP_REST_Request('GET', '/tuc/v1/caisse/commandes'))->get_status() === 403,
+        'un compte métier sans affectation explicite n’obtient aucun restaurant par défaut');
+    wp_set_current_user(0);
+
     update_post_meta($restaurantId, 'tuc_minimum', 40);
     $belowMinimum = $validOrder;
     $belowMinimum['tel'] = '+212600000007';
@@ -388,7 +507,7 @@ try {
     $admins = get_users(['role' => 'administrator', 'number' => 1, 'fields' => 'ID']);
     $assert(!empty($admins), 'un administrateur de test existe');
     wp_set_current_user((int) $admins[0]);
-    $assert(current_user_can('manage_options') && current_user_can(TUC_Caisse::CAP), 'l’administrateur satisfait les permissions de la caisse et de la route historique');
+    $assert(current_user_can('manage_options') && TUC_Caisse::peut_acceder(), 'l’administrateur conserve l’accès global à la caisse et à la route historique');
     $assert(call_user_func($cashierRoute['permission_callback']) === true
         && call_user_func($legacyStatusRoute['permission_callback']) === true, 'les permission_callback enregistrés autorisent un administrateur');
     $hadAssignedRestaurant = metadata_exists('user', (int) $admins[0], 'tuc_resto_id');
