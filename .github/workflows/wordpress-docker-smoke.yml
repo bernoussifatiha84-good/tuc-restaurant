@@ -146,13 +146,12 @@ jobs:
           run_n8n_cli() {
             local output status excerpt
             if output="$(docker compose run --rm --entrypoint n8n n8n "$@" 2>&1)"; then
-              printf 'COMMAND: n8n %s\n%s\n' "$*" "$output" >> "$N8N_SETUP_LOG"
-              printf '%s\n' "$output"
+              printf 'SUCCESS: n8n %s\n' "$*" >> "$N8N_SETUP_LOG"
+              printf 'n8n command succeeded: %s\n' "$*"
             else
               status=$?
-              printf 'FAILED COMMAND: n8n %s (status %s)\n%s\n' "$*" "$status" "$output" >> "$N8N_SETUP_LOG"
-              printf '%s\n' "$output"
-              excerpt="$(printf '%s\n' "$output" | tail -c 1400 | tr '\n' ' ' | sed 's/%/%25/g; s/\r/%0D/g')"
+              excerpt="$(printf '%s\n' "$output" | tail -c 800 | tr '\n' ' ' | sed 's/%/%25/g; s/\r/%0D/g')"
+              printf 'FAILED COMMAND: n8n %s (status %s) detail: %s\n' "$*" "$status" "$excerpt" >> "$N8N_SETUP_LOG"
               echo "::error title=n8n CLI failed::$excerpt"
               return "$status"
             fi
@@ -241,7 +240,7 @@ jobs:
         run: |
           docker compose logs --no-color || true
           if [ -s "$RUNNER_TEMP/tuc-n8n-setup.log" ]; then
-            n8n_setup_log="$(tail -n 80 "$RUNNER_TEMP/tuc-n8n-setup.log" | tr '\n' ' ' | sed 's/%/%25/g; s/\r/%0D/g')"
+            n8n_setup_log="$(tail -c 1200 "$RUNNER_TEMP/tuc-n8n-setup.log" | tr '\n' ' ' | sed 's/%/%25/g; s/\r/%0D/g')"
             echo "::error title=n8n setup transcript::$n8n_setup_log"
           fi
           if docker compose exec --no-TTY wordpress sh -lc 'test -f /var/www/html/wp-content/debug.log'; then
