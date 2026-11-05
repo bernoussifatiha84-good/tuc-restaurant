@@ -56,6 +56,7 @@ final class TUC_Health
             'wp'          => get_bloginfo('version'),
             'php'         => PHP_VERSION,
             'langues'     => [get_locale(), is_rtl() ? 'rtl' : 'ltr'],
+            'woocommerce' => class_exists('WooCommerce') ? 'actif' : 'absent',
             'plugins_ko'  => $manques,
             'modules'     => [
                 'cpt_resto'    => post_type_exists('tuc_resto'),
