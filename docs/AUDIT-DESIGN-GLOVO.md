@@ -1,0 +1,154 @@
+# Audit UX & design — références Glovo partagées
+
+**Date :** 5 novembre 2026  
+**Source observée :** 11 captures d’écran fournies dans la conversation.  
+**Important :** audit visuel des captures uniquement. Le site Glovo en direct n’a pas été ouvert depuis cet environnement. Les captures ne permettent pas de confirmer les interactions non visibles, les tailles CSS réelles, les règles de personnalisation ou le fonctionnement du paiement.
+
+## 1. Synthèse exécutive
+
+Les captures montrent une expérience construite autour de quatre moments : choisir où livrer, découvrir des commerces, composer un produit avec ses options, puis vérifier le panier. La structure est facilement reconnaissable et les actions principales ressortent visuellement : adresse, recherche, navigation par catégories, ajout au panier et bouton de continuation.
+
+**Pour TUC, il faut reprendre les principes de parcours, pas copier Glovo.** TUC a un périmètre volontairement plus focalisé : restaurants, mahlabas, snacks et cafés; le restaurant livre lui-même; le retrait et la commande à table par QR sont importants; le paiement en ligne n’est pas dans le MVP. Les couleurs, photos, textes, illustrations, icônes et signes de marque Glovo ne sont pas des assets à reprendre.
+
+Le thème TUC possède déjà une base cohérente avec les captures : accent jaune, teal, choix de quartier, catégories rondes, recherche et rails de commerces. La suite doit surtout transformer cette maquette en un parcours complet, fiable, accessible et alimenté par les données du plugin.
+
+## 2. Qualité et limites du jeu de captures
+
+### Observations visibles
+
+- Les vues mobiles fournies font environ **268–275 px de large** dans les fichiers. Elles sont utiles pour repérer les composants, mais trop étroites pour décider seules de la mise en page mobile standard. Revalider au minimum à 360, 390 et 430 px.
+- Les captures desktop incluent de longues pages et des fenêtres modales; elles aident à comprendre la hiérarchie générale, pas les comportements de défilement ou de redimensionnement.
+- Le jeu de références semble **mélanger des marchés** : les fiches Casablanca/O’Tacos montrent des prix en MAD, alors que plusieurs rails desktop présentent des enseignes canadiennes et des prix en dollars canadiens. Les données, catégories et promotions ne doivent donc pas être transposées en bloc à TUC Maroc.
+- Les captures ne permettent pas de mesurer précisément le contraste, les tailles CSS, l’état clavier/lecteur d’écran, la performance, ni toutes les validations de formulaires.
+
+### Conséquence
+
+Traiter les captures comme des **preuves de motifs d’interface** et non comme une spécification pixel-perfect. Pour fixer le design final, capturer les mêmes parcours dans un marché, une adresse, une langue et un état de connexion cohérents.
+
+## 3. Parcours et motifs observés
+
+### A. Localisation avant la commande
+
+Les captures montrent une feuille mobile avec carte et repère de position, une demande « Où devons-nous livrer ? », un choix d’adresse et une action pour utiliser/partager la position. Sur desktop, la demande est présentée comme une fenêtre au-dessus de la page assombrie, avec un champ de recherche et une action de géolocalisation.
+
+**À retenir pour TUC :** l’adresse et le quartier changent réellement la disponibilité, les frais et la distance; il faut donc rendre le choix facile et modifiable. La localisation ne doit toutefois pas bloquer la consultation du menu ni déclencher une demande GPS sans contexte.
+
+**Adaptation TUC :**
+- proposer d’abord un quartier ou une adresse saisie manuellement;
+- présenter la géolocalisation comme une option facultative avec explication;
+- garder une adresse visible et modifiable dans l’entête;
+- valider le périmètre de livraison avec le restaurant avant le panier;
+- ne jamais prétendre avoir localisé une personne si la position n’a pas été calculée.
+
+### B. Accueil et découverte
+
+La page mobile utilise un entête lumineux avec marque, adresse, connexion, catégories illustrées et champ de recherche. Le desktop expose aussi l’adresse et les catégories, puis empile des rangées thématiques. Les listes utilisent des cartes horizontales, des titres de section et « Voir tout »; certains rails sont promotionnels ou sponsorisés.
+
+Les cartes de commerce affichent principalement photo, nom, note, distance/temps, frais et parfois une promotion. La répétition des sections facilite le balayage visuel, mais la page desktop devient très longue et contient des rubriques spécifiques aux courses et au commerce de détail.
+
+**Adaptation TUC :**
+- conserver un accueil de découverte mobile-first;
+- limiter les catégories aux commerces servis par TUC;
+- utiliser des sections qui correspondent à une promesse vérifiable : « près de vous », « ouverts maintenant », « livraison offerte », « promos du jour »;
+- n’afficher distance, temps, gratuité et note que si les données sont justes et à jour;
+- éviter les rails sponsorisés et les catégories retail dans le MVP gratuit de TUC;
+- prévoir une page ou un résultat « Voir tout » réel, pas un lien décoratif.
+
+### C. Fiche restaurant et menu
+
+La capture mobile d’O’Tacos rassemble photo de couverture, nom, indicateurs de note/délai/frais, informations de promotion, recherche dans le menu et onglets de menu. Une fenêtre « informations de l’établissement » présente adresse, horaires, informations partenaires et une fermeture claire.
+
+**Adaptation TUC :**
+- placer nom, état ouvert/fermé, modes de service, quartier/adresse, temps estimé et frais près du haut de la fiche;
+- séparer les informations du restaurant des produits, sans faire disparaître le menu sous trop de bannières;
+- ajouter un accès clair à horaires, contact, livraison par le restaurant et commande sur place;
+- réserver le bandeau de couverture aux médias fournis par le restaurant ou autorisés;
+- permettre au restaurateur de prévisualiser la fiche avant publication.
+
+### D. Configuration d’un produit
+
+La capture montre un panneau de configuration avec photo, nom, prix et remise, puis des groupes d’options. Certains groupes sont obligatoires, d’autres facultatifs ou à quantité. Le bouton d’ajout au panier et le contrôle de quantité restent visibles en bas.
+
+**Points forts du motif :** la composition du plat est visible avant l’ajout; les choix sont regroupés par question; le total d’action reste accessible.
+
+**Risques à éviter dans TUC :** longue liste sans résumé, statut obligatoire peu visible, prix des suppléments difficiles à comprendre, boutons trop petits, ou CTA qui masque la dernière option.
+
+**Adaptation TUC :**
+- marquer explicitement « Obligatoire — choisir 1 » et « Facultatif »;
+- afficher le supplément à côté de chaque option et le nouveau total;
+- garder une sélection persistante lorsqu’on ferme puis rouvre la fiche;
+- afficher un message près du groupe incomplet, pas seulement en haut de l’écran;
+- réserver une zone basse fixe au total et à « Ajouter au panier », avec marge pour les gestes système;
+- écrire les règles de minimum/maximum d’options côté serveur également.
+
+### E. Panier
+
+La vue panier fournie montre le nombre d’articles, les lignes de produits, prix, suppression, quantité et un bouton « Continuer » fixe en bas.
+
+**Adaptation TUC :**
+- afficher le commerce concerné et le mode choisi;
+- rendre la modification et la suppression compréhensibles et accessibles;
+- afficher sous-total, frais éventuels et total final sans frais cachés;
+- conserver le panier après une perte réseau ou un retour à la fiche;
+- prévenir clairement si un restaurant ferme ou si un plat devient indisponible;
+- pour la commande à table, afficher le numéro de table et confirmer que le paiement se fera à la fin.
+
+## 4. Ce qui est pertinent pour TUC — et ce qui ne l’est pas
+
+### Motifs à adapter
+
+- choix d’adresse toujours visible et facilement éditable;
+- accueil par catégories et sections lisibles;
+- cartes compactes avec les informations de décision;
+- fiche commerce avec horaires et frais;
+- options de produit regroupées par question;
+- récapitulatif de panier et CTA persistant;
+- fenêtres/modales avec fermeture explicite et contexte conservé.
+
+### Motifs à ne pas reprendre tels quels
+
+- l’étendue multi-catégorie (courses, pharmacies, boutiques, retail) : TUC est une marketplace spécialisée;
+- les abonnements de type Prime, les offres payantes ou les emplacements sponsorisés;
+- les noms, illustrations, logos, photos, textes, badges propriétaires ou couleur de marque exacte;
+- les données canadiennes/les prix en CAD des captures desktop;
+- toute pression pour créer un compte avant d’avoir compris le panier.
+
+## 5. Direction visuelle proposée pour TUC
+
+- **Identité :** conserver le teal et le jaune déjà présents dans le thème TUC, mais appliquer une hiérarchie plus calme que le grand aplat d’accueil seul. Utiliser le jaune comme accent de découverte et le teal pour les actions principales.
+- **Typographie :** texte de lecture confortable; titres fortement hiérarchisés; labels courts; pas de contenu important réduit en micro-texte.
+- **Surfaces :** fond clair, cartes et panneaux sobres, ombres modérées, arrondis cohérents; réserver la couleur vive aux catégories, promotions et actions.
+- **Images :** photos autorisées et cohérentes avec les commerces TUC; recadrage contrôlé et variantes déjà disponibles; placeholders soignés lorsqu’une photo manque.
+- **Mouvement :** transitions courtes et discrètes; respecter `prefers-reduced-motion`; ne pas faire dépendre une action de la couleur ou de l’animation seule.
+- **RTL :** concevoir la structure pour le français et l’arabe sans inversions bricolées; valider séparément les libellés, flèches et feuilles de configuration.
+
+Les captures seules ne permettent pas de relever des valeurs exactes de design tokens. Les couleurs et dimensions doivent être mesurées dans un navigateur à une échelle connue, puis consignées dans les variables du thème TUC.
+
+## 6. Liste de contrôle pour le prochain audit instrumenté
+
+Le dépôt `craft-anything` décrit des outils Chromium pour ouvrir un site, capturer une page et ses états visibles. L’outil est un **auditeur externe**, pas une dépendance à ajouter au plugin WordPress. Le dépôt Craft Anything est en alpha; sa capture peut aider à relever des faits visuels, mais ses reconstructions doivent être revues manuellement.
+
+Quand l’accès au site est disponible, utiliser une session publique propre, en mode visuel/clean-room, sans identifiants ni commande réelle. Capturer des états comparables :
+
+| Parcours | Mobile | Desktop |
+|---|---:|---:|
+| Accueil + état adresse choisi | 390 × 844 et 430 × 932 | 1440 × 900 |
+| Sélecteur d’adresse ouvert | oui | oui |
+| Recherche et résultats / filtres | oui | oui |
+| Fiche commerce + début et milieu du menu | oui | oui |
+| Configuration d’un produit (obligatoire et facultatif) | oui | au moins une vue |
+| Panier rempli et récapitulatif avant envoi | oui | oui |
+| Confirmation/suivi sans création de commande réelle | maquette ou environnement de test | idem |
+
+Pour chaque capture, noter le marché, l’adresse de test, la langue, l’état de connexion, le viewport et les actions effectuées. Ne pas mélanger captures de pays, devise ou profils différents dans une même mesure.
+
+**État de cet audit :** les captures envoyées par l’utilisateur ont été analysées visuellement; Craft Anything n’a pas été exécuté contre Glovo en direct dans cet environnement.
+
+## 7. Décisions UI à traduire dans le produit TUC
+
+1. Dessiner les composants TUC : `LocationPicker`, `CategoryTile`, `RestaurantCard`, `RestaurantHeader`, `MenuSection`, `ProductOptionSheet`, `CartLine`, `OrderSummary`.
+2. Faire une maquette mobile complète avant le desktop; utiliser les captures Glovo comme repères de parcours, pas comme source d’assets.
+3. Implémenter les états vide, chargement, erreur, restaurant fermé, article indisponible et mauvaise connexion.
+4. Vérifier le parcours avec une personne âgée et un restaurateur débutant, sans lui expliquer les boutons à l’avance.
+5. Passer chaque décision de prix par les règles métier du plugin; la page ne doit jamais être l’autorité sur les frais ou le total.
+6. Une fois le panier et la boutique réelle raccordés, refaire le contrôle responsive et accessibilité sur données TUC, pas sur des données Glovo.

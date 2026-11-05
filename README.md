@@ -11,7 +11,7 @@ wordpress/tuc-market-core/    Logique métier WordPress (plugin maison)
 .github/workflows/deploy-ftp.yml  Ancien secours FTP manuel — non recommandé
 ```
 
-Le code du plugin et les assets additionnels ont été intégrés depuis le snapshot de passation du 5 novembre 2026. Voir [`docs/IMPORT-STATUS.md`](docs/IMPORT-STATUS.md) pour la provenance, et [`docs/ROADMAP-MARKETPLACE.md`](docs/ROADMAP-MARKETPLACE.md) pour la feuille de route produit et technique.
+Le code du plugin et les assets additionnels ont été intégrés depuis le snapshot de passation du 5 novembre 2026. Voir [`docs/IMPORT-STATUS.md`](docs/IMPORT-STATUS.md) pour la provenance, [`docs/ROADMAP-MARKETPLACE.md`](docs/ROADMAP-MARKETPLACE.md) pour la feuille de route, et [`docs/AUDIT-DESIGN-GLOVO.md`](docs/AUDIT-DESIGN-GLOVO.md) pour l’analyse des captures de référence Glovo.
 
 ## Fonctionnalités présentes dans le code
 
