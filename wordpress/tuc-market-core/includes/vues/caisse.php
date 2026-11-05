@@ -248,7 +248,10 @@ svg{display:block;flex:none}
     </div>
   </div>
 
-  <form class="connex" id="form-connexion" autocomplete="on">
+  <form class="connex" id="form-connexion" autocomplete="on"
+        method="post" action="<?php echo esc_url(wp_login_url()); ?>">
+    <input type="hidden" name="redirect_to" value="<?php echo esc_url(TUC_Caisse::url()); ?>">
+    <input type="hidden" name="testcookie" value="1">
     <h1>Votre caisse</h1>
     <p>Connectez-vous une seule fois : ensuite, les commandes arrivent ici, même écran éteint.</p>
 
@@ -390,42 +393,6 @@ svg{display:block;flex:none}
     if (r.status === 401 || r.status === 403) throw Object.assign(new Error('session'), { code: 401 });
     if (!r.ok) throw Object.assign(new Error((d && d.erreur) || 'Erreur ' + r.status), { code: r.status, d });
     return d;
-  }
-
-  /* ---------------- connexion ---------------- */
-  const form = $('#form-connexion');
-  if (form) {
-    form.addEventListener('submit', async (e) => {
-      e.preventDefault();
-      const btn = $('#btn-connexion');
-      btn.disabled = true;
-      btn.textContent = 'Connexion…';
-      try {
-        // WordPress : on poste vers wp-login.php puis on revient sur /caisse/
-        const corps = new URLSearchParams({
-          log: $('#log').value.trim(),
-          pwd: $('#pwd').value,
-          'wp-submit': '1',
-          redirect_to: location.href,
-          testcookie: '1',
-        });
-        const r = await fetch(<?php echo wp_json_encode(wp_login_url()); ?>, {
-          method: 'POST',
-          credentials: 'same-origin',
-          headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-          body: corps,
-        });
-        if (r.ok && (r.url.includes('/caisse') || !r.url.includes('wp-login'))) {
-          location.reload();
-          return;
-        }
-        toast('Identifiant ou mot de passe incorrect.');
-      } catch (_) {
-        toast('Connexion impossible. Vérifiez le réseau.');
-      }
-      btn.disabled = false;
-      btn.textContent = 'Ouvrir la caisse';
-    });
   }
 
   /* ---------------- rendu ---------------- */
@@ -876,6 +843,60 @@ svg{display:block;flex:none}
   }
 
   demarrer();
+})();
+</script>
+<?php endif; ?>
+
+
+<?php if (!$connecte) : ?>
+<script>
+/* Formulaire de connexion. Volontairement autonome : si ce script ne se
+   charge pas, le <form> retombe sur un POST vers wp-login.php. Un GET aurait
+   mis le mot de passe dans la barre d'adresse et dans l'historique. */
+(() => {
+  'use strict';
+  const form = document.getElementById('form-connexion');
+  if (!form) return;
+  const log = document.getElementById('log');
+  const pwd = document.getElementById('pwd');
+  const btn = document.getElementById('btn-connexion');
+  const note = document.getElementById('connex-note');
+
+  form.addEventListener('submit', async (e) => {
+    e.preventDefault();
+    btn.disabled = true;
+    btn.textContent = 'Connexion…';
+    try {
+      const r = await fetch(form.action, {
+        method: 'POST',
+        credentials: 'same-origin',
+        redirect: 'follow',
+        headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+        body: new URLSearchParams({
+          log: log.value.trim(),
+          pwd: pwd.value,
+          'wp-submit': 'Connexion',
+          redirect_to: <?php echo wp_json_encode(TUC_Caisse::url()); ?>,
+          testcookie: '1',
+        }),
+      });
+      const html = await r.text();
+      // wp-login.php répond 200 avec le formulaire en cas d'échec
+      if (html.includes('login_error') || html.includes('incorrect')) {
+        note.innerHTML = 'Identifiant ou mot de passe incorrect.';
+        note.style.background = '#FFF0F3';
+        btn.disabled = false;
+        btn.textContent = 'Ouvrir la caisse';
+        return;
+      }
+      location.replace(<?php echo wp_json_encode(TUC_Caisse::url()); ?>);
+    } catch (_) {
+      note.innerHTML = 'Connexion impossible : vérifiez le réseau.';
+      note.style.background = '#FFF0F3';
+      btn.disabled = false;
+      btn.textContent = 'Ouvrir la caisse';
+    }
+  });
 })();
 </script>
 <?php endif; ?>
