@@ -86,7 +86,23 @@ jobs:
         run: docker compose run --rm --entrypoint php wpcli -l /opt/tuc-tests/wp-docker-regression.php
 
       - name: Exécuter les régressions WordPress/TUC
-        run: docker compose run --rm --entrypoint wp wpcli eval-file /opt/tuc-tests/wp-docker-regression.php
+        shell: bash
+        run: |
+          set -euo pipefail
+          if regression_output="$(docker compose run --rm --entrypoint wp wpcli eval-file /opt/tuc-tests/wp-docker-regression.php 2>&1)"; then
+            printf '%s\n' "$regression_output"
+          else
+            printf '%s\n' "$regression_output"
+            {
+              echo '### Échec des régressions WordPress/TUC'
+              echo '```text'
+              printf '%s\n' "$regression_output" | tail -n 80
+              echo '```'
+            } >> "$GITHUB_STEP_SUMMARY"
+            failure_message="$(printf '%s\n' "$regression_output" | grep -E 'ÉCHEC|Fatal error|Uncaught|Error:' | tail -n 1 | tr '\n' ' ' | cut -c1-900)"
+            echo "::error file=tests/wp-docker-regression.php,line=1::$failure_message"
+            exit 1
+          fi
 
       - name: Vérifier HTTP, REST et la version PHP
         shell: bash
