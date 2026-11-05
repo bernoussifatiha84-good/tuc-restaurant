@@ -135,6 +135,12 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
+          on_n8n_setup_error() {
+            local status=$? failed_command="$BASH_COMMAND" failed_line="$LINENO" n8n_logs
+            n8n_logs="$(docker compose logs --no-color n8n 2>/dev/null | tail -n 40 | tr '\n' ' ' | sed 's/%/%25/g; s/\r/%0D/g' || true)"
+            echo "::error title=n8n setup command failed::line=$failed_line status=$status command=$failed_command logs=$n8n_logs"
+          }
+          trap on_n8n_setup_error ERR
           run_n8n_cli() {
             local output status excerpt
             if output="$(docker compose run --rm --entrypoint n8n n8n "$@" 2>&1)"; then
