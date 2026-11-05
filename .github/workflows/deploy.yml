@@ -172,6 +172,63 @@ jobs:
           ssh-keygen -y -f "$HOME/.ssh/id_deploy" >/dev/null
           ssh-keyscan -p "$SSH_PORT" -H "$SSH_HOST" >> "$HOME/.ssh/known_hosts" 2>/dev/null
 
+      - name: Vérifier que la cible UAT est bien le site provisoire
+        if: needs.cible.outputs.env == 'uat'
+        env:
+          SSH_PORT: ${{ vars.SSH_PORT || '65002' }}
+          SSH_USER: ${{ secrets.SSH_USERNAME || secrets.SSH_USER }}
+          SSH_HOST: ${{ secrets.SSH_HOST }}
+          SSH_ROOT: ${{ needs.cible.outputs.root }}
+          SITE_URL: ${{ needs.cible.outputs.url }}
+          URL_PRD: ${{ vars.URL_PRD }}
+          ROOT_PRD: ${{ vars.ROOT_PRD }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          normalize_path() { printf '%s' "$1" | sed 's:/*$::'; }
+          normalize_url() { printf '%s' "$1" | sed 's:/*$::'; }
+          if [[ -n "$URL_PRD" && "$(normalize_url "$SITE_URL")" == "$(normalize_url "$URL_PRD")" ]]; then
+            echo "::error::URL_UAT pointe vers la même URL que URL_PRD; aucun fichier ne sera envoyé."
+            exit 1
+          fi
+          if [[ -n "$ROOT_PRD" && "$(normalize_path "$SSH_ROOT")" == "$(normalize_path "$ROOT_PRD")" ]]; then
+            echo "::error::ROOT_UAT pointe vers la même racine que ROOT_PRD; aucun fichier ne sera envoyé."
+            exit 1
+          fi
+          printf -v remote_root '%q' "$SSH_ROOT"
+          remote_url="$(ssh -i "$HOME/.ssh/id_deploy" -p "$SSH_PORT" -o StrictHostKeyChecking=yes \
+            "$SSH_USER@$SSH_HOST" "wp option get siteurl --path=$remote_root")"
+          if [[ "$(normalize_url "$remote_url")" != "$(normalize_url "$SITE_URL")" ]]; then
+            echo "::error::L'URL WordPress lue sur ROOT_UAT ne correspond pas à URL_UAT; déploiement annulé."
+            exit 1
+          fi
+          echo "Cible WordPress UAT vérifiée : URL et racine distinctes de la production."
+
+      - name: Sauvegarder les répertoires avant rsync --delete
+        env:
+          SSH_PORT: ${{ vars.SSH_PORT || '65002' }}
+          SSH_USER: ${{ secrets.SSH_USERNAME || secrets.SSH_USER }}
+          SSH_HOST: ${{ secrets.SSH_HOST }}
+          SSH_ROOT: ${{ needs.cible.outputs.root }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          printf -v remote_root '%q' "$SSH_ROOT"
+          ssh -i "$HOME/.ssh/id_deploy" -p "$SSH_PORT" -o StrictHostKeyChecking=yes \
+            "$SSH_USER@$SSH_HOST" "bash -s -- $remote_root" <<'REMOTE'
+          set -euo pipefail
+          cd "$1"
+          backup="wp-content/upgrade/tuc-predeploy-$(date -u +%Y%m%dT%H%M%SZ)"
+          mkdir -p "$backup"
+          if [ -d wp-content/themes/tuc-theme ]; then
+            tar -czf "$backup/theme.tgz" -C wp-content themes/tuc-theme
+          fi
+          if [ -d wp-content/plugins/tuc-market-core ]; then
+            tar -czf "$backup/plugin.tgz" -C wp-content plugins/tuc-market-core
+          fi
+          echo "Sauvegarde créée dans $backup"
+          REMOTE
+
       - name: Envoyer le thème
         env:
           SSH_PORT: ${{ vars.SSH_PORT || '65002' }}
