@@ -33,6 +33,7 @@ register_shutdown_function(static function (): void {
 $assert = static function (bool $condition, string $message) use ($trace): void {
     if (!$condition) {
         $trace('ASSERTION ÉCHOUÉE : ' . $message);
+        fwrite(STDERR, 'ASSERTION_FAILURE: ' . $message . "\n");
         throw new RuntimeException('ÉCHEC : ' . $message);
     }
     $trace('OK : ' . $message);
