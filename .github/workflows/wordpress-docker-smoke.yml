@@ -1,0 +1,101 @@
+name: WordPress Docker smoke test
+
+on:
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: wp-docker-smoke-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  wordpress-docker:
+    name: Installer et vérifier WordPress/TUC
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Récupérer le dépôt
+        uses: actions/checkout@v5
+
+      - name: Créer des identifiants éphémères pour la base locale au runner
+        shell: bash
+        run: |
+          set -euo pipefail
+          DB_PASSWORD="$(openssl rand -hex 24)"
+          DB_ROOT_PASSWORD="$(openssl rand -hex 24)"
+          echo "::add-mask::$DB_PASSWORD"
+          echo "::add-mask::$DB_ROOT_PASSWORD"
+          {
+            printf 'TUC_WP_IMAGE=wordpress:php8.2-apache\n'
+            printf 'TUC_WP_CLI_IMAGE=wordpress:cli-php8.2\n'
+            printf 'TUC_DB_IMAGE=mariadb:10.11\n'
+            printf 'TUC_WP_PORT=8080\n'
+            printf 'TUC_DB_NAME=tuc_smoke\n'
+            printf 'TUC_DB_USER=tuc_smoke\n'
+            printf 'TUC_DB_PASSWORD=%s\n' "$DB_PASSWORD"
+            printf 'TUC_DB_ROOT_PASSWORD=%s\n' "$DB_ROOT_PASSWORD"
+          } > .env
+
+      - name: Valider la configuration Compose
+        run: docker compose config --quiet
+
+      - name: Démarrer WordPress et MariaDB
+        run: docker compose up --detach --wait --wait-timeout 180 wordpress
+
+      - name: Installer WordPress avec WP-CLI
+        shell: bash
+        run: |
+          set -euo pipefail
+          WP_ADMIN_PASSWORD="$(openssl rand -hex 24)"
+          echo "::add-mask::$WP_ADMIN_PASSWORD"
+          docker compose run --rm wpcli core install \
+            --url='http://127.0.0.1:8080' \
+            --title='TUC WordPress Docker smoke test' \
+            --admin_user='tuc-smoke-admin' \
+            --admin_password="$WP_ADMIN_PASSWORD" \
+            --admin_email='tuc-smoke@example.invalid' \
+            --skip-email
+
+      - name: Activer le plugin et le thème TUC
+        run: |
+          set -euo pipefail
+          docker compose run --rm wpcli plugin activate tuc-market-core
+          docker compose run --rm wpcli theme activate tuc-theme
+          docker compose run --rm wpcli plugin is-active tuc-market-core
+          docker compose run --rm wpcli theme is-active tuc-theme
+          docker compose run --rm wpcli core version
+
+      - name: Vérifier HTTP, REST et la version PHP
+        shell: bash
+        run: |
+          set -euo pipefail
+          curl --fail --silent --show-error --retry 20 --retry-delay 3 --retry-connrefused \
+            http://127.0.0.1:8080/ --output /dev/null
+          curl --fail --silent --show-error --retry 20 --retry-delay 3 --retry-connrefused \
+            http://127.0.0.1:8080/wp-json/tuc/v1/sante
+          docker compose exec --no-TTY wordpress php -v
+
+      - name: Échouer sur une erreur PHP fatale du site
+        shell: bash
+        run: |
+          set -euo pipefail
+          docker compose exec --no-TTY wordpress sh -lc '
+            if [ -f /var/www/html/wp-content/debug.log ] &&
+              grep -E "PHP Fatal error|Uncaught Error" /var/www/html/wp-content/debug.log; then
+              exit 1
+            fi
+          '
+
+      - name: Journaux Docker en cas d’échec
+        if: failure()
+        run: docker compose logs --no-color || true
+
+      - name: Nettoyer les conteneurs, volumes et identifiants éphémères
+        if: always()
+        run: |
+          docker compose down --volumes --remove-orphans || true
+          rm -f .env

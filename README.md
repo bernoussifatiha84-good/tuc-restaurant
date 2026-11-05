@@ -73,4 +73,4 @@ find wordpress -name '*.js' -print0 | while IFS= read -r -d '' f; do node --chec
 git diff --check
 ```
 
-Le workflow GitHub Actions exécute également le lint PHP et des contrôles CSS. Des tests fonctionnels complets nécessitent un WordPress de test et ne sont pas exécutés par ces commandes locales.
+Le workflow GitHub Actions de qualité exécute le lint PHP et les contrôles CSS. Le workflow distinct `WordPress Docker smoke test` installe un WordPress éphémère sur un runner GitHub, active le plugin/thème et vérifie HTTP/REST/PHP; il ne déploie rien. Les étapes sont détaillées dans le [guide Docker](docs/LOCAL-WORDPRESS-DOCKER.md).

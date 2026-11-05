@@ -18,6 +18,22 @@ services:
       retries: 20
       start_period: 20s
 
+  wpcli:
+    image: ${TUC_WP_CLI_IMAGE:-wordpress:cli-php8.2}
+    profiles: ["tools"]
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      WORDPRESS_DB_HOST: db:3306
+      WORDPRESS_DB_NAME: ${TUC_DB_NAME:?Renseignez TUC_DB_NAME dans .env}
+      WORDPRESS_DB_USER: ${TUC_DB_USER:?Renseignez TUC_DB_USER dans .env}
+      WORDPRESS_DB_PASSWORD: ${TUC_DB_PASSWORD:?Renseignez TUC_DB_PASSWORD dans .env}
+    volumes:
+      - tuc_wp_data:/var/www/html
+      - ./wordpress/tuc-market-core:/var/www/html/wp-content/plugins/tuc-market-core:ro
+      - ./wordpress/tuc-theme:/var/www/html/wp-content/themes/tuc-theme:ro
+
   wordpress:
     image: ${TUC_WP_IMAGE:-wordpress:php8.2-apache}
     restart: unless-stopped

@@ -1,6 +1,6 @@
 # Environnement local WordPress/Docker
 
-Cet environnement sert au développement et aux tests fonctionnels locaux. Il ne déploie rien vers GitHub, UAT ou production.
+Cet environnement sert aux tests fonctionnels WordPress/Docker. Le même Compose est utilisé par le workflow GitHub `WordPress Docker smoke test` sur un runner `ubuntu-latest`; ce workflow installe WordPress, active le plugin et le thème TUC, vérifie HTTP/REST/PHP puis détruit les volumes éphémères. Il ne déploie rien vers UAT ou production.
 
 ## Prérequis
 
@@ -8,7 +8,13 @@ Cet environnement sert au développement et aux tests fonctionnels locaux. Il ne
 - Plugin Docker Compose v2 (`docker compose`).
 - Accès réseau pour télécharger les images officielles WordPress et MariaDB au premier démarrage.
 
-## Démarrage
+## Test Docker sur GitHub
+
+`.github/workflows/wordpress-docker-smoke.yml` lance le test sur un runner GitHub avec Docker lors d’une pull request vers `main`. Il génère des mots de passe éphémères dans le runner, installe WordPress, active `TUC Market Core` et le thème, puis vérifie la page, la route de santé REST et la version PHP. Il supprime ensuite les conteneurs, la base et les identifiants du runner. Ce workflow n’a aucun secret de production et ne déploie pas le site.
+
+Le déclenchement manuel est disponible une fois le workflow présent sur la branche par défaut; pour tester une branche de travail avant fusion, le déclencheur de pull request est prévu.
+
+## Démarrage local (facultatif)
 
 1. Depuis la racine du dépôt, créer le fichier local non versionné :
 
