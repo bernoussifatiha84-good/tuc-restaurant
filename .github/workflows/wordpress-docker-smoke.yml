@@ -191,8 +191,10 @@ jobs:
           else
             status=$?
             printf '%s\n' "$output"
-            excerpt="$(printf '%s\n' "$output" | tail -c 1400 | tr '\n' ' ' | sed 's/%/%25/g; s/\r/%0D/g')"
+            excerpt="$(printf '%s\n' "$output" | tail -c 1000 | tr '\n' ' ' | sed 's/%/%25/g; s/\r/%0D/g')"
+            n8n_logs="$(docker compose logs --no-color n8n 2>&1 | tail -n 40 | tr '\n' ' ' | sed 's/%/%25/g; s/\r/%0D/g' || true)"
             echo "::error title=n8n webhook test failed::$excerpt"
+            echo "::error title=n8n runtime logs::$n8n_logs"
             exit "$status"
           fi
           if output="$(docker compose run --rm -e TUC_N8N_E2E_PHASE=verify \

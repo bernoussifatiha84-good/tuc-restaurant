@@ -42,8 +42,13 @@ def send_event(event_id: str, code: str, phone: str, *, timestamp: int | None = 
 
 def main() -> None:
     status, body = send_event("e2e-event-success-01", "N8NTEST1", "+212600000099")
-    result = json.loads(body)
-    assert status == 200, f"n8n success path failed with HTTP {status}"
+    try:
+        result = json.loads(body)
+    except json.JSONDecodeError as error:
+        raise AssertionError(
+            f"n8n returned HTTP {status} with a non-JSON response ({len(body)} bytes): {body[:200]!r}"
+        ) from error
+    assert status == 200, f"n8n success path failed with HTTP {status}: {body[:200]!r}"
     assert result.get("ok") is True and "Connexion directe" in result.get("reponse", ""), "la réponse WordPress n’a pas confirmé la création du compte"
     print("OK n8n: signature valide transmise et réponse WordPress reçue")
 
