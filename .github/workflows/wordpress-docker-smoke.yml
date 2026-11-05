@@ -27,17 +27,28 @@ jobs:
           set -euo pipefail
           DB_PASSWORD="$(openssl rand -hex 24)"
           DB_ROOT_PASSWORD="$(openssl rand -hex 24)"
-          echo "::add-mask::$DB_PASSWORD"
-          echo "::add-mask::$DB_ROOT_PASSWORD"
+          TUC_WA_SECRET="$(openssl rand -hex 32)"
+          TUC_N8N_INBOUND_SECRET="$(openssl rand -hex 32)"
+          TUC_N8N_POLL_SECRET="$(openssl rand -hex 32)"
+          N8N_ENCRYPTION_KEY="$(openssl rand -hex 32)"
+          for secret in "$DB_PASSWORD" "$DB_ROOT_PASSWORD" "$TUC_WA_SECRET" "$TUC_N8N_INBOUND_SECRET" "$TUC_N8N_POLL_SECRET" "$N8N_ENCRYPTION_KEY"; do
+            echo "::add-mask::$secret"
+          done
           {
             printf 'TUC_WP_IMAGE=wordpress:php8.2-apache\n'
             printf 'TUC_WP_CLI_IMAGE=wordpress:cli-php8.2\n'
             printf 'TUC_DB_IMAGE=mariadb:10.11\n'
+            printf 'TUC_N8N_IMAGE=n8nio/n8n:2.46.6\n'
             printf 'TUC_WP_PORT=8080\n'
+            printf 'TUC_N8N_PORT=5678\n'
             printf 'TUC_DB_NAME=tuc_smoke\n'
             printf 'TUC_DB_USER=tuc_smoke\n'
             printf 'TUC_DB_PASSWORD=%s\n' "$DB_PASSWORD"
             printf 'TUC_DB_ROOT_PASSWORD=%s\n' "$DB_ROOT_PASSWORD"
+            printf 'TUC_WA_SECRET=%s\n' "$TUC_WA_SECRET"
+            printf 'TUC_N8N_INBOUND_SECRET=%s\n' "$TUC_N8N_INBOUND_SECRET"
+            printf 'TUC_N8N_POLL_SECRET=%s\n' "$TUC_N8N_POLL_SECRET"
+            printf 'N8N_ENCRYPTION_KEY=%s\n' "$N8N_ENCRYPTION_KEY"
           } > .env
 
       - name: Valider la configuration Compose
@@ -112,6 +123,65 @@ jobs:
             fi
             echo "::error title=WP-CLI failure detail::$failure_excerpt"
             exit "$regression_status"
+          fi
+
+      - name: Préparer les fixtures du parcours WhatsApp E2E
+        run: |
+          set -euo pipefail
+          docker compose run --rm -e TUC_N8N_E2E_PHASE=setup \
+            --entrypoint wp wpcli eval-file /opt/tuc-tests/n8n/whatsapp-e2e.php
+
+      - name: Importer et activer le workflow n8n de test
+        shell: bash
+        run: |
+          set -euo pipefail
+          run_n8n_cli() {
+            local output status excerpt
+            if output="$(docker compose run --rm --entrypoint n8n n8n "$@" 2>&1)"; then
+              printf '%s\n' "$output"
+            else
+              status=$?
+              printf '%s\n' "$output"
+              excerpt="$(printf '%s\n' "$output" | tail -c 1400 | tr '\n' ' ' | sed 's/%/%25/g; s/\r/%0D/g')"
+              echo "::error title=n8n CLI failed::$excerpt"
+              return "$status"
+            fi
+          }
+          run_n8n_cli import:workflow --input=/opt/tuc-n8n/tuc-wa-smoke.workflow.json
+          run_n8n_cli update:workflow --id=f31a00c7-d902-4f4a-91fa-61176d0c39f7 --active=true
+          docker compose up --detach n8n
+          if ! curl --fail --silent --show-error --retry 60 --retry-delay 2 --retry-connrefused \
+            http://127.0.0.1:5678/healthz --output /dev/null; then
+            n8n_logs="$(docker compose logs --no-color n8n | tail -n 30 | tr '\n' ' ' | sed 's/%/%25/g; s/\r/%0D/g')"
+            echo "::error title=n8n failed readiness::$n8n_logs"
+            exit 1
+          fi
+
+      - name: Tester n8n, webhook signé, anti-rejeu et lien magique
+        shell: bash
+        run: |
+          set -euo pipefail
+          set -a
+          source .env
+          set +a
+          if output="$(python3 tests/n8n/send-smoke-events.py 2>&1)"; then
+            printf '%s\n' "$output"
+          else
+            status=$?
+            printf '%s\n' "$output"
+            excerpt="$(printf '%s\n' "$output" | tail -c 1400 | tr '\n' ' ' | sed 's/%/%25/g; s/\r/%0D/g')"
+            echo "::error title=n8n webhook test failed::$excerpt"
+            exit "$status"
+          fi
+          if output="$(docker compose run --rm -e TUC_N8N_E2E_PHASE=verify \
+            --entrypoint wp wpcli eval-file /opt/tuc-tests/n8n/whatsapp-e2e.php 2>&1)"; then
+            printf '%s\n' "$output"
+          else
+            status=$?
+            printf '%s\n' "$output"
+            excerpt="$(printf '%s\n' "$output" | tail -c 1400 | tr '\n' ' ' | sed 's/%/%25/g; s/\r/%0D/g')"
+            echo "::error title=WordPress magic-link E2E failed::$excerpt"
+            exit "$status"
           fi
 
       - name: Vérifier HTTP, REST et la version PHP

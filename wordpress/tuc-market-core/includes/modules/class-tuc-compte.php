@@ -178,12 +178,43 @@ final class TUC_Compte
 
     public static function verif_secret(WP_REST_Request $req): bool
     {
-        $attendu = (string) get_option('tuc_wa_secret', '');
-        if ($attendu === '') {
-            return false; // pas de secret configuré = route fermée
+        $secret = (string) get_option('tuc_wa_secret', '');
+        if (strlen($secret) < 32) {
+            return false; // secret absent/faible = route fermée
         }
-        $fourni = (string) $req->get_header('x-tuc-secret');
-        return hash_equals($attendu, $fourni);
+
+        $timestamp = (string) $req->get_header('x-tuc-timestamp');
+        $eventId = (string) $req->get_header('x-tuc-event-id');
+        $signature = strtolower((string) $req->get_header('x-tuc-signature'));
+        $code = strtoupper(sanitize_text_field((string) $req->get_param('code')));
+        $tel = self::normaliser(sanitize_text_field((string) $req->get_param('tel')));
+
+        if (!preg_match('/^[0-9]{10}$/', $timestamp)
+            || abs(time() - (int) $timestamp) > 300
+            || !preg_match('/^[A-Za-z0-9._:-]{1,128}$/', $eventId)
+            || !preg_match('/^[A-Z0-9]{8}$/', $code)
+            || !preg_match('/^[1-9][0-9]{7,14}$/', $tel)
+            || !preg_match('/^[a-f0-9]{64}$/', $signature)
+        ) {
+            return false;
+        }
+
+        // Contrat signé stable pour l’adaptateur n8n : timestamp, identifiant
+        // d’événement, référence et téléphone normalisé, séparés par LF.
+        $message = implode("\n", [$timestamp, $eventId, $code, $tel]);
+        $expected = hash_hmac('sha256', $message, $secret);
+        if (!hash_equals($expected, $signature)) {
+            return false;
+        }
+
+        // Un event_id ne peut être traité qu’une seule fois, même si n8n
+        // réessaie le POST avec un nouveau timestamp/signature.
+        $replayKey = 'tuc_wa_event_' . hash('sha256', $eventId);
+        if (get_transient($replayKey) !== false) {
+            return false;
+        }
+        set_transient($replayKey, 1, 30 * MINUTE_IN_SECONDS);
+        return true;
     }
 
     /**

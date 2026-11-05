@@ -117,13 +117,34 @@ try {
 
     delete_option('tuc_wa_secret');
     $hookRequest = new WP_REST_Request('POST', '/tuc/v1/wa-hook');
-    $hookRequest->set_header('x-tuc-secret', 'guess');
     $assert(!TUC_Compte::verif_secret($hookRequest), 'le webhook WhatsApp est fermé si aucun secret n’est configuré');
-    update_option('tuc_wa_secret', 'test-only-secret-9f7bdc');
-    $hookRequest->set_header('x-tuc-secret', 'wrong-secret');
-    $assert(!TUC_Compte::verif_secret($hookRequest), 'le webhook WhatsApp refuse un secret incorrect');
-    $hookRequest->set_header('x-tuc-secret', 'test-only-secret-9f7bdc');
-    $assert(TUC_Compte::verif_secret($hookRequest), 'le webhook WhatsApp accepte le secret exact configuré');
+    update_option('tuc_wa_secret', 'weak');
+    $assert(!TUC_Compte::verif_secret($hookRequest), 'le webhook WhatsApp refuse un secret trop court');
+    $hookSecret = 'test-only-secret-9f7bdc-329d5bbcbda410d5';
+    update_option('tuc_wa_secret', $hookSecret);
+    $hookCode = 'TESTCODE';
+    $hookTel = '+212600000099';
+    $hookTimestamp = (string) time();
+    $hookEventId = 'regression-event-' . wp_generate_uuid4();
+    $hookMessage = implode("\n", [$hookTimestamp, $hookEventId, $hookCode, TUC_Compte::normaliser($hookTel)]);
+    $hookSignature = hash_hmac('sha256', $hookMessage, $hookSecret);
+    $hookRequest->set_param('code', $hookCode);
+    $hookRequest->set_param('tel', $hookTel);
+    $hookRequest->set_header('x-tuc-timestamp', $hookTimestamp);
+    $hookRequest->set_header('x-tuc-event-id', $hookEventId);
+    $hookRequest->set_header('x-tuc-signature', str_repeat('0', 64));
+    $assert(!TUC_Compte::verif_secret($hookRequest), 'le webhook WhatsApp refuse une signature HMAC incorrecte');
+    $hookRequest->set_header('x-tuc-signature', $hookSignature);
+    $assert(TUC_Compte::verif_secret($hookRequest), 'le webhook WhatsApp accepte une signature HMAC valide');
+    $assert(!TUC_Compte::verif_secret($hookRequest), 'le webhook WhatsApp rejette le rejeu d’un event_id déjà traité');
+    $staleTimestamp = (string) (time() - 600);
+    $staleEventId = 'stale-event-' . wp_generate_uuid4();
+    $staleMessage = implode("\n", [$staleTimestamp, $staleEventId, $hookCode, TUC_Compte::normaliser($hookTel)]);
+    $hookRequest->set_header('x-tuc-timestamp', $staleTimestamp);
+    $hookRequest->set_header('x-tuc-event-id', $staleEventId);
+    $hookRequest->set_header('x-tuc-signature', hash_hmac('sha256', $staleMessage, $hookSecret));
+    $assert(!TUC_Compte::verif_secret($hookRequest), 'le webhook WhatsApp refuse une requête signée trop ancienne');
+    delete_transient('tuc_wa_event_' . hash('sha256', $hookEventId));
 
     $health = $rest('/tuc/v1/sante');
     $healthData = $health->get_data();
@@ -370,9 +391,23 @@ try {
     $assert(current_user_can('manage_options') && current_user_can(TUC_Caisse::CAP), 'l’administrateur satisfait les permissions de la caisse et de la route historique');
     $assert(call_user_func($cashierRoute['permission_callback']) === true
         && call_user_func($legacyStatusRoute['permission_callback']) === true, 'les permission_callback enregistrés autorisent un administrateur');
+    $hadAssignedRestaurant = metadata_exists('user', (int) $admins[0], 'tuc_resto_id');
+    $oldAssignedRestaurant = get_user_meta((int) $admins[0], 'tuc_resto_id', true);
+    update_user_meta((int) $admins[0], 'tuc_resto_id', (int) $otherRestaurantId);
+    $foreignStatusRequest = new WP_REST_Request('POST', '/tuc/v1/caisse/statut');
+    $foreignStatusRequest->set_param('id', $orderId);
+    $foreignStatusRequest->set_param('statut', 'preparation');
+    $foreignCaisseStatus = TUC_Caisse::statut($foreignStatusRequest);
+    $assert($foreignCaisseStatus->get_status() === 403
+        && get_post_meta($orderId, 'tuc_statut', true) === 'nouvelle', 'la caisse refuse à un compte rattaché à un autre commerce de modifier la commande');
+    if ($hadAssignedRestaurant) {
+        update_user_meta((int) $admins[0], 'tuc_resto_id', $oldAssignedRestaurant);
+    } else {
+        delete_user_meta((int) $admins[0], 'tuc_resto_id');
+    }
     $validStatus = $rest($statusPath, ['statut' => 'acceptee']);
     $assert($validStatus->get_status() === 200
-        && get_post_meta($orderId, 'tuc_statut', true) === 'acceptee', 'un administrateur peut accepter la commande');
+        && get_post_meta($orderId, 'tuc_statut', true) === 'acceptee', 'un administrateur peut accepter la commande historique');
     $invalidStatus = $rest($statusPath, ['statut' => 'publiee']);
     $assert($invalidStatus->get_status() === 400, 'un statut non autorisé est refusé');
     $missingStatus = $rest('/tuc/v1/commande/99999999/statut', ['statut' => 'acceptee']);

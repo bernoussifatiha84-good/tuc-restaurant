@@ -1,0 +1,81 @@
+{
+  "id": "f31a00c7-d902-4f4a-91fa-61176d0c39f7",
+  "name": "TUC WhatsApp ingress smoke test",
+  "active": false,
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "tuc-whatsapp-inbound-smoke",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "id": "e32ff706-bb64-4934-9bad-17a1a90364cd",
+      "name": "Receive signed event",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [0, 0],
+      "webhookId": "7b75d76f-f3a6-4579-bfc0-8a6e9561fd74"
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "const crypto = require('crypto');\nconst input = $input.first().json;\nconst headers = input.headers || {};\nconst body = input.body || {};\nconst eventId = String(body.event_id || '');\nconst code = String(body.code || '').trim().toUpperCase();\nlet tel = String(body.tel || '').replace(/[^0-9]/g, '');\nif (tel.startsWith('00')) tel = tel.slice(2);\nif (tel.startsWith('0') && tel.length === 10) tel = '212' + tel.slice(1);\nif (!tel.startsWith('212') && tel.length === 9) tel = '212' + tel;\nconst timestamp = String(headers['x-tuc-timestamp'] || '');\nconst signature = String(headers['x-tuc-signature'] || '').toLowerCase();\nif (!/^[A-Za-z0-9._:-]{1,128}$/.test(eventId) || !/^[A-Z0-9]{8}$/.test(code) || !/^[1-9][0-9]{7,14}$/.test(tel)) throw new Error('Invalid WhatsApp event fields');\nif (!/^[0-9]{10}$/.test(timestamp) || Math.abs(Math.floor(Date.now() / 1000) - Number(timestamp)) > 300) throw new Error('Expired WhatsApp event');\nconst canonical = [timestamp, eventId, code, tel].join('\\n');\nconst expected = crypto.createHmac('sha256', $env.TUC_N8N_INBOUND_SECRET).update(canonical).digest('hex');\nif (!/^[a-f0-9]{64}$/.test(signature) || !crypto.timingSafeEqual(Buffer.from(signature), Buffer.from(expected))) throw new Error('Invalid inbound HMAC');\nconst wpTimestamp = String(Math.floor(Date.now() / 1000));\nconst wpCanonical = [wpTimestamp, eventId, code, tel].join('\\n');\nconst wpSignature = crypto.createHmac('sha256', $env.TUC_WA_SECRET).update(wpCanonical).digest('hex');\nreturn [{ json: { eventId, code, tel, timestamp: wpTimestamp, signature: wpSignature, payload: { code, tel } } }];"
+      },
+      "id": "37aa33f6-01b8-4d2e-af09-d918cfad6c5f",
+      "name": "Verify, normalize and sign",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [260, 0]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "http://wordpress/wp-json/tuc/v1/wa-hook",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            { "name": "X-TUC-Timestamp", "value": "={{ $json.timestamp }}" },
+            { "name": "X-TUC-Event-ID", "value": "={{ $json.eventId }}" },
+            { "name": "X-TUC-Signature", "value": "={{ $json.signature }}" }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ $json.payload }}",
+        "options": {}
+      },
+      "id": "11d3edc3-cfcf-4a48-b31d-33eb9f617f2d",
+      "name": "Call signed TUC webhook",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [520, 0]
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ $json }}",
+        "options": { "responseCode": 200 }
+      },
+      "id": "8aefbbf4-640f-41ba-9a8a-a60ca6d6f56c",
+      "name": "Return TUC response",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.4,
+      "position": [780, 0]
+    }
+  ],
+  "connections": {
+    "Receive signed event": {
+      "main": [[{ "node": "Verify, normalize and sign", "type": "main", "index": 0 }]]
+    },
+    "Verify, normalize and sign": {
+      "main": [[{ "node": "Call signed TUC webhook", "type": "main", "index": 0 }]]
+    },
+    "Call signed TUC webhook": {
+      "main": [[{ "node": "Return TUC response", "type": "main", "index": 0 }]]
+    }
+  },
+  "settings": { "executionOrder": "v1" },
+  "versionId": "70fe88f4-3c4a-4dd0-b60f-4f4eb1f8b2ad",
+  "tags": []
+}
