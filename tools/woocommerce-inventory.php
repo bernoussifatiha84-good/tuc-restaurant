@@ -98,7 +98,11 @@ if (taxonomy_exists('product_type')) {
 }
 $product_category_count = null;
 if (taxonomy_exists('product_cat')) {
-    $term_count = wp_count_terms(['taxonomy' => 'product_cat', 'hide_empty' => false]);
+    $term_count = get_terms([
+        'taxonomy'   => 'product_cat',
+        'hide_empty' => false,
+        'fields'     => 'count',
+    ]);
     $product_category_count = is_wp_error($term_count) ? null : (int) $term_count;
 }
 

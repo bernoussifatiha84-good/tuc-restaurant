@@ -418,15 +418,35 @@ jobs:
           printf -v remote_root '%q' "$SSH_ROOT"
           scp -i "$HOME/.ssh/id_deploy" -P "$SSH_PORT" -o StrictHostKeyChecking=yes \
             tools/woocommerce-inventory.php "$SSH_USER@$SSH_HOST:$REMOTE_AUDIT"
+          report_file="$RUNNER_TEMP/woocommerce-inventory.json"
+          diagnostic_file="$RUNNER_TEMP/woocommerce-inventory.err"
           remote_status=0
-          if report="$(ssh -i "$HOME/.ssh/id_deploy" -p "$SSH_PORT" -o StrictHostKeyChecking=yes \
-            "$SSH_USER@$SSH_HOST" "wp --path=$remote_root eval-file '$REMOTE_AUDIT'" 2>&1)"; then
-            printf '%s\n' "$report"
-            printf '%s\n' "$report" >> "$GITHUB_STEP_SUMMARY"
+          if ! ssh -i "$HOME/.ssh/id_deploy" -p "$SSH_PORT" -o StrictHostKeyChecking=yes \
+            "$SSH_USER@$SSH_HOST" "test -r '$REMOTE_AUDIT'"; then
+            remote_status=1
+            echo "::error::Le fichier temporaire d’inventaire n’est pas lisible sur l’hôte UAT."
+          elif ssh -i "$HOME/.ssh/id_deploy" -p "$SSH_PORT" -o StrictHostKeyChecking=yes \
+            "$SSH_USER@$SSH_HOST" "wp --path=$remote_root eval-file '$REMOTE_AUDIT'" \
+            >"$report_file" 2>"$diagnostic_file"; then
+            cat "$report_file"
+            cat "$report_file" >> "$GITHUB_STEP_SUMMARY"
           else
             remote_status=$?
-            printf '%s\n' "$report"
-            echo "::error::WP-CLI n’a pas pu lire l’inventaire UAT."
+            diagnostic="$(cat "$report_file" "$diagnostic_file" 2>/dev/null || true)"
+            if grep -Eqi 'could not open input file|no such file or directory' <<< "$diagnostic"; then
+              reason="WP-CLI ne peut pas ouvrir le script temporaire."
+            elif grep -Eqi 'error establishing a database connection' <<< "$diagnostic"; then
+              reason="WordPress n’a pas pu établir sa connexion à la base de données."
+            elif grep -Eqi 'call to undefined function|class .* not found' <<< "$diagnostic"; then
+              reason="Une fonction ou classe attendue est absente sur l’UAT."
+            elif grep -Eqi 'allowed memory size' <<< "$diagnostic"; then
+              reason="La limite mémoire PHP a été atteinte."
+            elif grep -Eqi 'fatal error|parse error|uncaught' <<< "$diagnostic"; then
+              reason="Une erreur d’exécution PHP est survenue dans l’inventaire."
+            else
+              reason="WP-CLI a retourné une erreur non classifiée."
+            fi
+            echo "::error::$reason Aucun détail brut affiché."
           fi
           ssh -i "$HOME/.ssh/id_deploy" -p "$SSH_PORT" -o StrictHostKeyChecking=yes \
             "$SSH_USER@$SSH_HOST" "rm -f '$REMOTE_AUDIT'" || true
