@@ -11,7 +11,12 @@ import urllib.request
 
 BASE_URL = os.environ.get("TUC_N8N_URL", "http://127.0.0.1:5678").rstrip("/")
 INBOUND_SECRET = os.environ["TUC_N8N_INBOUND_SECRET"]
-WEBHOOK = BASE_URL + "/webhook/tuc-whatsapp-inbound-smoke"
+# n8n 2.x publishes Webhook node URLs with the webhook UUID before the
+# configured path; keep the path-only form as a compatibility fallback.
+WEBHOOKS = (
+    BASE_URL + "/webhook/7b75d76f-f3a6-4579-bfc0-8a6e9561fd74/tuc-whatsapp-inbound-smoke",
+    BASE_URL + "/webhook/tuc-whatsapp-inbound-smoke",
+)
 
 
 def send_event(event_id: str, code: str, phone: str, *, timestamp: int | None = None, corrupt: bool = False):
@@ -23,21 +28,28 @@ def send_event(event_id: str, code: str, phone: str, *, timestamp: int | None = 
         signature = "0" * 64
 
     body = json.dumps({"event_id": event_id, "code": code, "tel": phone}).encode()
-    request = urllib.request.Request(
-        WEBHOOK,
-        data=body,
-        headers={
-            "Content-Type": "application/json",
-            "X-TUC-Timestamp": stamp,
-            "X-TUC-Signature": signature,
-        },
-        method="POST",
-    )
-    try:
-        with urllib.request.urlopen(request, timeout=30) as response:
-            return response.status, response.read().decode()
-    except urllib.error.HTTPError as error:
-        return error.code, error.read().decode()
+    last_result = (404, "")
+    for webhook_url in WEBHOOKS:
+        request = urllib.request.Request(
+            webhook_url,
+            data=body,
+            headers={
+                "Content-Type": "application/json",
+                "X-TUC-Timestamp": stamp,
+                "X-TUC-Signature": signature,
+            },
+            method="POST",
+        )
+        try:
+            with urllib.request.urlopen(request, timeout=30) as response:
+                return response.status, response.read().decode()
+        except urllib.error.HTTPError as error:
+            last_result = (error.code, error.read().decode())
+            # If this URL shape is not registered, try the other n8n URL form.
+            # A response from an executing workflow must never be replayed.
+            if error.code != 404 or "Cannot POST" not in last_result[1]:
+                return last_result
+    return last_result
 
 
 def main() -> None:
