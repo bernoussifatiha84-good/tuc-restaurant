@@ -144,12 +144,34 @@ final class TUC_Commande
             $pu = self::prix_unite($item_id, $opts);
             $total += $pu * $qte;
 
+            // Le client envoie des identifiants d'options (`sauce-bbq`). La
+            // caisse et le message WhatsApp, eux, doivent afficher « Sauce BBQ
+            // +4 », pas « sauce-bbq ». On résout le libellé ici, une seule
+            // fois : le prix affiché et le prix facturé restent la même source.
+            $opts_lisibles = [];
+            foreach ($opts as $choix) {
+                $id_opt = is_array($choix) ? (string) ($choix['id'] ?? '') : (string) $choix;
+                if ($id_opt === '') {
+                    continue;
+                }
+                $libelle = $id_opt;
+                $prix    = 0.0;
+                foreach ((array) get_post_meta($item_id, 'tuc_options', true) as $o) {
+                    if ((string) ($o['id'] ?? '') === $id_opt) {
+                        $libelle = (string) ($o['nom'] ?? $id_opt);
+                        $prix    = (float) ($o['prix'] ?? 0);
+                        break;
+                    }
+                }
+                $opts_lisibles[] = trim($libelle . ($prix > 0 ? ' +' . rtrim(rtrim(number_format($prix, 2, ',', ''), '0'), ',') : ''));
+            }
+
             $lignes[] = [
                 'id'    => $item_id,
                 'nom'   => $plat->post_title,
                 'q'     => $qte,
                 'pu'    => $pu,
-                'opts'  => array_map('sanitize_text_field', $opts),
+                'opts'  => array_map('sanitize_text_field', $opts_lisibles),
             ];
         }
 

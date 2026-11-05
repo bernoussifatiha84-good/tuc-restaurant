@@ -76,7 +76,7 @@ svg{display:block;flex:none}
 /* ---------- entête ---------- */
 .tete{position:sticky;top:0;z-index:20;background:var(--blanc);
   border-bottom:1px solid var(--g200);padding:calc(10px + env(safe-area-inset-top,0px)) 16px 0}
-.tete-l{display:flex;align-items:center;gap:10px;min-height:44px}
+.tete-l{display:flex;align-items:center;gap:10px;min-height:44px;min-width:0}
 .marque{display:flex;align-items:flex-start;gap:2px;font-size:20px;font-weight:800;
   letter-spacing:-.8px;color:var(--ink);line-height:1}
 .marque b{color:var(--teal)}
@@ -121,11 +121,14 @@ svg{display:block;flex:none}
 .ong[aria-selected=true] b{background:var(--amber);color:var(--ink)}
 
 /* ---------- liste ---------- */
-.liste{flex:1;padding:14px 16px calc(24px + var(--safe-b));display:flex;
+/* min-width:0 est indispensable : sans lui, un flex-item refuse de rétrécir
+   sous la largeur de son contenu et pousse toute la page en débordement
+   horizontal. C'est ce qui cassait la carte sur un écran de 390 px. */
+.liste{flex:1;min-width:0;padding:14px 16px calc(24px + var(--safe-b));display:flex;
   flex-direction:column;gap:12px}
 
 .carte{border:1px solid var(--g200);border-radius:var(--r);background:var(--blanc);
-  overflow:hidden;box-shadow:var(--ombre);animation:entre .22s ease-out}
+  overflow:hidden;box-shadow:var(--ombre);animation:entre .22s ease-out;min-width:0}
 @keyframes entre{from{opacity:0;transform:translateY(6px)}to{opacity:1;transform:none}}
 .carte.neuve{border-color:var(--teal);box-shadow:0 0 0 3px var(--teal-l),var(--ombre)}
 .carte.refusee{opacity:.62}
@@ -144,8 +147,9 @@ svg{display:block;flex:none}
 .lig{display:flex;align-items:baseline;gap:9px;font-size:13.5px}
 .lig .q{font-weight:800;color:var(--teal-d);font-variant-numeric:tabular-nums;
   min-width:24px}
-.lig .n{flex:1;font-weight:600;min-width:0}
-.lig .p{font-weight:800;font-variant-numeric:tabular-nums;color:var(--g800)}
+.lig .n{flex:1;font-weight:600;min-width:0;overflow-wrap:anywhere}
+.lig .p{font-weight:800;font-variant-numeric:tabular-nums;color:var(--g800);
+  white-space:nowrap;flex:none}
 .lig .opt{display:block;font-size:11.5px;font-weight:700;color:var(--g600);
   margin-top:1px}
 .c-plus{font-size:11.5px;font-weight:700;color:var(--g500);padding:2px 14px 0;
@@ -155,7 +159,7 @@ svg{display:block;flex:none}
 .c-tot .t{font-size:11px;font-weight:800;text-transform:uppercase;letter-spacing:.5px;
   color:var(--g500);padding-bottom:6px}
 .c-tot .v{margin-inline-start:auto;font-size:26px;font-weight:800;letter-spacing:-1px;
-  font-variant-numeric:tabular-nums;line-height:1}
+  font-variant-numeric:tabular-nums;line-height:1;white-space:nowrap}
 .c-tot .v span{font-size:12.5px;font-weight:800;color:var(--g600);letter-spacing:0;
   margin-inline-start:3px}
 
@@ -169,8 +173,12 @@ svg{display:block;flex:none}
 .btn-prim:hover{background:var(--teal-d)}
 .btn-sec{background:var(--g100);color:var(--ink)}
 .btn-sec:hover{background:var(--g200)}
-.btn-ref{flex:0 0 48px;background:var(--g100);color:var(--red)}
-.btn-ref:hover{background:#FFF0F3}
+.ref{align-self:center;flex:none;padding:0 0 0 10px;min-height:48px;display:flex;
+  align-items:center;font-size:13px;font-weight:800;color:var(--g500);
+  text-decoration:underline;text-underline-offset:3px}
+.ref:hover{color:var(--red)}
+.ref.confirme{color:var(--red);font-size:12.5px;text-align:end;text-decoration:none;
+  background:#FFF0F3;border-radius:10px;padding:0 12px}
 .btn:disabled{opacity:.45;pointer-events:none}
 
 /* ---------- vide ---------- */
@@ -220,7 +228,7 @@ svg{display:block;flex:none}
 @media (min-width:900px){
   .app{max-width:1100px}
   .liste{flex-direction:row;flex-wrap:wrap;align-items:flex-start;gap:14px}
-  .liste>.carte{flex:1 1 calc(50% - 14px);min-width:380px}
+  .liste>.carte{flex:1 1 calc(50% - 14px);min-width:min(380px,100%)}
   .liste>.vide{flex:1 1 100%}
 }
 @media (prefers-reduced-motion:reduce){
@@ -439,7 +447,7 @@ svg{display:block;flex:none}
       return `<div class="lig">
         <span class="q">${esc(l.q)}×</span>
         <span class="n">${esc(l.nom)}${opts.length
-          ? `<span class="opt">${opts.map((o) => '+' + esc(o.replace(/^\+/, ''))).join(' · ')}</span>`
+          ? `<span class="opt">${opts.map((o) => esc(o)).join(' · ')}</span>`
           : ''}</span>
         <span class="p">${Math.round((l.pu || 0) * (l.q || 1))}</span>
       </div>`;
@@ -459,10 +467,11 @@ svg{display:block;flex:none}
       prete:       { statut: 'servie',      txt: 'Servie' },
     }[c.statut];
 
+    // Refuser n'est PAS une action principale : une croix seule à côté d'un
+    // gros bouton vert se tape par erreur en plein service. C'est donc un
+    // lien discret, à l'écart, et qui demande confirmation.
     const refus = (c.statut === 'nouvelle' || c.statut === 'acceptee')
-      ? `<button class="btn btn-ref" data-ref="${c.id}" aria-label="Annuler la commande">
-           <svg width="19" height="19" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"><path d="M18 6 6 18M6 6l12 12"/></svg>
-         </button>` : '';
+      ? `<button class="ref" data-ref="${c.id}">Refuser</button>` : '';
 
     const age = c.age + 's';
 
@@ -485,7 +494,11 @@ svg{display:block;flex:none}
           <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12h14M13 6l6 6-6 6"/></svg>
         </button>
         ${refus}
-      </div>` : `<div class="c-act"><button class="btn btn-sec" disabled>Terminée</button></div>`}
+      </div>` : `<div class="c-act">
+        <span class="btn btn-sec" style="pointer-events:none;color:var(--g500)">
+          Terminée · à encaisser
+        </span>
+      </div>`}
     </article>`;
   }
 
@@ -579,6 +592,35 @@ svg{display:block;flex:none}
   }
 
   /* ---------------- actions ---------------- */
+  /* Un refus ne se rattrape pas : on demande une deuxième fois. Une
+     confirmation bloquante serait trop lourde en plein service, donc on
+     transforme le lien en « Confirmer ? » pendant 4 secondes. */
+  let refusEnAttente = null;
+
+  async function demanderRefus(id, el) {
+    if (refusEnAttente && refusEnAttente.id === id) {
+      clearTimeout(refusEnAttente.minuteur);
+      refusEnAttente = null;
+      return changer(id, 'annulee', el);
+    }
+    if (refusEnAttente) {
+      clearTimeout(refusEnAttente.minuteur);
+      refusEnAttente.el.textContent = 'Refuser';
+      refusEnAttente.el.classList.remove('confirme');
+    }
+    el.textContent = 'Confirmer le refus ?';
+    el.classList.add('confirme');
+    refusEnAttente = {
+      id,
+      el,
+      minuteur: setTimeout(() => {
+        el.textContent = 'Refuser';
+        el.classList.remove('confirme');
+        refusEnAttente = null;
+      }, 4000),
+    };
+  }
+
   async function changer(id, vers, sourceEl) {
     const c = etat.commandes.find((x) => x.id === id);
     if (!c || c._envoi) return;
@@ -614,7 +656,7 @@ svg{display:block;flex:none}
     if (av) { changer(Number(av.dataset.avance), av.dataset.vers, av); return; }
 
     const rf = e.target.closest('[data-ref]');
-    if (rf) { changer(Number(rf.dataset.ref), 'annulee', rf); return; }
+    if (rf) { demanderRefus(Number(rf.dataset.ref), rf); return; }
 
     const ong = e.target.closest('.ong');
     if (ong) {
