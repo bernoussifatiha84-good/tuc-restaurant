@@ -144,6 +144,7 @@ try {
     update_post_meta($restaurantId, 'tuc_ferme', '0');
     update_post_meta($restaurantId, 'tuc_frais', 5);
     update_post_meta($restaurantId, 'tuc_minimum', 20);
+    update_post_meta($restaurantId, 'tuc_modes', ['livraison']);
 
     $itemId = wp_insert_post([
         'post_type'   => 'tuc_menu_item',
@@ -324,6 +325,13 @@ try {
         'l’aperçu WhatsApp ignore prix et frais fournis par le client');
     $assert(str_contains((string) ($waCartData['message'] ?? ''), $restaurant->post_title)
         && !str_contains((string) ($waCartData['message'] ?? ''), 'Prix falsifié'), 'l’aperçu WhatsApp utilise les libellés WordPress, pas ceux du client');
+    $unsupportedWaMode = $rest('/tuc/v1/wa-panier', [
+        'resto' => $slug,
+        'mode' => 'emporter',
+        'table' => 0,
+        'items' => [['id' => (int) $itemId, 'q' => 2]],
+    ]);
+    $assert($unsupportedWaMode->get_status() === 422, 'l’aperçu WhatsApp refuse un mode absent de la configuration du commerce');
 
     // La référence WhatsApp seule ne suffit pas à récupérer un lien magique.
     $pollCode = strtoupper(bin2hex(random_bytes(4)));

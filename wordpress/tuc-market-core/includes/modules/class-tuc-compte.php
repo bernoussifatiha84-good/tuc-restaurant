@@ -309,7 +309,10 @@ final class TUC_Compte
         if (!in_array($mode, ['table', 'emporter', 'livraison'], true)) {
             return new WP_Error('tuc_mode', 'Mode de service invalide.', ['status' => 422]);
         }
-        $modesAutorises = array_map('sanitize_key', (array) get_post_meta($resto->ID, 'tuc_modes', true));
+        $modesAutorises = array_values(array_filter(
+            array_map('sanitize_key', (array) get_post_meta($resto->ID, 'tuc_modes', true)),
+            static fn(string $modeAutorise): bool => $modeAutorise !== ''
+        ));
         if ($modesAutorises !== [] && !in_array($mode, $modesAutorises, true)) {
             return new WP_Error('tuc_mode', 'Ce mode de service n’est pas proposé.', ['status' => 422]);
         }
