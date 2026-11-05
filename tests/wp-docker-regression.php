@@ -11,6 +11,20 @@ if (!class_exists('WP_CLI')) {
     exit(1);
 }
 
+// WP-CLI peut masquer certains fatals WordPress derrière l’écran générique
+// « critical error »; conserver l’erreur PHP d’origine dans le log du runner.
+register_shutdown_function(static function (): void {
+    $error = error_get_last();
+    if ($error !== null && in_array($error['type'], [E_ERROR, E_PARSE, E_CORE_ERROR, E_COMPILE_ERROR, E_USER_ERROR], true)) {
+        fwrite(STDERR, sprintf(
+            "PHP_FATAL_DEBUG: %s in %s:%d\n",
+            $error['message'],
+            $error['file'],
+            $error['line']
+        ));
+    }
+});
+
 /** @var Closure(bool, string): void $assert */
 $assert = static function (bool $condition, string $message): void {
     if (!$condition) {

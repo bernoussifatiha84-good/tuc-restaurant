@@ -99,7 +99,11 @@ jobs:
               printf '%s\n' "$regression_output" | tail -n 80
               echo '```'
             } >> "$GITHUB_STEP_SUMMARY"
-            failure_message="$(printf '%s\n' "$regression_output" | grep -E 'ÉCHEC|Fatal error|Uncaught|Error:' | tail -n 1 | tr '\n' ' ' | cut -c1-900)"
+            progress_message="$(printf '%s\n' "$regression_output" | grep 'OK :' | tail -n 1 | tr '\n' ' ' | cut -c1-900)"
+            if [ -n "$progress_message" ]; then
+              echo "::notice title=Last regression passed::$progress_message"
+            fi
+            failure_message="$(printf '%s\n' "$regression_output" | grep -E 'ÉCHEC|PHP_FATAL_DEBUG|Fatal error|Uncaught|Error:' | tail -n 1 | tr '\n' ' ' | cut -c1-900)"
             echo "::error file=tests/wp-docker-regression.php,line=1::$failure_message"
             exit 1
           fi
