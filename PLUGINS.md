@@ -77,3 +77,53 @@ Tu l'avais déjà écarté, et je confirme — pour trois raisons concrètes :
 **① WooCommerce pèse lourd.** 11.2.1 ajoute ~40 requêtes et 200 Ko sur chaque page s'il est chargé. Sur ta page d'accueil il **n'est pas** chargé (le thème ne l'appelle pas), mais dès qu'on branche le panier il faudra le cantonner aux pages de commande.
 
 **② Sans paiement en ligne, WooCommerce sert à quoi ?** Honnêtement : à gérer le catalogue et les commandes côté admin. Si tu préfères, `tuc-market-core` peut faire ça seul et Woo devient inutile. **Dis-moi ce que tu veux** — mais tant que ce n'est pas tranché, je le garde installé (désactivé serait plus propre).
+
+---
+
+## Mise à jour du 5 novembre 2026 — WooCommerce désactivé
+
+**Décision** : WooCommerce est **désactivé** sur l'UAT et le restera. Le plugin
+`tuc-market-core` est la seule source de vérité du catalogue.
+
+### Ce qui a été vérifié avant de désactiver
+
+| Contrôle | UAT | dev |
+|---|---|---|
+| produits WooCommerce | **0** | 0 |
+| commandes WooCommerce | **0** | 0 |
+| coupons / variations / remboursements | 0 | 0 |
+| produits TUC dans le catalogue maison | 1 (plat 13) | 0 |
+| pages Woo `shop`, `cart`, `checkout`, `my-account` | vides | vides |
+| contenu réel affiché sur ces pages | **aucun** | aucun |
+
+### Ce qui a été fait
+
+1. `functions.php` : les conditionnels Woo (`is_cart`, `is_checkout`,
+   `is_account_page`, `is_shop`, `is_product_taxonomy`) sont désormais
+   **protégés par `function_exists`**. Sans ça, désactiver Woo provoquait une
+   **erreur fatale sur toutes les pages du site**.
+2. `woocommerce` → **inactive** sur l'UAT.
+3. Les 4 pages vides créées par Woo (`shop`, `cart`, `checkout`, `my-account`)
+   → **brouillon**. Elles répondaient 200 avec zéro contenu, ce qui aurait
+   donné quatre pages vides indexables par Google.
+4. `/sante` annonce désormais `"woocommerce":"absent"` : c'est vérifiable
+   depuis l'extérieur et depuis le fumigène du CI.
+
+### Vérification
+
+```
+GET /uat/wp-json/tuc/v1/sante  → ok:true, woocommerce:"absent"
+/            → 200, aucune erreur fatale
+/kfc/        → 200
+/caisse/     → 200
+/shop        → 404 (dépubliée)
+```
+
+### Ce qu'il ne faut pas faire
+
+- **Ne supprime pas** les fichiers de WooCommerce avant d'avoir vérifié que
+  personne ne réactive le plugin par erreur.
+- **Ne recrée pas** de produits dans WooCommerce : ils ne seraient pas visibles
+  par le catalogue TUC et créeraient une seconde source de vérité.
+- **Ne désactive pas** `sqlite-database-integration` par réflexe : c'est le
+  dropin `db.php` qui fait tourner la base de l'UAT.
