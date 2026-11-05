@@ -11,14 +11,21 @@ if (!class_exists('WP_CLI')) {
 }
 
 $counts_by_status = static function (string $post_type): array {
-    $counts = wp_count_posts($post_type);
-    if (!$counts) {
+    global $wpdb;
+    $rows = $wpdb->get_results(
+        $wpdb->prepare(
+            "SELECT post_status, COUNT(*) AS total FROM {$wpdb->posts} WHERE post_type = %s GROUP BY post_status",
+            $post_type
+        ),
+        ARRAY_A
+    );
+    if (!is_array($rows)) {
         return [];
     }
 
     $result = [];
-    foreach (get_object_vars($counts) as $status => $count) {
-        $result[$status] = (int) $count;
+    foreach ($rows as $row) {
+        $result[(string) $row['post_status']] = (int) $row['total'];
     }
     return $result;
 };
@@ -68,6 +75,13 @@ foreach ([
 $orders_by_status = [];
 $orders_total = null;
 $order_storage = 'unavailable';
+$legacy_order_posts_by_status = $counts_by_status('shop_order');
+$legacy_order_posts_total = 0;
+foreach ($legacy_order_posts_by_status as $status => $count) {
+    if (!in_array($status, ['trash', 'auto-draft', 'inherit'], true)) {
+        $legacy_order_posts_total += $count;
+    }
+}
 if (function_exists('wc_get_orders') && function_exists('wc_get_order_statuses')) {
     foreach (wc_get_order_statuses() as $status_key => $label) {
         $status = preg_replace('/^wc-/', '', (string) $status_key);
@@ -108,13 +122,8 @@ if (function_exists('wc_get_orders') && function_exists('wc_get_order_statuses')
         $orders_total = array_sum($orders_by_status);
         $order_storage = 'hpos_table';
     } else {
-        $orders_by_status = $counts_by_status('shop_order');
-        $orders_total = 0;
-        foreach ($orders_by_status as $status => $count) {
-            if (!in_array($status, ['trash', 'auto-draft', 'inherit'], true)) {
-                $orders_total += $count;
-            }
-        }
+        $orders_by_status = $legacy_order_posts_by_status;
+        $orders_total = $legacy_order_posts_total;
         $order_storage = 'legacy_posts';
     }
 }
@@ -167,6 +176,8 @@ $report = [
         'coupons_by_status' => $counts_by_status('shop_coupon'),
         'order_count_total' => $orders_total,
         'orders_by_status' => $orders_by_status,
+        'legacy_order_posts_total' => $legacy_order_posts_total,
+        'legacy_order_posts_by_status' => $legacy_order_posts_by_status,
         'assigned_pages' => $woo_pages,
     ],
     'tuc_content_by_status' => $tuc_counts,
