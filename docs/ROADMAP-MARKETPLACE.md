@@ -47,7 +47,7 @@ Le dépôt contient le thème `tuc-theme` et le plugin `tuc-market-core` (versio
 
 **Présence de code ne signifie pas validation de production.** La couverture fonctionnelle, la sécurité, les tests, la configuration des environnements et l’état réel de l’UAT doivent être vérifiés avant d’exposer de vrais restaurants ou clients.
 
-Les principaux trous fonctionnels connus sont : panier client complet, suivi de commande client, espace restaurateur de création/gestion, parcours de publication du menu, géolocalisation fiable et import OCR. Le code de commande ne suffit pas tant que le client ne peut pas construire et envoyer un panier utilisable.
+Les principaux trous fonctionnels connus sont : panier client complet, suivi de commande client, espace restaurateur de création/gestion, parcours de publication du menu, géolocalisation fiable et import OCR. Le code de commande ne suffit pas tant que le client ne peut pas construire et envoyer un panier utilisable. Pour le périmètre dédié à la gestion du menu depuis un téléphone, voir la [feuille de route de l’Espace Pro mobile](ROADMAP-ESPACE-PRO-MOBILE.md).
 
 ## 5. Phases et critères de sortie
 
