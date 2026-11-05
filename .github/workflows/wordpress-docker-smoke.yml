@@ -166,6 +166,15 @@ jobs:
             echo "::error title=n8n workflow listing failed::$output"
             exit "$status"
           fi
+          if output="$(docker compose run --rm --entrypoint sh n8n -lc 'n8n export:workflow --id=f31a00c7-d902-4f4a-91fa-61176d0c39f7 --output=/tmp/tuc-workflow.json >/dev/null && printf "TUC_WORKFLOW_JSON_START\\n" && cat /tmp/tuc-workflow.json && printf "\\nTUC_WORKFLOW_JSON_END\\n"' 2>&1)"; then
+            printf 'WORKFLOW EXPORT:\n%s\n' "$output" >> "$N8N_SETUP_LOG"
+            workflow_json="$(printf '%s\n' "$output" | sed -n '/^TUC_WORKFLOW_JSON_START$/,/^TUC_WORKFLOW_JSON_END$/p' | sed '1d;$d')"
+            printf '%s\n' "$workflow_json" | python3 -c 'import json, sys; data=json.load(sys.stdin); workflow=data[0] if isinstance(data, list) else data; print("n8n workflow active flag:", workflow.get("active", "missing")); assert workflow.get("active") is True, workflow'
+          else
+            status=$?
+            echo "::error title=n8n workflow state inspection failed::$output"
+            exit "$status"
+          fi
           if output="$(docker compose up --detach n8n 2>&1)"; then
             printf 'COMMAND: docker compose up n8n\n%s\n' "$output" >> "$N8N_SETUP_LOG"
             printf '%s\n' "$output"
