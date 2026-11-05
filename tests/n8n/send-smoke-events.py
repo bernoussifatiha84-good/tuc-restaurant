@@ -46,9 +46,12 @@ def send_event(event_id: str, code: str, phone: str, *, timestamp: int | None = 
                     return response.status, response.read().decode()
             except urllib.error.HTTPError as error:
                 last_result = (error.code, error.read().decode())
-                # Only retry an unregistered Express route; never replay an event
-                # once n8n has accepted it and returned an application response.
-                if error.code != 404 or "Cannot POST" not in last_result[1]:
+                # Retry only explicit unknown-route responses from n8n/Express;
+                # never replay after a workflow has accepted the event.
+                if error.code != 404 or not any(
+                    marker in last_result[1]
+                    for marker in ("Cannot POST", "not registered")
+                ):
                     return last_result
         if attempt < 19:
             time.sleep(1)
