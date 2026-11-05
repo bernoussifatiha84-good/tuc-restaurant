@@ -108,10 +108,36 @@ final class TUC_Push
     // 2. Abonnements
     // =====================================================================
 
+    /**
+     * Valide les endpoints navigateur avant tout envoi serveur (anti-SSRF).
+     * Les services Web Push utilisent HTTPS; WordPress rejette aussi les hôtes
+     * privés/locaux et les URL mal formées. L’envoi réutilise wp_safe_remote_post
+     * pour refaire la validation au moment de la résolution réseau.
+     */
+    public static function endpoint_valide(string $endpoint): bool
+    {
+        $parts = wp_parse_url($endpoint);
+        if (!is_array($parts)
+            || strtolower((string) ($parts['scheme'] ?? '')) !== 'https'
+            || empty($parts['host'])
+            || isset($parts['user'])
+            || isset($parts['pass'])
+            || isset($parts['fragment'])
+            || (isset($parts['port']) && (int) $parts['port'] !== 443)
+        ) {
+            return false;
+        }
+
+        return wp_http_validate_url($endpoint) !== false;
+    }
+
     /** Enregistre (ou rafraîchit) un abonnement pour un compte. */
     public static function abonner(int $user_id, string $endpoint, string $p256dh, string $auth): bool
     {
         if ($user_id <= 0 || $endpoint === '' || $p256dh === '' || $auth === '') {
+            return false;
+        }
+        if (!self::endpoint_valide($endpoint)) {
             return false;
         }
         // validation : p256dh = 65 octets, auth = 16 octets
@@ -222,7 +248,7 @@ final class TUC_Push
             return 0;
         }
 
-        $rep = wp_remote_post($endpoint, [
+        $rep = wp_safe_remote_post($endpoint, [
             'timeout'     => 6,
             'redirection' => 0,
             'blocking'    => true,

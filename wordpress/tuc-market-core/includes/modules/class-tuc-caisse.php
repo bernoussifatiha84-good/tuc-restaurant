@@ -33,8 +33,12 @@ if (!defined('ABSPATH')) {
 
 final class TUC_Caisse
 {
-    /** Capacité qui ouvre la caisse. `edit_posts` = admin · gérant. */
-    public const CAP = 'edit_posts';
+    /**
+     * Capacité minimale sûre tant que les rôles owner/manager/cashier et leur
+     * rattachement à une boutique ne sont pas déployés. `edit_posts` inclut
+     * auteurs/éditeurs WordPress et ne constitue pas une autorisation de caisse.
+     */
+    public const CAP = 'manage_options';
 
     public static function init(): void
     {

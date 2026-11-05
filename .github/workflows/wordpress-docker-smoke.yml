@@ -82,8 +82,16 @@ jobs:
           docker compose run --rm --entrypoint wp wpcli plugin activate tuc-market-core
           docker compose run --rm --entrypoint wp wpcli plugin is-active tuc-market-core
 
-      - name: Vérifier la syntaxe de la suite de régression
-        run: docker compose run --rm --entrypoint php wpcli -l /opt/tuc-tests/wp-docker-regression.php
+      - name: Vérifier la syntaxe du plugin, du thème et des tests PHP
+        shell: bash
+        run: |
+          set -euo pipefail
+          docker compose run --rm --entrypoint sh wpcli -lc '
+            find /var/www/html/wp-content/plugins/tuc-market-core \
+              /var/www/html/wp-content/themes/tuc-theme \
+              /opt/tuc-tests \
+              -type f -name "*.php" -print0 | xargs -0 -n1 php -l
+          '
 
       - name: Exécuter les régressions WordPress/TUC
         shell: bash

@@ -35,6 +35,22 @@ final class TUC_Compte
         }
     }
 
+    /** Limiteur simple pour les routes publiques qui créent du travail/état. */
+    private static function limiter_anonyme(string $bucket, int $maximum, int $fenetre): bool
+    {
+        $ip = filter_var((string) ($_SERVER['REMOTE_ADDR'] ?? ''), FILTER_VALIDATE_IP);
+        if ($ip === false) {
+            return true; // WP-CLI/tests sans requête HTTP; en HTTP le serveur fournit REMOTE_ADDR.
+        }
+        $cle = 'tuc_public_' . sanitize_key($bucket) . '_' . md5($ip);
+        $n = (int) get_transient($cle);
+        if ($n >= $maximum) {
+            return false;
+        }
+        set_transient($cle, $n + 1, $fenetre);
+        return true;
+    }
+
     /** Le téléphone est la clé. Normalisé au format international sans « + ». */
     public static function normaliser(string $tel): string
     {
@@ -77,6 +93,9 @@ final class TUC_Compte
     public static function assurer(string $tel): array
     {
         $t = self::normaliser($tel);
+        if (!preg_match('/^[1-9][0-9]{7,14}$/', $t)) {
+            return [null, false];
+        }
         $existant = self::par_telephone($t);
         if ($existant instanceof WP_User) {
             return [$existant, false];
@@ -181,12 +200,31 @@ final class TUC_Compte
         if ($numero === '') {
             return new WP_Error('tuc_wa', 'Numéro WhatsApp du site non configuré.', ['status' => 503]);
         }
+        if (!in_array($but, ['compte', 'commande'], true)) {
+            return new WP_Error('tuc_but', 'Objet de demande invalide.', ['status' => 422]);
+        }
+        if (!self::limiter_anonyme('wa_lien', 20, 10 * MINUTE_IN_SECONDS)) {
+            return new WP_Error('tuc_trop', 'Trop de demandes. Réessayez plus tard.', ['status' => 429]);
+        }
+        if ($but === 'commande') {
+            $commerce = get_page_by_path($resto, OBJECT, 'tuc_resto');
+            if (!$commerce instanceof WP_Post || $commerce->post_status !== 'publish') {
+                return new WP_Error('tuc_resto', 'Restaurant inconnu.', ['status' => 404]);
+            }
+            if ($table < 0 || ($table > 0 && $table > (int) get_post_meta($commerce->ID, 'tuc_tables', true))) {
+                return new WP_Error('tuc_table', 'Table invalide.', ['status' => 422]);
+            }
+        }
 
         $code = strtoupper(wp_generate_password(8, false, false));
+        // Secret navigateur distinct de la référence envoyée dans WhatsApp :
+        // la référence seule ne doit pas suffire à récupérer un lien de session.
+        $pollSecret = wp_generate_password(40, false, false);
         set_transient('tuc_wa_' . $code, [
-            'but'   => $but,
-            'resto' => $resto,
-            'table' => $table,
+            'but'        => $but,
+            'resto'      => $resto,
+            'table'      => $table,
+            'poll_hash'  => hash('sha256', $pollSecret),
         ], 30 * MINUTE_IN_SECONDS);
 
         if ($but === 'commande') {
@@ -198,6 +236,7 @@ final class TUC_Compte
         return new WP_REST_Response([
             'url'   => 'https://wa.me/' . $numero . '?text=' . rawurlencode($texte),
             'code'  => $code,
+            'poll'  => $pollSecret,
             'expire' => 30,
         ], 200);
     }
@@ -216,7 +255,12 @@ final class TUC_Compte
             return new WP_Error('tuc_code', 'Code inconnu ou expiré.', ['status' => 410]);
         }
 
-        [$user, $cree] = self::assurer($tel);
+        $telNormalise = self::normaliser($tel);
+        if (!preg_match('/^[1-9][0-9]{7,14}$/', $telNormalise)) {
+            return new WP_Error('tuc_tel', 'Numéro WhatsApp invalide.', ['status' => 422]);
+        }
+
+        [$user, $cree] = self::assurer($telNormalise);
         if (!$user instanceof WP_User) {
             return new WP_Error('tuc_compte', 'Création du compte impossible.', ['status' => 500]);
         }
@@ -225,9 +269,9 @@ final class TUC_Compte
 
         // le navigateur d'origine pourra récupérer ce lien via /wa-statut
         set_transient('tuc_wa_ok_' . $code, [
-            'uid'   => $user->ID,
-            'magie' => $magie,
-            'cree'  => $cree,
+            'poll_hash' => (string) ($ctx['poll_hash'] ?? ''),
+            'magie'     => $magie,
+            'cree'      => $cree,
         ], 30 * MINUTE_IN_SECONDS);
         delete_transient('tuc_wa_' . $code);
 
@@ -244,27 +288,96 @@ final class TUC_Compte
         ], 201);
     }
 
-    /** Construit le message panier et l'URL wa.me — le client voit avant d'envoyer. */
+    /** Construit un aperçu WhatsApp à partir des prix et options du serveur. */
     public static function wa_panier(WP_REST_Request $req)
     {
-        $resto  = sanitize_title((string) $req->get_param('resto'));
-        $mode   = sanitize_key((string) ($req->get_param('mode') ?? 'emporter'));
-        $table  = (int) ($req->get_param('table') ?? 0);
-        $lignes = json_decode((string) wp_json_encode($req->get_param('items')), true) ?: [];
+        if (!self::limiter_anonyme('wa_panier', 60, 10 * MINUTE_IN_SECONDS)) {
+            return new WP_Error('tuc_trop', 'Trop de demandes. Réessayez plus tard.', ['status' => 429]);
+        }
+        $slug  = sanitize_title((string) $req->get_param('resto'));
+        $mode  = sanitize_key((string) ($req->get_param('mode') ?? 'emporter'));
+        $table = (int) ($req->get_param('table') ?? 0);
+        $entrees = json_decode((string) wp_json_encode($req->get_param('items')), true);
+        $resto = get_page_by_path($slug, OBJECT, 'tuc_resto');
+
+        if (!$resto instanceof WP_Post || $resto->post_status !== 'publish') {
+            return new WP_Error('tuc_resto', 'Restaurant inconnu.', ['status' => 404]);
+        }
+        if (get_post_meta($resto->ID, 'tuc_ferme', true) === '1') {
+            return new WP_Error('tuc_ferme', 'Le restaurant est fermé.', ['status' => 423]);
+        }
+        if (!in_array($mode, ['table', 'emporter', 'livraison'], true)) {
+            return new WP_Error('tuc_mode', 'Mode de service invalide.', ['status' => 422]);
+        }
+        $modesAutorises = array_map('sanitize_key', (array) get_post_meta($resto->ID, 'tuc_modes', true));
+        if ($modesAutorises !== [] && !in_array($mode, $modesAutorises, true)) {
+            return new WP_Error('tuc_mode', 'Ce mode de service n’est pas proposé.', ['status' => 422]);
+        }
+        $nbTables = max(0, (int) get_post_meta($resto->ID, 'tuc_tables', true));
+        if (($mode === 'table' && ($table < 1 || $table > $nbTables)) || ($mode !== 'table' && $table !== 0)) {
+            return new WP_Error('tuc_table', 'Table invalide pour ce commerce.', ['status' => 422]);
+        }
+        if (!is_array($entrees) || $entrees === [] || count($entrees) > 50) {
+            return new WP_Error('tuc_vide', 'Panier vide ou trop volumineux.', ['status' => 400]);
+        }
+
+        $lignes = [];
+        $sousTotal = 0.0;
+        foreach ($entrees as $ligne) {
+            if (!is_array($ligne)) {
+                return new WP_Error('tuc_item', 'Ligne de panier invalide.', ['status' => 422]);
+            }
+            $itemId = (int) ($ligne['id'] ?? 0);
+            $plat = get_post($itemId);
+            if (!$plat instanceof WP_Post || $plat->post_type !== 'tuc_menu_item' || $plat->post_status !== 'publish') {
+                return new WP_Error('tuc_item', 'Article inconnu ou non publié.', ['status' => 422]);
+            }
+            if ((int) get_post_meta($itemId, 'tuc_resto_id', true) !== $resto->ID) {
+                return new WP_Error('tuc_item_resto', 'Article hors du menu de ce restaurant.', ['status' => 422]);
+            }
+            if (get_post_meta($itemId, 'tuc_dispo', true) === '0') {
+                return new WP_Error('tuc_item_indisponible', 'Cet article est indisponible.', ['status' => 422]);
+            }
+
+            $qte = max(1, min(50, (int) ($ligne['q'] ?? 1)));
+            $options = (array) ($ligne['options'] ?? []);
+            if (count($options) > 20) {
+                return new WP_Error('tuc_options', 'Trop d’options pour un article.', ['status' => 422]);
+            }
+            $prixUnitaire = TUC_Commande::prix_unite($itemId, $options);
+            $optionsLisibles = [];
+            foreach ($options as $choix) {
+                $optionId = is_array($choix) ? (string) ($choix['id'] ?? '') : (string) $choix;
+                foreach ((array) get_post_meta($itemId, 'tuc_options', true) as $option) {
+                    if ($optionId !== '' && (string) ($option['id'] ?? '') === $optionId) {
+                        $nom = sanitize_text_field((string) ($option['nom'] ?? $optionId));
+                        $prixOption = (float) ($option['prix'] ?? 0);
+                        $optionsLisibles[] = $nom . ($prixOption > 0 ? ' +' . number_format($prixOption, 2, ',', '') : '');
+                        break;
+                    }
+                }
+            }
+            $lignes[] = [
+                'nom'  => sanitize_text_field($plat->post_title),
+                'q'    => $qte,
+                'pu'   => $prixUnitaire,
+                'opts' => $optionsLisibles,
+            ];
+            $sousTotal += $prixUnitaire * $qte;
+        }
+
+        $minimum = (float) get_post_meta($resto->ID, 'tuc_minimum', true);
+        if ($minimum > 0 && $sousTotal < $minimum) {
+            return new WP_Error('tuc_minimum', 'Le panier est sous le minimum requis.', ['status' => 422]);
+        }
+        $frais = $mode === 'livraison' ? (float) get_post_meta($resto->ID, 'tuc_frais', true) : 0.0;
+        $total = $sousTotal + $frais;
 
         $numero = preg_replace('/[^0-9]/', '', (string) get_option('tuc_wa_numero', ''));
         if ($numero === '') {
             return new WP_Error('tuc_wa', 'Numéro WhatsApp non configuré.', ['status' => 503]);
         }
-
-        $total = 0.0;
-        foreach ($lignes as $l) {
-            $total += (float) ($l['pu'] ?? 0) * max(1, (int) ($l['q'] ?? 1));
-        }
-        $frais = $mode === 'table' ? 0.0 : (float) ($req->get_param('frais') ?? 0);
-        $total += $frais;
-
-        $msg = TUC_WA_Message::panier($resto, $lignes, $frais, $total, $mode, $table);
+        $msg = TUC_WA_Message::panier($resto->post_title, $lignes, $frais, $total, $mode, $table);
 
         return new WP_REST_Response([
             'message' => $msg,
@@ -276,18 +389,28 @@ final class TUC_Compte
     public static function wa_statut(WP_REST_Request $req)
     {
         $code = strtoupper(sanitize_text_field((string) $req->get_param('code')));
-        if ($code === '') {
-            return new WP_Error('tuc_code', 'Code manquant.', ['status' => 400]);
+        $pollSecret = (string) $req->get_param('poll');
+        $ok = preg_match('/^[A-Z0-9]{8}$/', $code) ? get_transient('tuc_wa_ok_' . $code) : false;
+
+        $peutLire = is_array($ok)
+            && strlen($pollSecret) >= 32
+            && !empty($ok['poll_hash'])
+            && hash_equals((string) $ok['poll_hash'], hash('sha256', $pollSecret));
+        if (!$peutLire) {
+            $response = new WP_REST_Response(['pret' => false], 200);
+            $response->header('Cache-Control', 'no-store, private, max-age=0');
+            $response->header('Pragma', 'no-cache');
+            return $response;
         }
-        $ok = get_transient('tuc_wa_ok_' . $code);
-        if ($ok === false) {
-            return new WP_REST_Response(['pret' => false], 200);
-        }
-        return new WP_REST_Response([
+
+        $response = new WP_REST_Response([
             'pret'  => true,
             'cree'  => (bool) $ok['cree'],
             'magie' => $ok['magie'],
         ], 200);
+        $response->header('Cache-Control', 'no-store, private, max-age=0');
+        $response->header('Pragma', 'no-cache');
+        return $response;
     }
 
     public static function consommer_magie(WP_REST_Request $req)

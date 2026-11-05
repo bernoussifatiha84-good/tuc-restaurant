@@ -50,9 +50,11 @@ final class TUC_Commande
             'callback'            => [self::class, 'creer'],
         ]);
 
+        // Route administrative historique. Le statut opérationnel de caisse
+        // passe par TUC_Caisse::statut(), qui vérifie aussi la boutique.
         register_rest_route('tuc/v1', '/commande/(?P<id>\d+)/statut', [
             'methods'             => 'POST',
-            'permission_callback' => static fn(): bool => current_user_can('edit_posts'),
+            'permission_callback' => static fn(): bool => current_user_can('manage_options'),
             'callback'            => [self::class, 'changer_statut'],
         ]);
     }
@@ -81,7 +83,8 @@ final class TUC_Commande
     {
         $resto_slug = sanitize_title((string) $req->get_param('resto'));
         $table      = (int) ($req->get_param('table') ?? 0);
-        $tel        = preg_replace('/[^0-9+]/', '', (string) $req->get_param('tel'));
+        $telBrut    = preg_replace('/[^0-9+]/', '', (string) $req->get_param('tel'));
+        $tel        = TUC_Compte::normaliser($telBrut);
         $annonce    = (float) $req->get_param('total');
         $items      = json_decode((string) wp_json_encode($req->get_param('items')), true) ?: [];
 
@@ -93,13 +96,19 @@ final class TUC_Commande
         if (get_post_meta($resto->ID, 'tuc_ferme', true) === '1') {
             return new WP_Error('tuc_ferme', 'Le restaurant est fermé.', ['status' => 423]);
         }
+        if (!preg_match('/^[1-9][0-9]{7,14}$/', $tel)) {
+            return new WP_Error('tuc_tel', 'Numéro de téléphone invalide.', ['status' => 422]);
+        }
 
-        if ($items === []) {
-            return new WP_Error('tuc_vide', 'Panier vide.', ['status' => 400]);
+        if (!is_array($items) || $items === [] || count($items) > 50) {
+            return new WP_Error('tuc_vide', 'Panier vide ou trop volumineux.', ['status' => 400]);
         }
 
         // ---- 2. idempotence : un double-tap ne crée pas deux commandes ----
         $cle = (string) $req->get_param('cle');
+        if ($cle !== '' && !preg_match('/^[A-Za-z0-9._-]{1,64}$/', $cle)) {
+            return new WP_Error('tuc_cle', 'Clé de commande invalide.', ['status' => 422]);
+        }
         if ($cle !== '') {
             $deja = get_posts([
                 'post_type'      => self::CPT,
@@ -113,17 +122,7 @@ final class TUC_Commande
             }
         }
 
-        // ---- 3. anti-spam : 5 commandes / 10 min / téléphone ----
-        if ($tel !== '') {
-            $hash = 'tuc_rl_' . md5($tel);
-            $n = (int) get_transient($hash);
-            if ($n >= 5) {
-                return new WP_Error('tuc_trop', 'Trop de commandes. Réessayez dans quelques minutes.', ['status' => 429]);
-            }
-            set_transient($hash, $n + 1, 10 * MINUTE_IN_SECONDS);
-        }
-
-        // ---- 4. recalcul serveur : le client ne fixe pas les prix ----
+        // ---- 3. recalcul serveur : le client ne fixe pas les prix ----
         $lignes = [];
         $total = 0.0;
 
@@ -131,10 +130,16 @@ final class TUC_Commande
             $item_id = (int) ($ligne['id'] ?? 0);
             $qte     = max(1, min(50, (int) ($ligne['q'] ?? 1)));
             $opts    = (array) ($ligne['options'] ?? []);
+            if (count($opts) > 20) {
+                return new WP_Error('tuc_options', 'Trop d’options pour un article.', ['status' => 422]);
+            }
 
             $plat = get_post($item_id);
-            if (!$plat instanceof WP_Post || $plat->post_type !== 'tuc_menu_item') {
-                return new WP_Error('tuc_item', 'Article inconnu : ' . $item_id, ['status' => 422]);
+            if (!$plat instanceof WP_Post || $plat->post_type !== 'tuc_menu_item' || $plat->post_status !== 'publish') {
+                return new WP_Error('tuc_item', 'Article inconnu ou non publié : ' . $item_id, ['status' => 422]);
+            }
+            if (get_post_meta($item_id, 'tuc_dispo', true) === '0') {
+                return new WP_Error('tuc_item_indisponible', 'Cet article est indisponible.', ['status' => 422]);
             }
             // le plat doit appartenir à CE restaurant
             if ((int) get_post_meta($item_id, 'tuc_resto_id', true) !== $resto->ID) {
@@ -198,7 +203,23 @@ final class TUC_Commande
             ]);
         }
 
-        // ---- 6. création ----
+        // ---- 6. anti-abus après validation, par téléphone normalisé et IP ----
+        // Les erreurs de panier/prix ne peuvent plus consommer le quota d'un tiers.
+        $limites = [['tuc_rl_' . md5($tel), 5]];
+        $ip = filter_var((string) ($_SERVER['REMOTE_ADDR'] ?? ''), FILTER_VALIDATE_IP);
+        if ($ip !== false) {
+            $limites[] = ['tuc_rl_ip_' . md5($ip), 20];
+        }
+        foreach ($limites as [$cleLimite, $maximum]) {
+            if ((int) get_transient($cleLimite) >= $maximum) {
+                return new WP_Error('tuc_trop', 'Trop de commandes. Réessayez dans quelques minutes.', ['status' => 429]);
+            }
+        }
+        foreach ($limites as [$cleLimite, $maximum]) {
+            set_transient($cleLimite, (int) get_transient($cleLimite) + 1, 10 * MINUTE_IN_SECONDS);
+        }
+
+        // ---- 7. création ----
         $id = wp_insert_post([
             'post_type'   => self::CPT,
             'post_status' => 'publish',
@@ -237,6 +258,10 @@ final class TUC_Commande
     {
         $id = (int) $req->get_param('id');
         $vers = sanitize_key((string) $req->get_param('statut'));
+        $commande = get_post($id);
+        if (!$commande instanceof WP_Post || $commande->post_type !== self::CPT) {
+            return new WP_Error('tuc_commande', 'Commande inconnue.', ['status' => 404]);
+        }
 
         if (!in_array($vers, self::STATUTS, true)) {
             return new WP_Error('tuc_statut', 'Statut inconnu.', ['status' => 400]);
