@@ -11,6 +11,12 @@ if (!class_exists('WP_CLI')) {
     exit(1);
 }
 
+$progressPath = ABSPATH . 'wp-content/tuc-regression-progress.log';
+$trace = static function (string $message) use ($progressPath): void {
+    file_put_contents($progressPath, gmdate('c') . ' ' . $message . "\n", FILE_APPEND | LOCK_EX);
+};
+file_put_contents($progressPath, gmdate('c') . " Début de la suite\n");
+
 // WP-CLI peut masquer certains fatals WordPress derrière l’écran générique
 // « critical error »; conserver l’erreur PHP d’origine dans le log du runner.
 register_shutdown_function(static function (): void {
@@ -26,15 +32,18 @@ register_shutdown_function(static function (): void {
 });
 
 /** @var Closure(bool, string): void $assert */
-$assert = static function (bool $condition, string $message): void {
+$assert = static function (bool $condition, string $message) use ($trace): void {
     if (!$condition) {
+        $trace('ASSERTION ÉCHOUÉE : ' . $message);
         throw new RuntimeException('ÉCHEC : ' . $message);
     }
+    $trace('OK : ' . $message);
     WP_CLI::log('OK : ' . $message);
 };
 
 /** @var Closure(string, array<string, mixed>): WP_REST_Response $rest */
-$rest = static function (string $route, array $params = []): WP_REST_Response {
+$rest = static function (string $route, array $params = []) use ($trace): WP_REST_Response {
+    $trace('Requête REST : ' . $route);
     $request = new WP_REST_Request($route === '/tuc/v1/sante' ? 'GET' : 'POST', $route);
     foreach ($params as $key => $value) {
         $request->set_param($key, $value);

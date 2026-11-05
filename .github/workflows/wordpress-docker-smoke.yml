@@ -155,6 +155,20 @@ jobs:
               echo "::error title=WordPress PHP error::$fatal_line"
             fi
           fi
+          if docker compose exec --no-TTY wordpress sh -lc 'test -f /var/www/html/wp-content/tuc-regression-progress.log'; then
+            progress_log="$(docker compose exec --no-TTY wordpress sh -lc 'cat /var/www/html/wp-content/tuc-regression-progress.log' || true)"
+            printf '%s\n' "$progress_log"
+            {
+              echo '### WordPress regression progress'
+              echo '```text'
+              printf '%s\n' "$progress_log"
+              echo '```'
+            } >> "$GITHUB_STEP_SUMMARY"
+            last_progress="$(printf '%s\n' "$progress_log" | tail -n 1 | tr '\n' ' ' | cut -c1-900)"
+            if [ -n "$last_progress" ]; then
+              echo "::error title=Last WordPress regression stage::$last_progress"
+            fi
+          fi
 
       - name: Nettoyer les conteneurs, volumes et identifiants éphémères
         if: always()
