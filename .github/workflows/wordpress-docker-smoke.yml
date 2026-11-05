@@ -46,13 +46,16 @@ jobs:
       - name: Démarrer WordPress et MariaDB
         run: docker compose up --detach --wait --wait-timeout 180 wordpress
 
+      - name: Vérifier WP-CLI
+        run: docker compose run --rm --entrypoint wp wpcli cli info
+
       - name: Installer WordPress avec WP-CLI
         shell: bash
         run: |
           set -euo pipefail
           WP_ADMIN_PASSWORD="$(openssl rand -hex 24)"
           echo "::add-mask::$WP_ADMIN_PASSWORD"
-          docker compose run --rm wpcli core install \
+          docker compose run --rm --entrypoint wp wpcli core install \
             --url='http://127.0.0.1:8080' \
             --title='TUC WordPress Docker smoke test' \
             --admin_user='tuc-smoke-admin' \
@@ -63,11 +66,11 @@ jobs:
       - name: Activer le plugin et le thème TUC
         run: |
           set -euo pipefail
-          docker compose run --rm wpcli plugin activate tuc-market-core
-          docker compose run --rm wpcli theme activate tuc-theme
-          docker compose run --rm wpcli plugin is-active tuc-market-core
-          docker compose run --rm wpcli theme is-active tuc-theme
-          docker compose run --rm wpcli core version
+          docker compose run --rm --entrypoint wp wpcli plugin activate tuc-market-core
+          docker compose run --rm --entrypoint wp wpcli theme activate tuc-theme
+          docker compose run --rm --entrypoint wp wpcli plugin is-active tuc-market-core
+          docker compose run --rm --entrypoint wp wpcli theme is-active tuc-theme
+          docker compose run --rm --entrypoint wp wpcli core version
 
       - name: Vérifier HTTP, REST et la version PHP
         shell: bash
