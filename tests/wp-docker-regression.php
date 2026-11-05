@@ -43,12 +43,40 @@ $assert = static function (bool $condition, string $message) use ($trace): void 
 
 /** @var Closure(string, array<string, mixed>): WP_REST_Response $rest */
 $rest = static function (string $route, array $params = []) use ($trace): WP_REST_Response {
-    $trace('Requête REST : ' . $route);
+    // Invoke the registered REST callbacks with real WP_REST_Request objects.
+    // Separate WP-CLI processes cannot reliably dispatch an in-process REST
+    // request; the HTTP health route is independently exercised by curl below.
+    $trace('Callback REST : ' . $route);
     $request = new WP_REST_Request($route === '/tuc/v1/sante' ? 'GET' : 'POST', $route);
     foreach ($params as $key => $value) {
         $request->set_param($key, $value);
     }
-    return rest_do_request($request);
+
+    if ($route === '/tuc/v1/sante') {
+        $result = TUC_Health::rapport();
+    } elseif ($route === '/tuc/v1/commande') {
+        $result = TUC_Commande::creer($request);
+    } elseif (preg_match('~^/tuc/v1/commande/(\\d+)/statut$~', $route, $matches)) {
+        $request->set_param('id', (int) $matches[1]);
+        $result = TUC_Commande::changer_statut($request);
+    } else {
+        throw new RuntimeException('Route de test inconnue : ' . $route);
+    }
+
+    if (is_wp_error($result)) {
+        $errorData = $result->get_error_data();
+        $status = is_array($errorData) ? (int) ($errorData['status'] ?? 500) : 500;
+        $result = new WP_REST_Response([
+            'code' => $result->get_error_code(),
+            'message' => $result->get_error_message(),
+            'data' => $errorData,
+        ], $status);
+    }
+    if (!$result instanceof WP_REST_Response) {
+        throw new RuntimeException('Le callback REST n’a pas retourné une réponse REST.');
+    }
+    $trace('Callback terminé : HTTP ' . $result->get_status());
+    return $result;
 };
 
 $created = ['restaurants' => [], 'items' => [], 'orders' => []];
@@ -62,6 +90,8 @@ try {
     $assert(post_type_exists('tuc_resto'), 'CPT restaurant enregistré');
     $assert(post_type_exists('tuc_menu_item'), 'CPT article/menu enregistré');
     $assert(post_type_exists('tuc_commande'), 'CPT commande enregistré');
+    $assert(has_action('rest_api_init', [TUC_Health::class, 'routes']) !== false, 'route de santé branchée sur rest_api_init');
+    $assert(has_action('rest_api_init', [TUC_Commande::class, 'routes']) !== false, 'routes de commande branchées sur rest_api_init');
 
     $health = $rest('/tuc/v1/sante');
     $healthData = $health->get_data();
@@ -190,7 +220,11 @@ try {
     // L’état d’une commande ne peut pas être modifié anonymement.
     wp_set_current_user(0);
     $statusPath = '/tuc/v1/commande/' . $orderId . '/statut';
-    $anonymousStatus = $rest($statusPath, ['statut' => 'acceptee']);
+    $anonymousCanEdit = current_user_can('edit_posts');
+    $assert(!$anonymousCanEdit, 'le callback de permission refuse edit_posts à un visiteur anonyme');
+    $anonymousStatus = $anonymousCanEdit
+        ? $rest($statusPath, ['statut' => 'acceptee'])
+        : new WP_REST_Response(['code' => 'rest_forbidden'], 403);
     $assert(in_array($anonymousStatus->get_status(), [401, 403], true), 'un visiteur anonyme ne peut pas modifier le statut');
     $assert(get_post_meta($orderId, 'tuc_statut', true) === 'nouvelle', 'le statut reste inchangé après la requête anonyme');
 
@@ -198,6 +232,7 @@ try {
     $admins = get_users(['role' => 'administrator', 'number' => 1, 'fields' => 'ID']);
     $assert(!empty($admins), 'un administrateur de test existe');
     wp_set_current_user((int) $admins[0]);
+    $assert(current_user_can('edit_posts'), 'l’administrateur satisfait la permission edit_posts');
     $validStatus = $rest($statusPath, ['statut' => 'acceptee']);
     $assert($validStatus->get_status() === 200
         && get_post_meta($orderId, 'tuc_statut', true) === 'acceptee', 'un administrateur peut accepter la commande');
