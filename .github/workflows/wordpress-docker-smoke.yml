@@ -89,8 +89,12 @@ jobs:
         shell: bash
         run: |
           set -uo pipefail
+          # GitHub’s bash shell enables errexit; disable it while capturing the
+          # expected non-zero status so the diagnostic output below can run.
+          set +e
           regression_output="$(docker compose run --rm --entrypoint wp wpcli eval-file /opt/tuc-tests/wp-docker-regression.php 2>&1)"
           regression_status=$?
+          set -e
           printf '%s\n' "$regression_output"
           if [ "$regression_status" -ne 0 ]; then
             echo "::error title=Regression runner failed::WP-CLI exited with status $regression_status"
