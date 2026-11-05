@@ -1,17 +1,23 @@
-name: Déploiement WordPress (Hostinger)
+name: Déploiement WordPress (3 environnements)
 
-# develop -> staging (dev)   ·   release-x.y.z -> production (prd)
-# Convention de version : <version_theme>.<version_plugin>
+# La cible est déterminée par le type et le nom de la référence :
+#   branche develop       -> dev
+#   tag pre-release-x.y.z -> uat
+#   tag release-x.y.z     -> prd
 on:
   push:
-    branches:
-      - develop
-      - 'release-**'
+    branches: [develop]
+    tags:
+      - 'pre-release-*'
+      - 'release-*'
   workflow_dispatch:
+
+permissions:
+  contents: read
 
 concurrency:
   group: deploy-${{ github.ref }}
-  cancel-in-progress: true
+  cancel-in-progress: false
 
 jobs:
   qualite:
@@ -27,119 +33,230 @@ jobs:
           coverage: none
 
       - name: Lint PHP
+        shell: bash
         run: |
-          set -e
-          find wordpress -name '*.php' -print0 | while IFS= read -r -d '' f; do
-            php -l "$f" > /dev/null || { echo "ERREUR de syntaxe : $f"; exit 1; }
-          done
+          set -euo pipefail
+          while IFS= read -r -d '' f; do
+            php -l "$f" >/dev/null || { echo "::error file=$f::Erreur de syntaxe PHP"; exit 1; }
+          done < <(find wordpress -name '*.php' -print0)
           echo "PHP OK"
 
       - name: Équilibre des accolades CSS
         run: |
           python3 - <<'PY'
-          import re, sys, pathlib
+          import pathlib, sys
           bad = []
-          for p in pathlib.Path('wordpress').rglob('*.css'):
-              s = p.read_text(encoding='utf-8', errors='ignore')
-              if s.count('{') != s.count('}'):
-                  bad.append(str(p))
+          for path in pathlib.Path('wordpress').rglob('*.css'):
+              text = path.read_text(encoding='utf-8', errors='ignore')
+              if text.count('{') != text.count('}'):
+                  bad.append(str(path))
           if bad:
-              print('CSS déséquilibré :', bad); sys.exit(1)
+              print('CSS déséquilibré :', bad)
+              sys.exit(1)
           print('CSS OK')
           PY
 
-      - name: Syntaxe JS
+      - name: Syntaxe JavaScript
+        shell: bash
         run: |
-          if [ -d node_modules ]; then exit 0; fi
-          for f in $(find wordpress -name '*.js' -not -path '*/node_modules/*'); do
-            node --check "$f" || exit 1
-          done
+          set -euo pipefail
+          while IFS= read -r -d '' f; do node --check "$f"; done \
+            < <(find wordpress -name '*.js' -not -path '*/node_modules/*' -print0)
           echo "JS OK"
 
-  deploiement:
-    name: rsync vers Hostinger
-    needs: qualite
+      - name: Vérifier les fichiers WordPress requis
+        run: |
+          test -f wordpress/tuc-theme/style.css
+          test -f wordpress/tuc-theme/index.php
+          test -f wordpress/tuc-market-core/tuc-market-core.php
+          grep -q '^Version:' wordpress/tuc-theme/style.css
+          grep -q "const TUC_CORE_VERSION" wordpress/tuc-market-core/tuc-market-core.php
+          echo "Thème et plugin présents."
+
+  cible:
+    name: Résoudre la cible
     runs-on: ubuntu-latest
-    environment: ${{ github.ref_name == 'develop' && 'dev' || 'prd' }}
+    outputs:
+      env: ${{ steps.resolve.outputs.env }}
+      url: ${{ steps.resolve.outputs.url }}
+      root: ${{ steps.resolve.outputs.root }}
+    steps:
+      - name: Référence vers environnement
+        id: resolve
+        env:
+          REF_NAME: ${{ github.ref_name }}
+          REF_TYPE: ${{ github.ref_type }}
+          URL_DEV: ${{ vars.URL_DEV }}
+          ROOT_DEV: ${{ vars.ROOT_DEV }}
+          URL_UAT: ${{ vars.URL_UAT }}
+          ROOT_UAT: ${{ vars.ROOT_UAT }}
+          URL_PRD: ${{ vars.URL_PRD }}
+          ROOT_PRD: ${{ vars.ROOT_PRD }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ "$REF_TYPE" == branch && "$REF_NAME" == develop ]]; then
+            ENV_NAME=dev; URL="$URL_DEV"; ROOT="$ROOT_DEV"
+          elif [[ "$REF_TYPE" == tag && "$REF_NAME" == pre-release-* ]]; then
+            ENV_NAME=uat; URL="$URL_UAT"; ROOT="$ROOT_UAT"
+          elif [[ "$REF_TYPE" == tag && "$REF_NAME" == release-* ]]; then
+            ENV_NAME=prd; URL="$URL_PRD"; ROOT="$ROOT_PRD"
+          else
+            echo "::error::Référence non autorisée : $REF_TYPE '$REF_NAME'."
+            echo "Attendu : branche develop, tag pre-release-x.y.z ou tag release-x.y.z."
+            exit 1
+          fi
+
+          if [[ -z "$URL" || -z "$ROOT" ]]; then
+            if [[ "$ENV_NAME" == prd ]]; then
+              echo "::error::La cible prd n'est pas encore configurée (URL_PRD/ROOT_PRD)."
+            else
+              echo "::error::Variables d'environnement manquantes pour '$ENV_NAME'."
+            fi
+            exit 1
+          fi
+
+          printf 'env=%s\nurl=%s\nroot=%s\n' "$ENV_NAME" "$URL" "$ROOT" >> "$GITHUB_OUTPUT"
+          echo "Référence '$REF_NAME' → environnement '$ENV_NAME'."
+
+  deploiement:
+    name: Déploiement vers ${{ needs.cible.outputs.env }}
+    needs: [qualite, cible]
+    runs-on: ubuntu-latest
+    environment: ${{ needs.cible.outputs.env }}
     steps:
       - uses: actions/checkout@v5
 
-      - name: Version du thème
-        id: v
+      - name: Lire les versions
+        id: versions
+        shell: bash
         run: |
-          THEME_V=$(grep -m1 '^Version:' wordpress/tuc-theme/style.css | sed 's/Version:[[:space:]]*//')
-          echo "theme=$THEME_V" >> "$GITHUB_OUTPUT"
-          echo "Version du thème : $THEME_V"
+          set -euo pipefail
+          THEME_VERSION=$(sed -n 's/^Version:[[:space:]]*//p' wordpress/tuc-theme/style.css | head -n 1)
+          PLUGIN_VERSION=$(sed -n "s/.*const TUC_CORE_VERSION = '\([^']*\)'.*/\1/p" \
+            wordpress/tuc-market-core/tuc-market-core.php | head -n 1)
+          test -n "$THEME_VERSION" && test -n "$PLUGIN_VERSION"
+          printf 'theme=%s\nplugin=%s\n' "$THEME_VERSION" "$PLUGIN_VERSION" >> "$GITHUB_OUTPUT"
+          echo "Thème $THEME_VERSION · plugin $PLUGIN_VERSION"
 
-      - name: Contrôle des secrets
+      - name: Vérifier les secrets de déploiement
         env:
-          S_HOST: ${{ secrets.SSH_HOST }}
-          S_USER: ${{ secrets.SSH_USERNAME || secrets.SSH_USER }}
-          S_ROOT: ${{ secrets.WP_ROOT }}
-          S_URL:  ${{ secrets.SITE_URL }}
-          S_KEY:  ${{ secrets.SSH_PRIVATE_KEY }}
+          SSH_HOST: ${{ secrets.SSH_HOST }}
+          SSH_USER: ${{ secrets.SSH_USERNAME || secrets.SSH_USER }}
+          SSH_PRIVATE_KEY: ${{ secrets.SSH_PRIVATE_KEY }}
+          SSH_ROOT: ${{ needs.cible.outputs.root }}
+          SITE_URL: ${{ needs.cible.outputs.url }}
+          ENV_NAME: ${{ needs.cible.outputs.env }}
+        shell: bash
         run: |
-          manquant=0
-          for n in S_HOST S_USER S_ROOT S_URL S_KEY; do
-            if [ -z "${!n}" ]; then
-              echo "::error::Secret manquant dans l'environnement (dev|prd) : $n"
-              manquant=1
+          set -euo pipefail
+          for name in SSH_HOST SSH_USER SSH_PRIVATE_KEY SSH_ROOT SITE_URL; do
+            if [[ -z "${!name}" ]]; then
+              echo "::error::Configuration manquante : $name (environnement '$ENV_NAME')."
+              exit 1
             fi
           done
-          if [ "$manquant" != "0" ]; then
-            echo "→ Settings > Environments > dev (ou prd) > Add secret"
-            echo "  S_HOST=SSH_HOST  S_USER=SSH_USER  S_ROOT=WP_ROOT  S_URL=SITE_URL  S_KEY=SSH_PRIVATE_KEY"
-            exit 1
-          fi
-          echo "Tous les secrets sont présents."
+          echo "Configuration présente pour '$ENV_NAME'."
 
-      - name: Préparer la clé SSH
+      - name: Préparer la connexion SSH
         env:
-          PORT: ${{ vars.SSH_PORT || '65002' }}
+          SSH_PRIVATE_KEY: ${{ secrets.SSH_PRIVATE_KEY }}
+          SSH_HOST: ${{ secrets.SSH_HOST }}
+          SSH_PORT: ${{ vars.SSH_PORT || '65002' }}
+        shell: bash
         run: |
-          mkdir -p ~/.ssh
-          echo "${{ secrets.SSH_PRIVATE_KEY }}" > ~/.ssh/id_deploy
-          chmod 600 ~/.ssh/id_deploy
-          ssh-keygen -y -f ~/.ssh/id_deploy > /dev/null || { echo "::error::SSH_PRIVATE_KEY n'est pas une clé privée valide (OpenSSH ou RSA attendue)"; exit 1; }
-          ssh-keyscan -p "$PORT" -H "${{ secrets.SSH_HOST }}" >> ~/.ssh/known_hosts 2>&1 | tail -1
-          echo "Empreinte de la clé publique (à autoriser sur Hostinger) :"
-          ssh-keygen -y -f ~/.ssh/id_deploy | ssh-keygen -lf -
+          set -euo pipefail
+          mkdir -p "$HOME/.ssh"
+          printf '%s\n' "$SSH_PRIVATE_KEY" > "$HOME/.ssh/id_deploy"
+          chmod 600 "$HOME/.ssh/id_deploy"
+          ssh-keygen -y -f "$HOME/.ssh/id_deploy" >/dev/null
+          ssh-keyscan -p "$SSH_PORT" -H "$SSH_HOST" >> "$HOME/.ssh/known_hosts" 2>/dev/null
 
       - name: Envoyer le thème
         env:
-          PORT: ${{ vars.SSH_PORT || '65002' }}
+          SSH_PORT: ${{ vars.SSH_PORT || '65002' }}
+          SSH_USER: ${{ secrets.SSH_USERNAME || secrets.SSH_USER }}
+          SSH_HOST: ${{ secrets.SSH_HOST }}
+          SSH_ROOT: ${{ needs.cible.outputs.root }}
+        shell: bash
         run: |
+          set -euo pipefail
           rsync -az --delete --no-perms --no-owner --no-group \
-            -e "ssh -i ~/.ssh/id_deploy -p ${{ vars.SSH_PORT || 65002 }} -o StrictHostKeyChecking=accept-new" \
+            -e "ssh -i $HOME/.ssh/id_deploy -p $SSH_PORT -o StrictHostKeyChecking=yes" \
             wordpress/tuc-theme/ \
-            "${{ secrets.SSH_USER }}@${{ secrets.SSH_HOST }}:${{ secrets.WP_ROOT }}/wp-content/themes/tuc-theme/"
+            "$SSH_USER@$SSH_HOST:$SSH_ROOT/wp-content/themes/tuc-theme/"
 
-      - name: Envoyer le plugin (si présent)
-        if: hashFiles('wordpress/tuc-market-core/**') != ''
+      - name: Envoyer le plugin métier
+        env:
+          SSH_PORT: ${{ vars.SSH_PORT || '65002' }}
+          SSH_USER: ${{ secrets.SSH_USERNAME || secrets.SSH_USER }}
+          SSH_HOST: ${{ secrets.SSH_HOST }}
+          SSH_ROOT: ${{ needs.cible.outputs.root }}
+        shell: bash
         run: |
+          set -euo pipefail
           rsync -az --delete --no-perms --no-owner --no-group \
-            -e "ssh -i ~/.ssh/id_deploy -p ${{ vars.SSH_PORT || 65002 }} -o StrictHostKeyChecking=accept-new" \
+            -e "ssh -i $HOME/.ssh/id_deploy -p $SSH_PORT -o StrictHostKeyChecking=yes" \
             wordpress/tuc-market-core/ \
-            "${{ secrets.SSH_USER }}@${{ secrets.SSH_HOST }}:${{ secrets.WP_ROOT }}/wp-content/plugins/tuc-market-core/"
+            "$SSH_USER@$SSH_HOST:$SSH_ROOT/wp-content/plugins/tuc-market-core/"
 
-      - name: Vider le cache + vérifier
+      - name: Activer le plugin et le thème, puis purger les caches
+        env:
+          SSH_PORT: ${{ vars.SSH_PORT || '65002' }}
+          SSH_USER: ${{ secrets.SSH_USERNAME || secrets.SSH_USER }}
+          SSH_HOST: ${{ secrets.SSH_HOST }}
+          SSH_ROOT: ${{ needs.cible.outputs.root }}
+        shell: bash
         run: |
-          ssh -i ~/.ssh/id_deploy -p "${{ vars.SSH_PORT || 65002 }}" \
-            "${{ secrets.SSH_USER }}@${{ secrets.SSH_HOST }}" \
-            "cd ${{ secrets.WP_ROOT }} && \
-             (wp cache flush --allow-root || true) && \
-             (wp rewrite flush --allow-root || true) && \
-             (wp litespeed-purge all --allow-root || php -r 'echo \"cache: n/a\n\";')"
+          set -euo pipefail
+          ssh -i "$HOME/.ssh/id_deploy" -p "$SSH_PORT" -o StrictHostKeyChecking=yes \
+            "$SSH_USER@$SSH_HOST" \
+            "cd '$SSH_ROOT' && set -e && \
+             wp plugin activate tuc-market-core && \
+             wp theme activate tuc-theme && \
+             wp option update permalink_structure '/%postname%/' && \
+             wp cache flush && \
+             wp rewrite flush --hard && \
+             (wp litespeed-purge all || true)"
 
-      - name: Fumigène (health check)
+      - name: Vérifier la santé et les versions déployées
+        env:
+          SITE_URL: ${{ needs.cible.outputs.url }}
+          ENV_NAME: ${{ needs.cible.outputs.env }}
+          THEME_VERSION: ${{ steps.versions.outputs.theme }}
+          PLUGIN_VERSION: ${{ steps.versions.outputs.plugin }}
+        shell: bash
         run: |
-          URL="${{ secrets.SITE_URL }}/wp-json/tuc/v1/sante"
-          echo "GET $URL"
-          for i in 1 2 3 4 5; do
-            BODY=$(curl -fsS --max-time 20 "$URL" 2>/dev/null) && break
-            echo "tentative $i échouée, on réessaie…"
+          set -euo pipefail
+          BODY=""
+          for attempt in 1 2 3 4 5; do
+            BODY=$(curl -fsS --max-time 20 "$SITE_URL/wp-json/tuc/v1/sante" 2>/dev/null) && break
+            BODY=$(curl -fsS --max-time 20 "$SITE_URL/?rest_route=/tuc/v1/sante" 2>/dev/null) && break
+            echo "Tentative $attempt/5 échouée, nouvelle tentative…"
             sleep 8
           done
+
           echo "$BODY"
-          echo "$BODY" | grep -q '"ok":true' || { echo "❌ /sante ne répond pas"; exit 1; }
-          echo "✅ déploiement vert — version ${{ steps.v.outputs.theme }}"
+          echo "$BODY" | grep -q '"ok":true' || {
+            echo "::error::Le contrôle de santé a échoué pour '$ENV_NAME'."
+            exit 1
+          }
+          echo "$BODY" | grep -q "\"plugin\":\"$PLUGIN_VERSION\"" || {
+            echo "::error::La version du plugin déployée ne correspond pas à $PLUGIN_VERSION."
+            exit 1
+          }
+          echo "$BODY" | grep -q "\"theme_ver\":\"$THEME_VERSION\"" || {
+            echo "::error::La version du thème déployée ne correspond pas à $THEME_VERSION."
+            exit 1
+          }
+
+          {
+            echo "### ✅ $ENV_NAME déployé"
+            echo ""
+            echo "| Élément | Valeur |"
+            echo "|---|---|"
+            echo "| Environnement | $ENV_NAME |"
+            echo "| Référence | $GITHUB_REF_NAME |"
+            echo "| Thème | $THEME_VERSION |"
+            echo "| Plugin | $PLUGIN_VERSION |"
+          } >> "$GITHUB_STEP_SUMMARY"

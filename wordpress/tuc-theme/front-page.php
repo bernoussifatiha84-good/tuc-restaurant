@@ -33,9 +33,10 @@ $quartier = isset($_GET['q']) ? sanitize_text_field(wp_unslash($_GET['q'])) : ''
           ['restaurant', __('Restaurant', 'tuc'), 'restaurant'],
           ['mahlaba',    __('Mahlaba', 'tuc'),    'mahlaba'],
       ];
-      foreach ($cats as [$slug, $label, $img]) : ?>
-        <a class="cat" href="#s-<?php echo esc_attr($slug); ?>">
-          <span class="c"><img src="<?php echo esc_url(tuc_img($img)); ?>" alt="" loading="lazy" width="200" height="200"></span>
+      foreach ($cats as [$slug, $label, $img]) :
+          $target = ['restaurant' => 'rest', 'mahlaba' => 'maha'][$slug] ?? $slug; ?>
+        <a class="cat" href="#s-<?php echo esc_attr($target); ?>">
+          <span class="c"><?php echo tuc_picture($img, $label, ['width' => 200, 'height' => 200, 'sizes' => '104px', 'extra' => 'style="width:100%;height:100%;object-fit:cover;border-radius:50%"']); ?></span>
           <span class="n"><?php echo esc_html($label); ?></span>
         </a>
       <?php endforeach; ?>
@@ -49,7 +50,7 @@ $quartier = isset($_GET['q']) ? sanitize_text_field(wp_unslash($_GET['q'])) : ''
       ];
       foreach ($cats2 as [$slug, $label, $img]) : ?>
         <a class="cat" href="#s-<?php echo esc_attr($slug); ?>">
-          <span class="c"><img src="<?php echo esc_url(tuc_img($img)); ?>" alt="" loading="lazy" width="200" height="200"></span>
+          <span class="c"><?php echo tuc_picture($img, $label, ['width' => 200, 'height' => 200, 'sizes' => '104px', 'extra' => 'style="width:100%;height:100%;object-fit:cover;border-radius:50%"']); ?></span>
           <span class="n"><?php echo esc_html($label); ?></span>
         </a>
       <?php endforeach; ?>
@@ -84,7 +85,7 @@ $quartier = isset($_GET['q']) ? sanitize_text_field(wp_unslash($_GET['q'])) : ''
         <?php foreach ($items as $p) : ?>
           <article class="promo">
             <div class="im">
-              <img src="<?php echo esc_url(tuc_img($p['img'])); ?>" alt="" loading="lazy" width="440" height="330">
+              <?php echo tuc_picture($p['img'], $p['nm'], ['width'=>440,'height'=>330,'sizes'=>'(max-width:900px) 206px, 300px']); ?>
               <span class="off"><?php echo esc_html($p['big']); ?></span>
             </div>
             <div class="nm"><?php echo esc_html($p['nm']); ?></div>
@@ -95,7 +96,7 @@ $quartier = isset($_GET['q']) ? sanitize_text_field(wp_unslash($_GET['q'])) : ''
       <?php else : ?>
         <?php foreach ($items as $x) : ?>
           <article class="card">
-            <div class="im"><img src="<?php echo esc_url(tuc_img($x['img'])); ?>" alt="" loading="lazy" width="440" height="330"></div>
+            <div class="im"><?php echo tuc_picture($x['img'], $x['n'], ['width'=>440,'height'=>330,'sizes'=>'(max-width:900px) 158px, 232px']); ?></div>
             <div class="nm"><?php echo esc_html($x['n']); ?></div>
             <div class="cu"><?php echo esc_html($x['cu']); ?></div>
             <div class="mt">

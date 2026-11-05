@@ -1,36 +1,19 @@
-# ✅ DÉPLOYÉ — https://chocolate-gazelle-457691.hostingersite.com
+# Environnements WordPress
 
-## État réel au 4 novembre 2026
+Cette note décrit le modèle de déploiement du projet, pas les identifiants du compte d’hébergement. Les hôtes, utilisateurs SSH, chemins d’installation et clés ne doivent pas être publiés dans le dépôt.
 
-| Élément | Valeur |
-|---|---|
-| Site provisoire | `chocolate-gazelle-457691.hostingersite.com` |
-| Thème actif | **TUC Market 0.1.0** |
-| WordPress | 7.1.4 |
-| CI/CD | **vert** — run `41910279842` |
-| `/wp-json/tuc/v1/sante` | `{"ok":true,"theme":"0.1.0","restos":25}` |
-| Poids de la page | **72 Ko** HTML · 1,5 Mo de thème |
-| Temps de réponse | **0,26 s** |
+## Modèle décrit dans la passation
 
-### Secrets configurés dans l'environnement `dev`
+| Environnement | Déclencheur | Usage |
+|---|---|---|
+| `dev` | branche `develop` | développement |
+| `uat` | tag `pre-release-*` | validation avant release |
+| `prd` | tag `release-*` | production; à protéger par approbation |
 
-| Nom | Valeur |
-|---|---|
-| `SSH_HOST` | `145.223.38.175` |
-| `SSH_USER` | `u987613820` |
-| `SSH_PRIVATE_KEY` | clé ed25519 `arena-agent@tuc.ma` ✅ autorisée sur hPanel |
-| `WP_ROOT` | `domains/chocolate-gazelle-457691.hostingersite.com/public_html` |
-| `SITE_URL` | `https://chocolate-gazelle-457691.hostingersite.com` |
-| `SSH_PORT` *(variable)* | `65002` |
+La passation indique que `dev` et `uat` utilisent des racines WordPress distinctes sur un même hébergement et que la production n’était pas encore raccordée. Cet état n’a pas été vérifié en direct et peut avoir changé.
 
-### Pour passer en production
+## Configuration à conserver hors du dépôt
 
-1. Créer `tuc.ma` dans hPanel (ou pointer le domaine vers le compte)
-2. Installer WordPress dessus
-3. Remplir `WP_ROOT` + `SITE_URL` (+ recoller `SSH_PRIVATE_KEY`) dans l'environnement **`prd`**
-4. `git checkout -b release-0.2.0 && git push origin release-0.2.0`
+Les variables d’URL et de chemin (`URL_*`, `ROOT_*`) et le port SSH se configurent dans GitHub Actions Variables. Les secrets SSH se configurent dans les environnements GitHub appropriés. Ne pas copier de clé privée, token, mot de passe ou secret de webhook dans ce fichier, dans le dépôt ou dans les journaux d’action.
 
----
-
-# Guide de référence (SSH)
-
+Le workflow utilise `rsync --delete` : son exécution peut supprimer des fichiers du thème ou du plugin présents uniquement sur le serveur. Sauvegarder et vérifier la cible avant chaque déploiement.
