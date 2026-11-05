@@ -88,24 +88,15 @@ jobs:
       - name: Exécuter les régressions WordPress/TUC
         shell: bash
         run: |
-          set -euo pipefail
-          if regression_output="$(docker compose run --rm --entrypoint wp wpcli eval-file /opt/tuc-tests/wp-docker-regression.php 2>&1)"; then
-            printf '%s\n' "$regression_output"
-          else
-            printf '%s\n' "$regression_output"
-            {
-              echo '### Échec des régressions WordPress/TUC'
-              echo '```text'
-              printf '%s\n' "$regression_output" | tail -n 80
-              echo '```'
-            } >> "$GITHUB_STEP_SUMMARY"
-            progress_message="$(printf '%s\n' "$regression_output" | grep 'OK :' | tail -n 1 | tr '\n' ' ' | cut -c1-900)"
-            if [ -n "$progress_message" ]; then
-              echo "::notice title=Last regression passed::$progress_message"
-            fi
-            failure_message="$(printf '%s\n' "$regression_output" | grep -E 'ÉCHEC|PHP_FATAL_DEBUG|Fatal error|Uncaught|Error:' | tail -n 1 | tr '\n' ' ' | cut -c1-900)"
-            echo "::error file=tests/wp-docker-regression.php,line=1::$failure_message"
-            exit 1
+          set -uo pipefail
+          regression_output="$(docker compose run --rm --entrypoint wp wpcli eval-file /opt/tuc-tests/wp-docker-regression.php 2>&1)"
+          regression_status=$?
+          printf '%s\n' "$regression_output"
+          if [ "$regression_status" -ne 0 ]; then
+            echo "::error title=Regression runner failed::WP-CLI exited with status $regression_status"
+            failure_excerpt="$(printf '%s\n' "$regression_output" | tr '\n' ' ' | tail -c 800 | sed 's/%/%25/g; s/\r/%0D/g')"
+            echo "::error title=WP-CLI output::$failure_excerpt"
+            exit "$regression_status"
           fi
 
       - name: Vérifier HTTP, REST et la version PHP
