@@ -60,8 +60,15 @@ add_action('wp_enqueue_scripts', function () {
     if (is_admin()) {
         return;
     }
-    $garder = is_cart() || is_checkout() || is_account_page() || is_singular('product')
-        || is_post_type_archive('product') || is_product_taxonomy() || is_shop();
+    // Les fonctions WooCommerce n'existent pas si le plugin est désactivé.
+    // Les pages produit utilisent aussi les conditionnels WordPress natifs.
+    $garder = is_singular('product') || is_post_type_archive('product');
+    foreach (['is_cart', 'is_checkout', 'is_account_page', 'is_product_taxonomy', 'is_shop'] as $condition) {
+        if (function_exists($condition) && $condition()) {
+            $garder = true;
+            break;
+        }
+    }
 
     if ($garder) {
         return;
@@ -90,9 +97,16 @@ add_action('wp_enqueue_scripts', function () {
  * le thème n'en a pas besoin et Woo n'est plus chargé hors boutique.
  */
 add_action('wp_enqueue_scripts', function () {
-    if (is_admin() || is_cart() || is_checkout() || is_account_page()) {
+    if (is_admin()) {
         return;
     }
+
+    foreach (['is_cart', 'is_checkout', 'is_account_page'] as $condition) {
+        if (function_exists($condition) && $condition()) {
+            return;
+        }
+    }
+
     wp_deregister_script('jquery');
     wp_deregister_script('jquery-core');
     wp_deregister_script('jquery-migrate');
