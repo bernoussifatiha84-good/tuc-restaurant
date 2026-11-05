@@ -430,6 +430,15 @@ jobs:
             >"$report_file" 2>"$diagnostic_file"; then
             cat "$report_file"
             cat "$report_file" >> "$GITHUB_STEP_SUMMARY"
+            compact_report="$(python3 -c 'import json,sys; print(json.dumps(json.load(open(sys.argv[1])), separators=(",",":"), ensure_ascii=False))' "$report_file")"
+            compact_report="${compact_report//%/%25}"
+            compact_report="${compact_report//$'\r'/%0D}"
+            compact_report="${compact_report//$'\n'/%0A}"
+            if (( ${#compact_report} < 60000 )); then
+              echo "::notice title=Inventaire agrégé WooCommerce UAT::$compact_report"
+            else
+              echo "::notice title=Inventaire WooCommerce UAT::Rapport complet disponible dans le résumé du job."
+            fi
           else
             remote_status=$?
             diagnostic="$(cat "$report_file" "$diagnostic_file" 2>/dev/null || true)"
