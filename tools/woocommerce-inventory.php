@@ -31,16 +31,21 @@ if (is_multisite()) {
 }
 $active_files = array_values(array_unique($active_files));
 $active_plugins = [];
-foreach ($active_files as $file) {
-    if (!isset($all_plugins[$file])) {
-        $active_plugins[] = ['file' => $file, 'name' => '(metadata unavailable)'];
-        continue;
+$installed_plugins = [];
+$woocommerce_plugin_installed = false;
+$woocommerce_plugin_version = null;
+foreach ($all_plugins as $file => $plugin) {
+    $name = sanitize_text_field((string) $plugin['Name']);
+    $version = sanitize_text_field((string) $plugin['Version']);
+    $is_active = in_array($file, $active_files, true);
+    $installed_plugins[] = ['name' => $name, 'version' => $version, 'active' => $is_active];
+    if ($is_active) {
+        $active_plugins[] = ['name' => $name, 'version' => $version];
     }
-    $active_plugins[] = [
-        'file'    => $file,
-        'name'    => sanitize_text_field((string) $all_plugins[$file]['Name']),
-        'version' => sanitize_text_field((string) $all_plugins[$file]['Version']),
-    ];
+    if (strcasecmp($name, 'WooCommerce') === 0) {
+        $woocommerce_plugin_installed = true;
+        $woocommerce_plugin_version = $version;
+    }
 }
 
 $woo_pages = [];
@@ -62,6 +67,7 @@ foreach ([
 
 $orders_by_status = [];
 $orders_total = null;
+$order_storage = 'unavailable';
 if (function_exists('wc_get_orders') && function_exists('wc_get_order_statuses')) {
     foreach (wc_get_order_statuses() as $status_key => $label) {
         $status = preg_replace('/^wc-/', '', (string) $status_key);
@@ -83,25 +89,56 @@ if (function_exists('wc_get_orders') && function_exists('wc_get_order_statuses')
     $orders_total = is_object($all_orders) && isset($all_orders->total)
         ? (int) $all_orders->total
         : null;
+    $order_storage = 'woocommerce_api';
+} else {
+    global $wpdb;
+    $hpos_table = $wpdb->prefix . 'wc_orders';
+    $hpos_table_exists = $wpdb->get_var(
+        $wpdb->prepare('SHOW TABLES LIKE %s', $wpdb->esc_like($hpos_table))
+    ) === $hpos_table;
+    if ($hpos_table_exists && get_option('woocommerce_custom_orders_table_enabled', 'no') === 'yes') {
+        $rows = $wpdb->get_results(
+            $wpdb->prepare("SELECT status, COUNT(*) AS total FROM {$hpos_table} WHERE type = %s GROUP BY status", 'shop_order'),
+            ARRAY_A
+        );
+        foreach ((array) $rows as $row) {
+            $status = preg_replace('/^wc-/', '', (string) $row['status']);
+            $orders_by_status[$status] = (int) $row['total'];
+        }
+        $orders_total = array_sum($orders_by_status);
+        $order_storage = 'hpos_table';
+    } else {
+        $orders_by_status = $counts_by_status('shop_order');
+        $orders_total = 0;
+        foreach ($orders_by_status as $status => $count) {
+            if (!in_array($status, ['trash', 'auto-draft', 'inherit'], true)) {
+                $orders_total += $count;
+            }
+        }
+        $order_storage = 'legacy_posts';
+    }
 }
 
 $product_types = [];
-if (taxonomy_exists('product_type')) {
-    $terms = get_terms(['taxonomy' => 'product_type', 'hide_empty' => false]);
-    if (!is_wp_error($terms)) {
-        foreach ($terms as $term) {
-            $product_types[(string) $term->slug] = (int) $term->count;
+$product_category_count = null;
+global $wpdb;
+$term_rows = $wpdb->get_results(
+    $wpdb->prepare(
+        "SELECT tt.taxonomy, t.slug, tt.count FROM {$wpdb->term_taxonomy} AS tt INNER JOIN {$wpdb->terms} AS t ON t.term_id = tt.term_id WHERE tt.taxonomy IN (%s, %s)",
+        'product_type',
+        'product_cat'
+    ),
+    ARRAY_A
+);
+if (is_array($term_rows)) {
+    $product_category_count = 0;
+    foreach ($term_rows as $term_row) {
+        if ($term_row['taxonomy'] === 'product_type') {
+            $product_types[(string) $term_row['slug']] = (int) $term_row['count'];
+        } elseif ($term_row['taxonomy'] === 'product_cat') {
+            $product_category_count++;
         }
     }
-}
-$product_category_count = null;
-if (taxonomy_exists('product_cat')) {
-    $term_count = get_terms([
-        'taxonomy'   => 'product_cat',
-        'hide_empty' => false,
-        'fields'     => 'count',
-    ]);
-    $product_category_count = is_wp_error($term_count) ? null : (int) $term_count;
 }
 
 $tuc_counts = [];
@@ -115,22 +152,26 @@ $report = [
     'generated_at_utc' => gmdate(DATE_ATOM),
     'woocommerce' => [
         'active' => class_exists('WooCommerce'),
+        'plugin_installed' => $woocommerce_plugin_installed,
+        'plugin_version' => $woocommerce_plugin_version,
         'version' => defined('WC_VERSION') ? WC_VERSION : null,
         'currency' => function_exists('get_woocommerce_currency') ? get_woocommerce_currency() : null,
         'taxes_enabled' => get_option('woocommerce_calc_taxes', 'no') === 'yes',
         'hpos_setting' => get_option('woocommerce_custom_orders_table_enabled', null),
-        'products_by_status' => post_type_exists('product') ? $counts_by_status('product') : [],
+        'order_storage' => $order_storage,
+        'products_by_status' => $counts_by_status('product'),
         'product_types' => $product_types,
         'product_category_count' => $product_category_count,
         'products_on_sale' => function_exists('wc_get_product_ids_on_sale') ? count(wc_get_product_ids_on_sale()) : null,
-        'variations_by_status' => post_type_exists('product_variation') ? $counts_by_status('product_variation') : [],
-        'coupons_by_status' => post_type_exists('shop_coupon') ? $counts_by_status('shop_coupon') : [],
+        'variations_by_status' => $counts_by_status('product_variation'),
+        'coupons_by_status' => $counts_by_status('shop_coupon'),
         'order_count_total' => $orders_total,
         'orders_by_status' => $orders_by_status,
         'assigned_pages' => $woo_pages,
     ],
     'tuc_content_by_status' => $tuc_counts,
     'active_plugins' => $active_plugins,
+    'installed_plugins' => $installed_plugins,
 ];
 
 WP_CLI::line(wp_json_encode($report, JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE));
