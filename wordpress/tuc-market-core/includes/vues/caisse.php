@@ -867,6 +867,13 @@ svg{display:block;flex:none}
     btn.disabled = true;
     btn.textContent = 'Connexion…';
     try {
+      // WordPress refuse une connexion si son cookie de test n'existe pas
+      // encore : « les cookies sont bloqués ». À la première visite, il
+      // n'existe pas. Un GET préalable le pose, et la connexion passe.
+      if (!document.cookie.includes('wordpress_test_cookie')) {
+        await fetch(form.action, { credentials: 'same-origin' });
+      }
+
       const r = await fetch(form.action, {
         method: 'POST',
         credentials: 'same-origin',
@@ -883,7 +890,12 @@ svg{display:block;flex:none}
       const html = await r.text();
       // wp-login.php répond 200 avec le formulaire en cas d'échec
       if (html.includes('login_error') || html.includes('incorrect')) {
-        note.innerHTML = 'Identifiant ou mot de passe incorrect.';
+        // on reprend le motif exact renvoyé par WordPress plutôt qu'un
+        // message générique : « cookies bloqués » n'est pas « mauvais mot de
+        // passe », et confondre les deux fait perdre du temps au gérant
+        const m = html.match(/id="login_error"[^>]*>([\s\S]*?)<\/p>/);
+        const motif = m ? m[1].replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim() : '';
+        note.textContent = motif || 'Identifiant ou mot de passe incorrect.';
         note.style.background = '#FFF0F3';
         btn.disabled = false;
         btn.textContent = 'Ouvrir la caisse';
