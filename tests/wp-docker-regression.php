@@ -317,6 +317,9 @@ try {
         ]],
     ]);
     $waCartData = $waCart->get_data();
+    if ($waCart->get_status() !== 200 || abs((float) ($waCartData['total'] ?? 0) - 31.0) >= 0.001) {
+        fwrite(STDERR, 'WA_CART_DEBUG: ' . wp_json_encode(['status' => $waCart->get_status(), 'data' => $waCartData]) . "\n");
+    }
     $assert($waCart->get_status() === 200 && abs((float) ($waCartData['total'] ?? 0) - 31.0) < 0.001,
         'l’aperçu WhatsApp ignore prix et frais fournis par le client');
     $assert(str_contains((string) ($waCartData['message'] ?? ''), $restaurant->post_title)
