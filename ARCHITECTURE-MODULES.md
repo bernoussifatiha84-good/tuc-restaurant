@@ -149,3 +149,21 @@ Ils restent des plugins **séparés**, on ne les fusionne pas :
 
 Un plugin unique, deux fichiers sur le front, aucune dépendance.
 C'est ça qui tient 1 million de visites sur du mutualisé.
+
+---
+
+## Module 6 — Caisse (PWA + Web Push) — **P0**
+
+`class-tuc-push.php` · `class-tuc-caisse.php` · `includes/vues/caisse.php` ·
+`assets/caisse/` (sw.js, manifest, icônes, polices, maquette).
+
+Remplace le relais WhatsApp comme canal de commande. Coût **0 MAD**, indépendant
+du nombre de commandes. Détail complet : `CAISSE-PWA.md`.
+
+| Décision | Raison |
+|---|---|
+| Web Push écrit à la main (RFC 8188/8291/8292) | 0 dépendance, 0 plugin, 0 abonnement ; validé contre le vecteur de test du RFC |
+| abonnements en `user_meta` | pas de table à migrer, compatible SQLite |
+| `/caisse/` hors du thème | survit à un changement de design ; sert son propre `sw.js` |
+| polices servies par le plugin | la caisse ne dépend ni du thème ni d'un CDN |
+| pas de KDS v1 | une seule file, pour un resto pilote |
