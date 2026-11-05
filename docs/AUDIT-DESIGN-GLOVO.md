@@ -1,7 +1,7 @@
 # Audit UX & design — références Glovo partagées
 
 **Date :** 5 novembre 2026  
-**Source observée :** 11 captures d’écran fournies dans la conversation.  
+**Source observée :** 23 captures d’écran fournies en deux lots dans la conversation; le lot suivant est encore attendu.
 **Important :** audit visuel des captures uniquement. Le site Glovo en direct n’a pas été ouvert depuis cet environnement. Les captures ne permettent pas de confirmer les interactions non visibles, les tailles CSS réelles, les règles de personnalisation ou le fonctionnement du paiement.
 
 ## 1. Synthèse exécutive
@@ -92,6 +92,31 @@ La vue panier fournie montre le nombre d’articles, les lignes de produits, pri
 - conserver le panier après une perte réseau ou un retour à la fiche;
 - prévenir clairement si un restaurant ferme ou si un plat devient indisponible;
 - pour la commande à table, afficher le numéro de table et confirmer que le paiement se fera à la fin.
+
+### F. Recherche, filtres et résultats
+
+Le second lot montre une page de résultats « Restaurants » avec la recherche en haut, une rangée de catégories, des filtres sous forme de pastilles, le nombre de résultats, une action de réinitialisation et des commerces présentés en cartes verticales avec photo, promo, frais, délai et note.
+
+**Adaptation TUC :**
+- garder la recherche immédiatement disponible après le choix du quartier;
+- proposer peu de filtres utiles au départ : type de cuisine, ouvert maintenant, frais, délai et promotion;
+- rendre les filtres actifs visibles et supprimables individuellement, avec « Réinitialiser »;
+- annoncer le nombre de résultats et fournir un état vide avec une action claire;
+- ne pas mélanger des catégories non prises en charge ou des données d’un autre pays.
+
+### G. Connexion et compte
+
+Une capture montre un écran de bienvenue avec numéro de téléphone, indicatif, connexion WhatsApp et alternatives Google/e-mail, accompagné du texte de consentement et de liens légaux.
+
+**Adaptation TUC :** la commande ne doit pas exiger un compte préalable. Si un compte est proposé, afficher son bénéfice en une phrase, privilégier le numéro de téléphone si c’est le canal de suivi choisi, et demander le minimum de données. Les consentements et conditions doivent être lisibles et ne pas être confondus avec une autorisation marketing.
+
+### H. Plus de détails sur le magasin et le panier
+
+Les nouvelles captures complètent le parcours magasin : catégories de menu en onglets, promotions et meilleures ventes, cartes produit avec ajout rapide, panier vide, panier rempli, et fiche détaillée avec suppléments sélectionnables. Le bouton de panier reste visible après ajout; l’écran panier montre les quantités, la suppression et « Continuer ».
+
+Le configurateur de « Benna Épicé » illustre des groupes de suppléments avec plafonds de sélection, un compteur de quantité et un CTA bas fixe qui reprend le prix. Le comportement est utile, mais il faut tester que ce CTA ne masque jamais le dernier choix et que le total évolue immédiatement avec les suppléments.
+
+**Adaptation TUC :** garder les onglets de catégories accessibles, montrer les groupes requis avant les extras, afficher chaque plafond (ex. « jusqu’à 4 ») près du nom du groupe, et recalculer le prix côté serveur à l’envoi. Les cartes à ajout rapide ne doivent pas contourner la configuration requise d’un plat.
 
 ## 4. Ce qui est pertinent pour TUC — et ce qui ne l’est pas
 
