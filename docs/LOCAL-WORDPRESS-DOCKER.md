@@ -54,12 +54,12 @@ docker compose start
 - N’utiliser ni comptes clients réels, ni données personnelles, ni commande/paiement réel. Les URLs de développement restent liées à `127.0.0.1`.
 - Cette configuration n’exécute pas la CI et ne déclenche aucun déploiement.
 
-## Résultat du premier smoke test GitHub
+## Résultats des tests GitHub
 
-Le test a été exécuté sur un runner GitHub hébergé avec Docker, sous la PR brouillon [#1](https://github.com/bernoussifatiha84-good/tuc-restaurant/pull/1), run [42037839606](https://github.com/bernoussifatiha84-good/tuc-restaurant/actions/runs/42037839606), commit `c43c680` : **succès**.
+Le premier smoke test a réussi sur un runner GitHub avec Docker, sous la PR brouillon [#1](https://github.com/bernoussifatiha84-good/tuc-restaurant/pull/1), run [42037839606](https://github.com/bernoussifatiha84-good/tuc-restaurant/actions/runs/42037839606), commit `c43c680`. Il a validé l’installation WordPress, l’activation du plugin/thème, la page HTTP, la route de santé, PHP et le nettoyage.
 
-Le runner a validé `docker compose config`, démarré WordPress et MariaDB, installé WordPress avec WP-CLI, activé **TUC Market Core** et le thème, vérifié la page HTTP, `/wp-json/tuc/v1/sante`, PHP et l’absence d’erreur PHP fatale dans `debug.log`, puis supprimé conteneurs, volumes et identifiants éphémères.
+La suite d’intégration WordPress/TUC a ensuite réussi sur le runner Docker GitHub dans le run [42085195862](https://github.com/bernoussifatiha84-good/tuc-restaurant/actions/runs/42085195862), commit `f1e7f80` : configuration Compose, installation et activation/désactivation du plugin, syntaxe PHP et régressions métier sont toutes passées. Les assertions couvrent les CPT et la santé, le calcul serveur des prix/suppléments/frais, le total falsifié, l’idempotence, les validations métier (dont fermeture, minimum et commerce/article croisés), les permissions de statut et la limite de débit. Les données de test sont jetables et le runner a nettoyé ses volumes et identifiants.
 
-C’est un smoke test d’installation/activation, pas encore une validation complète des parcours, des rôles, du flux WhatsApp, de l’arabe/RTL ou des commandes. La PR reste brouillon; rien n’a été fusionné ni déployé.
+Cette suite n’est pas une validation complète du flux WhatsApp, de l’arabe/RTL, des paiements ou du déploiement UAT/production. La PR reste brouillon; rien n’a été fusionné ni déployé.
 
 Le moteur Docker n’est pas installé dans l’environnement Agent local; l’exécution réelle a donc été faite sur le runner Docker de GitHub, comme demandé.
