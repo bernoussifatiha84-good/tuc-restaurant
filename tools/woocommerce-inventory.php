@@ -5,20 +5,10 @@
  * Reports aggregate counts and plugin/page metadata only; never order/customer data.
  */
 
-declare(strict_types=1);
-
 if (!class_exists('WP_CLI')) {
     fwrite(STDERR, "Run this inventory with WP-CLI.\n");
     exit(1);
 }
-
-$inventory_stage = 'startup';
-register_shutdown_function(static function () use (&$inventory_stage): void {
-    $error = error_get_last();
-    if ($error && in_array($error['type'], [E_ERROR, E_PARSE, E_CORE_ERROR, E_COMPILE_ERROR, E_USER_ERROR], true)) {
-        fwrite(STDERR, 'INVENTORY_FATAL_STAGE=' . $inventory_stage . PHP_EOL);
-    }
-});
 
 $counts_by_status = static function (string $post_type): array {
     $counts = wp_count_posts($post_type);
@@ -33,7 +23,6 @@ $counts_by_status = static function (string $post_type): array {
     return $result;
 };
 
-$inventory_stage = 'active_plugin_metadata';
 require_once ABSPATH . 'wp-admin/includes/plugin.php';
 $all_plugins = get_plugins();
 $active_files = (array) get_option('active_plugins', []);
@@ -54,7 +43,6 @@ foreach ($active_files as $file) {
     ];
 }
 
-$inventory_stage = 'woocommerce_pages';
 $woo_pages = [];
 foreach ([
     'shop'     => 'woocommerce_shop_page_id',
@@ -72,7 +60,6 @@ foreach ([
     ];
 }
 
-$inventory_stage = 'woocommerce_orders';
 $orders_by_status = [];
 $orders_total = null;
 if (function_exists('wc_get_orders') && function_exists('wc_get_order_statuses')) {
@@ -98,7 +85,6 @@ if (function_exists('wc_get_orders') && function_exists('wc_get_order_statuses')
         : null;
 }
 
-$inventory_stage = 'woocommerce_catalog';
 $product_types = [];
 if (taxonomy_exists('product_type')) {
     $terms = get_terms(['taxonomy' => 'product_type', 'hide_empty' => false]);
@@ -118,7 +104,6 @@ if (taxonomy_exists('product_cat')) {
     $product_category_count = is_wp_error($term_count) ? null : (int) $term_count;
 }
 
-$inventory_stage = 'tuc_content';
 $tuc_counts = [];
 foreach (['tuc_resto', 'tuc_menu_item', 'tuc_commande'] as $post_type) {
     if (post_type_exists($post_type)) {
@@ -126,7 +111,6 @@ foreach (['tuc_resto', 'tuc_menu_item', 'tuc_commande'] as $post_type) {
     }
 }
 
-$inventory_stage = 'report_output';
 $report = [
     'generated_at_utc' => gmdate(DATE_ATOM),
     'woocommerce' => [

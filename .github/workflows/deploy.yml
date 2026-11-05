@@ -433,10 +433,7 @@ jobs:
           else
             remote_status=$?
             diagnostic="$(cat "$report_file" "$diagnostic_file" 2>/dev/null || true)"
-            fatal_stage="$(grep -oE 'INVENTORY_FATAL_STAGE=[a-z_]+' <<< "$diagnostic" | head -n 1 | cut -d= -f2 || true)"
-            if [[ -n "$fatal_stage" ]]; then
-              reason="Erreur PHP pendant l’étape d’inventaire '$fatal_stage'."
-            elif grep -Eqi 'could not open input file|no such file or directory' <<< "$diagnostic"; then
+            if grep -Eqi 'could not open input file|no such file or directory' <<< "$diagnostic"; then
               reason="WP-CLI ne peut pas ouvrir le script temporaire."
             elif grep -Eqi 'error establishing a database connection' <<< "$diagnostic"; then
               reason="WordPress n’a pas pu établir sa connexion à la base de données."
