@@ -177,9 +177,27 @@ jobs:
             echo "::error title=n8n failed readiness::$excerpt"
             exit 1
           fi
-          # Publish only after the runtime is listening so its publication service
-          # can register the production webhook in the live HTTP router.
           run_n8n_cli publish:workflow --id=f31a00c7-d902-4f4a-91fa-61176d0c39f7
+          # Restart after the CLI publish to force the server to load the new
+          # published version and register its production webhook route.
+          if output="$(docker compose restart n8n 2>&1)"; then
+            printf 'COMMAND: docker compose restart n8n\n%s\n' "$output" >> "$N8N_SETUP_LOG"
+            printf '%s\n' "$output"
+          else
+            status=$?
+            echo "::error title=n8n restart after publish failed::$output"
+            exit "$status"
+          fi
+          if curl --fail --silent --show-error --retry 30 --retry-delay 2 --retry-connrefused --retry-all-errors \
+            http://127.0.0.1:5678/healthz --output /dev/null; then
+            printf 'n8n health endpoint is ready after publish\n' >> "$N8N_SETUP_LOG"
+          else
+            status=$?
+            n8n_logs="$(docker compose logs --no-color n8n 2>&1 | tail -n 30 || true)"
+            excerpt="$(printf '%s\n' "$n8n_logs" | tr '\n' ' ' | sed 's/%/%25/g; s/\r/%0D/g')"
+            echo "::error title=n8n failed readiness after publish::$excerpt"
+            exit "$status"
+          fi
           if output="$(docker compose run --rm --entrypoint n8n n8n list:workflow 2>&1)"; then
             printf 'WORKFLOW LIST:\n%s\n' "$output" >> "$N8N_SETUP_LOG"
             printf 'n8n workflows after publish:\n%s\n' "$output"
