@@ -150,6 +150,27 @@ if (is_array($term_rows)) {
     }
 }
 
+$product_counts_by_status = $counts_by_status('product');
+$variation_counts_by_status = $counts_by_status('product_variation');
+$coupon_counts_by_status = $counts_by_status('shop_coupon');
+$product_total = array_sum($product_counts_by_status);
+$variation_total = array_sum($variation_counts_by_status);
+$coupon_total = array_sum($coupon_counts_by_status);
+
+$woocommerce_settings_option_names = [];
+$woocommerce_options = $wpdb->get_col(
+    $wpdb->prepare(
+        "SELECT option_name FROM {$wpdb->options} WHERE option_name LIKE %s",
+        $wpdb->esc_like('woocommerce_') . '%'
+    )
+);
+foreach ((array) $woocommerce_options as $option_name) {
+    if (preg_match('/^woocommerce_[a-z0-9_-]+_settings$/i', (string) $option_name)) {
+        $woocommerce_settings_option_names[] = (string) $option_name;
+    }
+}
+sort($woocommerce_settings_option_names);
+
 $tuc_counts = [];
 foreach (['tuc_resto', 'tuc_menu_item', 'tuc_commande'] as $post_type) {
     if (post_type_exists($post_type)) {
@@ -168,12 +189,16 @@ $report = [
         'taxes_enabled' => get_option('woocommerce_calc_taxes', 'no') === 'yes',
         'hpos_setting' => get_option('woocommerce_custom_orders_table_enabled', null),
         'order_storage' => $order_storage,
-        'products_by_status' => $counts_by_status('product'),
+        'products_total' => $product_total,
+        'products_by_status' => $product_counts_by_status,
         'product_types' => $product_types,
         'product_category_count' => $product_category_count,
         'products_on_sale' => function_exists('wc_get_product_ids_on_sale') ? count(wc_get_product_ids_on_sale()) : null,
-        'variations_by_status' => $counts_by_status('product_variation'),
-        'coupons_by_status' => $counts_by_status('shop_coupon'),
+        'variations_total' => $variation_total,
+        'variations_by_status' => $variation_counts_by_status,
+        'coupons_total' => $coupon_total,
+        'coupons_by_status' => $coupon_counts_by_status,
+        'settings_option_names' => $woocommerce_settings_option_names,
         'order_count_total' => $orders_total,
         'orders_by_status' => $orders_by_status,
         'legacy_order_posts_total' => $legacy_order_posts_total,
