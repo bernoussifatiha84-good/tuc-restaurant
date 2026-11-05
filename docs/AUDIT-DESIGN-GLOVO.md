@@ -95,12 +95,14 @@ Les captures mobiles montrent un panier vide et un panier rempli. Les nouvelles 
 
 ### F. Commande TUC : transfert vers WhatsApp (règle métier, distincte de Glovo)
 
-Le parcours TUC envisagé **n’a pas de paiement en ligne**. Pour un visiteur non connecté, le bouton de commande peut ouvrir `wa.me` vers le WhatsApp de TUC avec une référence courte de session/panier. Le client envoie lui-même ce message; le webhook reçoit alors son numéro WhatsApp et la référence. n8n demande au serveur TUC de retrouver/créer le profil, puis renvoie un lien magique à usage unique. Le lien ouvre le site, reconnecte le client et restaure son panier; il complète alors le mode de service et les coordonnées nécessaires avant de confirmer. Un client déjà connecté peut commander directement; un client existant non connecté peut se connecter avec téléphone/mot de passe ou demander un lien magique. Éviter de lui imposer un nouveau message WhatsApp à chaque commande : l’attribution de la provenance peut rester enregistrée côté serveur.
+Le parcours TUC envisagé **n’a pas de paiement en ligne**. Le mode de service se choisit **avant le menu**, selon ce que le commerce propose : livraison (uniquement si disponible), emporter ou sur place. Un client qui arrive par un QR de table est directement en mode sur place, avec le commerce et la table préremplis; il ne voit pas l’option livraison.
 
-**Parcours recommandé :** panier → identification (téléphone + WhatsApp pour un nouveau client; connexion existante facultative) → envoi par le client du message prérempli → validation du webhook et correspondance numéro/référence → lien magique → retour au panier connecté → choix livraison/retrait/commande à table → adresse sur le site si livraison → vérification zone, frais et total → confirmation de commande → information/crédit des points selon la règle choisie.
+Pour un nouveau client non connecté, « Créer un compte » ouvre `wa.me` vers le WhatsApp officiel de TUC avec un message prérempli contenant une référence courte, liée côté serveur au panier, au commerce et à la provenance. Le client n’a pas à saisir son numéro sur le site : n8n le reçoit avec le message entrant. Après validation de la référence, le serveur retrouve/crée le profil et TUC renvoie l’identifiant (le numéro WhatsApp) ainsi qu’un lien magique à usage unique. Ce lien reconnecte le client et restaure son panier et son mode de service. Un client déjà connecté commande directement; un compte existant peut utiliser téléphone/mot de passe ou demander un lien magique. Ne pas imposer un nouveau message WhatsApp à chaque commande : garder l’attribution côté serveur.
+
+**Parcours recommandé :** choix du mode de service sur la fiche commerce avant le menu → parcourir le menu et composer le panier → nouveau client : « Créer un compte » → envoi du message prérempli → validation webhook et correspondance numéro/référence → profil créé/rattaché → identifiant + lien magique → retour connecté au même panier et au même mode → adresse sur le site seulement si livraison → vérification de la zone, des frais et du total → confirmation de commande → information/crédit des points selon la règle choisie.
 
 **Conséquences pour la conception et l’implémentation :**
-- reprendre de la capture Glovo le champ téléphone et le CTA WhatsApp, mais définir le préfixe marocain **+212** par défaut et retirer Google/e-mail si TUC n’en veut pas;
+- reprendre de la capture Glovo la simplicité du CTA WhatsApp, mais **ne pas demander le numéro aux nouveaux clients** : le récupérer du message entrant. Retirer Google/e-mail si TUC n’en veut pas; conserver +212 par défaut seulement dans une éventuelle connexion téléphone/mot de passe d’un compte existant;
 - ne pas demander de mot de passe avant d’avoir vérifié le numéro WhatsApp. Après le lien magique, proposer au besoin de définir un mot de passe; ne jamais en envoyer un en clair;
 - `wa.me` ne transmet rien tant que le client n’a pas appuyé sur « Envoyer ». L’ouverture seule ne vérifie pas le numéro, ne crée pas le profil et ne confirme pas de commande;
 - inclure dans le message une référence opaque, temporaire, à usage unique, liée côté serveur au panier et à sa source (accueil, fiche boutique, QR/table). Ne pas exposer d’identifiant séquentiel ni de données personnelles inutiles;
@@ -127,7 +129,7 @@ Les captures montrent une page de résultats « Restaurants » avec la recherche
 
 Les captures mobile et desktop montrent l’écran de bienvenue : préfixe téléphonique, numéro, bouton WhatsApp principal, puis Google/e-mail comme alternatives, avec mentions légales.
 
-**Adaptation TUC :** garder un formulaire très court, mettre **+212** par défaut, utiliser WhatsApp pour vérifier le numéro des nouveaux clients et retirer Google/e-mail si ces canaux ne sont pas prévus. Pour un compte existant, proposer téléphone + mot de passe ou un lien magique. Ne pas forcer le compte avant la consultation du menu. Afficher une mention de confidentialité claire, distincte d’un consentement marketing.
+**Adaptation TUC :** pour un nouveau compte, un bouton « Créer un compte » ouvre WhatsApp avec le message de référence; ne pas afficher de champ téléphone préalable. Le numéro de l’expéditeur devient l’identifiant après réception et validation. Pour un compte existant, proposer téléphone + mot de passe (préfixe **+212** par défaut) ou un lien magique. Retirer Google/e-mail si ces canaux ne sont pas prévus. Ne pas forcer le compte avant la consultation du menu. Afficher une mention de confidentialité claire, distincte d’un consentement marketing.
 
 ### I. Plus de détails sur le magasin et le panier
 
@@ -188,6 +190,8 @@ Quand l’accès au site est disponible, utiliser une session publique propre, e
 | Fiche restaurant et navigation du menu | oui | oui | rien |
 | Configuration d’un plat et suppléments | oui | oui | rien |
 | Panier vide et rempli | oui | oui | rien |
+| Choix du mode sur la fiche, avant le menu | non | non | règle TUC à concevoir; ne montrer que les modes disponibles |
+| QR de table verrouillé sur le mode sur place | non | non | règle TUC à concevoir; masquer Livraison |
 | Étape de paiement classique | non | non | non applicable : ce n’est pas le flux TUC |
 | Panier TUC → brouillon `wa.me` adressé à TUC | non | non | capture du parcours TUC mobile; desktop seulement si supporté |
 | Message envoyé, confirmation, lien magique et points de fidélité | non | non | capture de confirmation/démo si déjà disponible; sinon à concevoir |
