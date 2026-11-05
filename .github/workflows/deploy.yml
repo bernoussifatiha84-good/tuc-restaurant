@@ -11,6 +11,15 @@ on:
       - 'pre-release-*'
       - 'release-*'
   workflow_dispatch:
+    inputs:
+      operation:
+        description: Opération à exécuter
+        type: choice
+        options:
+          - deploy
+          - inventory-woocommerce
+        default: deploy
+        required: true
 
 permissions:
   contents: read
@@ -86,6 +95,8 @@ jobs:
         env:
           REF_NAME: ${{ github.ref_name }}
           REF_TYPE: ${{ github.ref_type }}
+          EVENT_NAME: ${{ github.event_name }}
+          OPERATION: ${{ inputs.operation }}
           URL_DEV: ${{ vars.URL_DEV }}
           ROOT_DEV: ${{ vars.ROOT_DEV }}
           URL_UAT: ${{ vars.URL_UAT }}
@@ -95,7 +106,9 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          if [[ "$REF_TYPE" == branch && "$REF_NAME" == develop ]]; then
+          if [[ "$EVENT_NAME" == workflow_dispatch && "$OPERATION" == inventory-woocommerce ]]; then
+            ENV_NAME=uat; URL="$URL_UAT"; ROOT="$ROOT_UAT"
+          elif [[ "$REF_TYPE" == branch && "$REF_NAME" == develop ]]; then
             ENV_NAME=dev; URL="$URL_DEV"; ROOT="$ROOT_DEV"
           elif [[ "$REF_TYPE" == tag && "$REF_NAME" == pre-release-* ]]; then
             ENV_NAME=uat; URL="$URL_UAT"; ROOT="$ROOT_UAT"
@@ -121,6 +134,7 @@ jobs:
 
   deploiement:
     name: Déploiement vers ${{ needs.cible.outputs.env }}
+    if: ${{ github.event_name != 'workflow_dispatch' || inputs.operation != 'inventory-woocommerce' }}
     needs: [qualite, cible]
     runs-on: ubuntu-latest
     environment: ${{ needs.cible.outputs.env }}
@@ -317,3 +331,105 @@ jobs:
             echo "| Thème | $THEME_VERSION |"
             echo "| Plugin | $PLUGIN_VERSION |"
           } >> "$GITHUB_STEP_SUMMARY"
+
+  inventaire_woocommerce:
+    name: Inventaire WooCommerce (lecture seule)
+    if: ${{ github.event_name == 'workflow_dispatch' && inputs.operation == 'inventory-woocommerce' }}
+    needs: [cible]
+    runs-on: ubuntu-latest
+    environment: uat
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Valider le périmètre UAT et les secrets SSH
+        env:
+          SSH_HOST: ${{ secrets.SSH_HOST }}
+          SSH_USER: ${{ secrets.SSH_USERNAME || secrets.SSH_USER }}
+          SSH_PRIVATE_KEY: ${{ secrets.SSH_PRIVATE_KEY }}
+          SSH_ROOT: ${{ needs.cible.outputs.root }}
+          SITE_URL: ${{ needs.cible.outputs.url }}
+          URL_PRD: ${{ vars.URL_PRD }}
+          ROOT_PRD: ${{ vars.ROOT_PRD }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          for name in SSH_HOST SSH_USER SSH_PRIVATE_KEY SSH_ROOT SITE_URL; do
+            if [[ -z "${!name}" ]]; then
+              echo "::error::Configuration UAT manquante : $name. Aucun accès distant effectué."
+              exit 1
+            fi
+          done
+          trim_slashes() { printf '%s' "$1" | sed 's:/*$::'; }
+          if [[ -n "$URL_PRD" && "$(trim_slashes "$SITE_URL")" == "$(trim_slashes "$URL_PRD")" ]]; then
+            echo "::error::URL_UAT égale à URL_PRD; inventaire annulé."
+            exit 1
+          fi
+          if [[ -n "$ROOT_PRD" && "$(trim_slashes "$SSH_ROOT")" == "$(trim_slashes "$ROOT_PRD")" ]]; then
+            echo "::error::ROOT_UAT égale à ROOT_PRD; inventaire annulé."
+            exit 1
+          fi
+
+      - name: Linter le script d’inventaire
+        run: php -l tools/woocommerce-inventory.php
+
+      - name: Préparer la connexion SSH
+        env:
+          SSH_PRIVATE_KEY: ${{ secrets.SSH_PRIVATE_KEY }}
+          SSH_HOST: ${{ secrets.SSH_HOST }}
+          SSH_PORT: ${{ vars.SSH_PORT || '65002' }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p "$HOME/.ssh"
+          printf '%s\n' "$SSH_PRIVATE_KEY" > "$HOME/.ssh/id_deploy"
+          chmod 600 "$HOME/.ssh/id_deploy"
+          ssh-keygen -y -f "$HOME/.ssh/id_deploy" >/dev/null
+          ssh-keyscan -p "$SSH_PORT" -H "$SSH_HOST" >> "$HOME/.ssh/known_hosts" 2>/dev/null
+
+      - name: Vérifier l’URL du WordPress UAT
+        env:
+          SSH_PORT: ${{ vars.SSH_PORT || '65002' }}
+          SSH_USER: ${{ secrets.SSH_USERNAME || secrets.SSH_USER }}
+          SSH_HOST: ${{ secrets.SSH_HOST }}
+          SSH_ROOT: ${{ needs.cible.outputs.root }}
+          SITE_URL: ${{ needs.cible.outputs.url }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          printf -v remote_root '%q' "$SSH_ROOT"
+          remote_url="$(ssh -i "$HOME/.ssh/id_deploy" -p "$SSH_PORT" -o StrictHostKeyChecking=yes \
+            "$SSH_USER@$SSH_HOST" "wp option get siteurl --path=$remote_root")"
+          if [[ "$(printf '%s' "$remote_url" | sed 's:/*$::')" != "$(printf '%s' "$SITE_URL" | sed 's:/*$::')" ]]; then
+            echo "::error::L’URL WordPress ne correspond pas à URL_UAT; inventaire annulé."
+            exit 1
+          fi
+          echo "Cible UAT vérifiée; inventaire agrégé en lecture seule."
+
+      - name: Relever les extensions et les volumes de données (sans données personnelles)
+        env:
+          SSH_PORT: ${{ vars.SSH_PORT || '65002' }}
+          SSH_USER: ${{ secrets.SSH_USERNAME || secrets.SSH_USER }}
+          SSH_HOST: ${{ secrets.SSH_HOST }}
+          SSH_ROOT: ${{ needs.cible.outputs.root }}
+          REMOTE_AUDIT: /tmp/tuc-woocommerce-inventory-${{ github.run_id }}.php
+        shell: bash
+        run: |
+          set -euo pipefail
+          printf -v remote_root '%q' "$SSH_ROOT"
+          scp -i "$HOME/.ssh/id_deploy" -P "$SSH_PORT" -o StrictHostKeyChecking=yes \
+            tools/woocommerce-inventory.php "$SSH_USER@$SSH_HOST:$REMOTE_AUDIT"
+          remote_status=0
+          if report="$(ssh -i "$HOME/.ssh/id_deploy" -p "$SSH_PORT" -o StrictHostKeyChecking=yes \
+            "$SSH_USER@$SSH_HOST" "wp --path=$remote_root eval-file '$REMOTE_AUDIT'" 2>&1)"; then
+            printf '%s\n' "$report"
+            printf '%s\n' "$report" >> "$GITHUB_STEP_SUMMARY"
+          else
+            remote_status=$?
+            printf '%s\n' "$report"
+            echo "::error::WP-CLI n’a pas pu lire l’inventaire UAT."
+          fi
+          ssh -i "$HOME/.ssh/id_deploy" -p "$SSH_PORT" -o StrictHostKeyChecking=yes \
+            "$SSH_USER@$SSH_HOST" "rm -f '$REMOTE_AUDIT'" || true
+          if [[ "$remote_status" -ne 0 ]]; then
+            exit "$remote_status"
+          fi
