@@ -20,7 +20,7 @@ Les écarts connus à traiter avant une ouverture aux restaurateurs :
 - le modèle d’options actuel n’est pas un moteur complet de groupes obligatoires, min/max et règles conditionnelles;
 - le code du panier client n’est pas raccordé au flux de commande de bout en bout;
 - il n’existe pas encore d’espace mobile permettant au restaurateur de gérer son menu;
-- les rôles et l’isolation par restaurant ne sont pas terminés; la caisse est actuellement réservée aux administrateurs WordPress comme mesure temporaire fail-closed;
+- première tranche de sécurité codée dans la branche PR : rôles TUC dédiés (restaurateur, gestionnaire, caissier, serveur), capacités sans `manage_options` et filtrage des commandes par `tuc_resto_id`; tests d’intégration à deux restaurants réussis. Ce code n’est pas déployé et aucun utilisateur métier n’est affecté; le serveur reste sans accès caisse;
 - l’inventaire UAT en lecture seule du 5 novembre 2026 constate WooCommerce 11.2.1 installé mais inactif, aucun produit/variante/coupon/commande, quatre pages WooCommerce assignées en brouillon, et des options PayPal/MaxMind résiduelles dont les valeurs n’ont pas été lues; voir le [rapport](INVENTAIRE-WOOCOMMERCE-UAT-2026-11-05.md). Il reste à faire valider leur usage par le propriétaire du site avant toute action.
 
 ## Principes UX mobile non négociables
@@ -48,6 +48,8 @@ Les écarts connus à traiter avant une ouverture aux restaurateurs :
 **Sortie attendue** : décision écrite sur les données à migrer, les dépendances à conserver et les fonctions WooCommerce à retirer éventuellement. Aucun plugin ou contenu n’est supprimé pendant l’inventaire.
 
 ### Phase B — Modèle métier et sécurité multi-restaurant
+
+**État initial du code sur la branche PR** : les rôles/capacités TUC sont définis et les routes de caisse/commandes appliquent une affectation explicite pour les rôles métier; un test d’intégration avec deux restaurants confirme l’isolation de lecture et de mise à jour des commandes. Aucun compte n’est affecté automatiquement. L’interface d’affectation, les routes de gestion du menu/médias et les tests complets de tous les accès restent à faire; le changement n’est pas déployé en UAT/production.
 
 **Travail**
 - Définir les rôles minimaux : propriétaire, responsable, caissier et serveur; préciser les actions autorisées pour chacun.
