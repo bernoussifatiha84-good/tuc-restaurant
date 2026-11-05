@@ -1,7 +1,7 @@
 # Audit UX & design — références Glovo partagées
 
 **Date :** 5 novembre 2026  
-**Source observée :** 34 captures d’écran fournies en trois lots dans la conversation. Une capture desktop supplémentaire montre DoorDash, pas Glovo; elle est traitée comme référence comparative séparée.
+**Source observée :** 42 captures d’écran fournies en quatre lots dans la conversation. Une capture desktop montre DoorDash, pas Glovo; elle est traitée comme référence comparative séparée.
 **Important :** audit visuel des captures uniquement. Le site Glovo en direct n’a pas été ouvert depuis cet environnement. Les captures ne permettent pas de confirmer les interactions non visibles, les tailles CSS réelles, les règles de personnalisation ou le fonctionnement du paiement.
 
 ## 1. Synthèse exécutive
@@ -56,7 +56,7 @@ Les cartes de commerce affichent principalement photo, nom, note, distance/temps
 
 ### C. Fiche restaurant et menu
 
-La capture mobile d’O’Tacos rassemble photo de couverture, nom, indicateurs de note/délai/frais, informations de promotion, recherche dans le menu et onglets de menu. Une fenêtre « informations de l’établissement » présente adresse, horaires, informations partenaires et une fermeture claire.
+La capture mobile d’O’Tacos rassemble photo de couverture, nom, indicateurs de note/délai/frais, informations de promotion, recherche dans le menu et onglets de menu. Une fenêtre « informations de l’établissement » présente adresse, horaires, informations partenaires et une fermeture claire. Les nouvelles captures desktop montrent une navigation persistante des catégories à gauche, les articles du menu au centre et un panier fixé à droite. Le panneau du panier conserve le récapitulatif visible pendant le parcours du menu, en état vide comme rempli.
 
 **Adaptation TUC :**
 - placer nom, état ouvert/fermé, modes de service, quartier/adresse, temps estimé et frais près du haut de la fiche;
@@ -67,7 +67,7 @@ La capture mobile d’O’Tacos rassemble photo de couverture, nom, indicateurs 
 
 ### D. Configuration d’un produit
 
-La capture montre un panneau de configuration avec photo, nom, prix et remise, puis des groupes d’options. Certains groupes sont obligatoires, d’autres facultatifs ou à quantité. Le bouton d’ajout au panier et le contrôle de quantité restent visibles en bas.
+Les captures montrent un panneau de configuration avec photo, nom, prix et remise, puis des groupes d’options. Certains groupes sont obligatoires (« Requis — choisir 1 »), d’autres facultatifs ou avec un plafond (« maximum de 5 produits »). Sur desktop, le panneau sépare la liste d’options et le résumé visuel du produit en deux colonnes; le CTA et la quantité restent visibles tandis que la liste défile. Les captures mobiles montrent la version étroite du configurateur.
 
 **Points forts du motif :** la composition du plat est visible avant l’ajout; les choix sont regroupés par question; le total d’action reste accessible.
 
@@ -83,7 +83,7 @@ La capture montre un panneau de configuration avec photo, nom, prix et remise, p
 
 ### E. Panier
 
-La vue panier fournie montre le nombre d’articles, les lignes de produits, prix, suppression, quantité et un bouton « Continuer » fixe en bas.
+Les captures mobiles montrent un panier vide et un panier rempli. Les nouvelles vues desktop confirment un panier fixe à droite, avec articles configurés, quantités, retrait, total courant, information sur les frais et un CTA distinct. Elles complètent également l’écran de menu avec panier vide.
 
 **Adaptation TUC :**
 - afficher le commerce concerné et le mode choisi;
@@ -93,7 +93,22 @@ La vue panier fournie montre le nombre d’articles, les lignes de produits, pri
 - prévenir clairement si un restaurant ferme ou si un plat devient indisponible;
 - pour la commande à table, afficher le numéro de table et confirmer que le paiement se fera à la fin.
 
-### F. Recherche, filtres et résultats
+### F. Commande TUC : transfert vers WhatsApp (règle métier, distincte de Glovo)
+
+Le parcours cible communiqué pour TUC **n’a pas de page de paiement/checkout classique** : depuis le panier, le client appuie sur « Commander » et arrive dans WhatsApp via `wa.me`, avec un message prérempli adressé au **WhatsApp de TUC**, pas à celui du restaurant. Le message récapitule la commande; le client doit encore l’envoyer dans WhatsApp. TUC crée ensuite le profil client, lui transmet son accès par lien magique et l’informe de ses points de fidélité.
+
+**Conséquences pour la conception et l’implémentation :**
+- ne pas demander au client de remplir un formulaire de paiement ni créer un écran qui promet un paiement en ligne;
+- faire apparaître le commerce, le mode de service, les articles/configurations et le total calculé côté serveur dans le panier et le texte prérempli;
+- expliquer clairement que la commande n’est transmise qu’après l’envoi du message WhatsApp; `wa.me` ouvre un brouillon, il ne l’envoie pas automatiquement;
+- ne considérer ni le clic ni l’ouverture de WhatsApp comme une commande reçue : attendre la réception/validation du message avant de confirmer la commande et de créer le profil;
+- envoyer un lien magique à usage unique, limité dans le temps; ne jamais générer ou transmettre un mot de passe en clair. Si un mot de passe est requis, laisser le client le définir après validation du lien;
+- informer le client des points attendus; créditer les points une seule fois selon une règle explicite, idéalement après confirmation/achèvement de la commande plutôt qu’à l’ouverture du brouillon;
+- isoler les données personnelles non nécessaires du message et fournir un moyen de corriger une commande avant son envoi.
+
+À capturer ensuite pour ce flux TUC : écran de panier, bouton « Commander », brouillon prérempli ouvert sur WhatsApp (mobile; desktop si supporté), puis message de confirmation contenant le lien magique et l’information de fidélité. Utiliser une commande fictive et masquer les coordonnées réelles.
+
+### G. Recherche, filtres et résultats
 
 Les captures montrent une page de résultats « Restaurants » avec la recherche en haut, une rangée de catégories, des filtres sous forme de pastilles, le nombre de résultats, une action de réinitialisation et des commerces présentés en cartes verticales avec photo, promo, frais, délai et note. Le dernier lot ajoute les panneaux « Trier par » (recommandé, autour de moi, meilleure note, frais de livraison) et « Type de plat », avec une action explicite pour appliquer les résultats. Ces panneaux deviennent une feuille basse sur mobile et une boîte de dialogue sur desktop. Une capture DoorDash distincte montre une navigation desktop latérale; elle n’est pas utilisée comme spécification Glovo.
 
@@ -104,19 +119,25 @@ Les captures montrent une page de résultats « Restaurants » avec la recherche
 - annoncer le nombre de résultats et fournir un état vide avec une action claire;
 - ne pas mélanger des catégories non prises en charge ou des données d’un autre pays.
 
-### G. Connexion et compte
+### H. Connexion et compte
 
 Une capture montre un écran de bienvenue avec numéro de téléphone, indicatif, connexion WhatsApp et alternatives Google/e-mail, accompagné du texte de consentement et de liens légaux.
 
 **Adaptation TUC :** la commande ne doit pas exiger un compte préalable. Si un compte est proposé, afficher son bénéfice en une phrase, privilégier le numéro de téléphone si c’est le canal de suivi choisi, et demander le minimum de données. Les consentements et conditions doivent être lisibles et ne pas être confondus avec une autorisation marketing.
 
-### H. Plus de détails sur le magasin et le panier
+### I. Plus de détails sur le magasin et le panier
 
 Les nouvelles captures complètent le parcours magasin : catégories de menu en onglets, promotions et meilleures ventes, cartes produit avec ajout rapide, panier vide, panier rempli, et fiche détaillée avec suppléments sélectionnables. Le bouton de panier reste visible après ajout; l’écran panier montre les quantités, la suppression et « Continuer ».
 
 Le configurateur de « Benna Épicé » illustre des groupes de suppléments avec plafonds de sélection, un compteur de quantité et un CTA bas fixe qui reprend le prix. Le comportement est utile, mais il faut tester que ce CTA ne masque jamais le dernier choix et que le total évolue immédiatement avec les suppléments.
 
 **Adaptation TUC :** garder les onglets de catégories accessibles, montrer les groupes requis avant les extras, afficher chaque plafond (ex. « jusqu’à 4 ») près du nom du groupe, et recalculer le prix côté serveur à l’envoi. Les cartes à ajout rapide ne doivent pas contourner la configuration requise d’un plat.
+
+### J. Acquisition de restaurants (Glovo Local)
+
+Une nouvelle capture longue montre une page séparée « Glovo Local » destinée aux entreprises : formulaire pour commencer à vendre, documentation requise, rubriques « Vendez / Gérez / Développez », témoignage, CTA de partenariat, présentation de l’accompagnement et FAQ.
+
+**Adaptation TUC :** reprendre l’approche progressive (inscription courte, explication des étapes, documents et FAQ), pas le contenu ou les visuels Glovo. Pour TUC, distinguer la demande de contact de la création effective de boutique; sauvegarder un brouillon, rendre les pièces réellement nécessaires explicites et permettre au restaurateur de finir le parcours depuis son téléphone.
 
 ## 4. Ce qui est pertinent pour TUC — et ce qui ne l’est pas
 
@@ -160,13 +181,14 @@ Quand l’accès au site est disponible, utiliser une session publique propre, e
 | Accueil et adresse déjà choisie | oui | oui | rien |
 | Sélecteur d’adresse / géolocalisation | oui | oui | rien |
 | Résultats, catégories, filtres, tri et ordre des cartes | oui | oui | rien |
-| Fiche restaurant et navigation du menu | oui | non | 1 fiche desktop, haut + menu déroulé |
-| Configuration d’un plat et suppléments | oui | non | 1 configuration desktop, un groupe obligatoire et un facultatif |
-| Panier vide et rempli | oui | non | panier desktop rempli |
-| Étape finale avant envoi (adresse, instructions, frais, total, cash) | non | non | mobile + desktop, sans cliquer sur « commander » |
-| Confirmation et suivi de commande | non | non | mobile + desktop, idéalement environnement de démo |
-| Connexion | oui | non | desktop seulement si l’écran diffère; ce n’est pas bloquant pour le MVP invité |
-| Inscription restaurateur / création de boutique et du menu | non | non | seulement si une page publique partenaire existe; sinon on concevra ce parcours spécifiquement pour TUC |
+| Fiche restaurant et navigation du menu | oui | oui | rien |
+| Configuration d’un plat et suppléments | oui | oui | rien |
+| Panier vide et rempli | oui | oui | rien |
+| Étape de paiement classique | non | non | non applicable : ce n’est pas le flux TUC |
+| Panier TUC → brouillon `wa.me` adressé à TUC | non | non | capture du parcours TUC mobile; desktop seulement si supporté |
+| Message envoyé, confirmation, lien magique et points de fidélité | non | non | capture de confirmation/démo si déjà disponible; sinon à concevoir |
+| Connexion | oui | non | desktop seulement si l’écran diffère; non bloquant pour la commande invité |
+| Page partenaire / devenir restaurateur Glovo | une capture longue reçue (viewport à confirmer) | non | desktop optionnel; le portail TUC sera adapté à ses propres besoins |
 
 Pour les prochaines images, viser environ **390 × 844 ou 393 × 852 px sur mobile** et **1440 × 900 px sur desktop**, en français et avec la même adresse Casablanca. Les fichiers mobiles reçus font 268–275 px de large : ils suffisent pour comprendre les motifs, mais pas pour valider les espacements et la lisibilité à une largeur mobile standard. Masquer téléphone, nom ou adresse personnelle. Ne jamais valider une vraie commande ni un paiement.
 
