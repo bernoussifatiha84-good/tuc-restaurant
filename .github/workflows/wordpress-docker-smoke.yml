@@ -132,9 +132,25 @@ jobs:
             fi
           '
 
-      - name: Journaux Docker en cas d’échec
+      - name: Journaux Docker et erreurs PHP en cas d’échec
         if: failure()
-        run: docker compose logs --no-color || true
+        shell: bash
+        run: |
+          docker compose logs --no-color || true
+          if docker compose exec --no-TTY wordpress sh -lc 'test -f /var/www/html/wp-content/debug.log'; then
+            debug_log="$(docker compose exec --no-TTY wordpress sh -lc 'tail -n 100 /var/www/html/wp-content/debug.log' || true)"
+            printf '%s\n' "$debug_log"
+            {
+              echo '### WordPress debug.log'
+              echo '```text'
+              printf '%s\n' "$debug_log" | tail -n 100
+              echo '```'
+            } >> "$GITHUB_STEP_SUMMARY"
+            fatal_line="$(printf '%s\n' "$debug_log" | grep -E 'PHP Fatal error|Uncaught|TypeError|Error:' | tail -n 1 | tr '\n' ' ' | cut -c1-900)"
+            if [ -n "$fatal_line" ]; then
+              echo "::error title=WordPress PHP error::$fatal_line"
+            fi
+          fi
 
       - name: Nettoyer les conteneurs, volumes et identifiants éphémères
         if: always()
