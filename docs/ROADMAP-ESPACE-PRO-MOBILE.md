@@ -7,11 +7,11 @@
 
 Faire du plugin **TUC Market Core la source de vérité** des restaurants, menus, options, promotions et commandes. Construire une interface restaurateur mobile-first dédiée, servie par le plugin/thème, sans demander aux restaurateurs d’utiliser l’admin WordPress.
 
-**Ne pas désactiver WooCommerce avant l’inventaire de ses produits, commandes, pages et extensions associées.** Après cet inventaire, migrer les données encore utiles vers TUC ou conserver WooCommerce uniquement si une fonctionnalité précise en dépend. Éviter de maintenir deux catalogues ou deux flux de commande indépendants.
+**L’inventaire UAT est réalisé, mais aucune suppression, migration ou nouvelle désactivation n’est autorisée sans validation.** WooCommerce est déjà inactif sur l’UAT; ses données/configurations résiduelles doivent être évaluées avant toute décision. Voir le [relevé détaillé](INVENTAIRE-WOOCOMMERCE-UAT-2026-11-05.md). Éviter de maintenir deux catalogues ou deux flux de commande indépendants.
 
 Cette décision vise le produit souhaité; elle ne signifie pas que le plugin actuel possède déjà toutes ces fonctions.
 
-## Point de départ vérifié dans le code
+## Point de départ vérifié dans le code et sur l’UAT
 
 Le plugin déclare les contenus `tuc_resto` et `tuc_menu_item`. Les plats ont des métadonnées pour le prix, la promotion, la disponibilité, l’identifiant du restaurant et des options. Le calcul de prix serveur connaît des suppléments associés aux choix d’options. Le plugin contient aussi une caisse PWA.
 
@@ -21,7 +21,7 @@ Les écarts connus à traiter avant une ouverture aux restaurateurs :
 - le code du panier client n’est pas raccordé au flux de commande de bout en bout;
 - il n’existe pas encore d’espace mobile permettant au restaurateur de gérer son menu;
 - les rôles et l’isolation par restaurant ne sont pas terminés; la caisse est actuellement réservée aux administrateurs WordPress comme mesure temporaire fail-closed;
-- la présence de pages/produits WooCommerce et leur éventuelle utilisation sur l’UAT restent à vérifier en direct.
+- l’inventaire UAT en lecture seule du 5 novembre 2026 constate WooCommerce 11.2.1 installé mais inactif, aucun produit/variante/coupon/commande, quatre pages WooCommerce assignées en brouillon, et des options PayPal/MaxMind résiduelles dont les valeurs n’ont pas été lues; voir le [rapport](INVENTAIRE-WOOCOMMERCE-UAT-2026-11-05.md). Il reste à faire valider leur usage par le propriétaire du site avant toute action.
 
 ## Principes UX mobile non négociables
 
@@ -40,8 +40,8 @@ Les écarts connus à traiter avant une ouverture aux restaurateurs :
 ### Phase A — Découverte, inventaire et décision WooCommerce
 
 **Travail**
-- Dans l’admin WordPress/UAT, inventorier les produits, catégories, commandes, pages WooCommerce, extensions d’options et intégrations de paiement réellement utilisés.
-- Déterminer où résident aujourd’hui les menus actifs et si des restaurants dépendent de produits WooCommerce.
+- Inventaire technique agrégé UAT terminé (produits, variantes, commandes HPOS et legacy, coupons, pages, extensions et noms d’options) : voir le [rapport](INVENTAIRE-WOOCOMMERCE-UAT-2026-11-05.md). Faire confirmer par le propriétaire du site l’usage réel des pages brouillon et des réglages PayPal/MaxMind, sans exposer leurs valeurs.
+- Le relevé trouve un plat TUC publié et aucun produit WooCommerce; confirmer avec les responsables si ce plat représente le menu actuellement utilisé et s’il existe des dépendances hors de la base WordPress.
 - Définir le périmètre : un propriétaire peut-il gérer plusieurs restaurants? Quels rôles existent? Qui peut modifier les prix et publier une promotion?
 - Faire un export et une sauvegarde vérifiable avant toute migration ou désactivation de WooCommerce.
 
@@ -128,7 +128,7 @@ Prévoir sauvegarde brouillon, duplication de plat, confirmation des changements
 - Piloter avec un petit groupe de restaurants consentants et des comptes de test; mesurer les erreurs, temps de tâche, commandes et demandes d’assistance.
 - Faire tester les changements de menu par les restaurateurs eux-mêmes, pas uniquement par l’équipe TUC.
 - Vérifier sauvegarde/restauration avant et après toute migration WooCommerce.
-- N’envisager la désactivation de WooCommerce qu’après vérification qu’aucune page, donnée, commande ou intégration active n’en dépend et après validation sur l’UAT.
+- WooCommerce étant déjà inactif sur l’UAT, ne pas le réactiver, le désinstaller, ni supprimer ses pages/options avant confirmation de leur usage et décision écrite; toute migration éventuelle exige une sauvegarde vérifiable.
 - Élargir le pilote seulement après réussite des tests de sécurité, d’UX et de restauration.
 
 ## Indicateurs UX à suivre au pilote
