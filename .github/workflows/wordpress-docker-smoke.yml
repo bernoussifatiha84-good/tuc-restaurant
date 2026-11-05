@@ -239,12 +239,10 @@ jobs:
         shell: bash
         run: |
           docker compose logs --no-color || true
-          if docker compose ps --all --quiet n8n | grep -q .; then
-            n8n_container_logs="$(docker compose logs --no-color n8n 2>/dev/null | tail -n 60 | tr '\n' ' ' | sed 's/%/%25/g; s/\r/%0D/g')"
-            if [ -n "$n8n_container_logs" ]; then
-              echo "::error title=n8n container logs::$n8n_container_logs"
-            fi
-          fi
+          n8n_container_state="$(docker compose ps --all n8n 2>&1 | tail -n 10 | tr '\n' ' ' | sed 's/%/%25/g; s/\r/%0D/g' || true)"
+          n8n_container_logs="$(docker compose logs --no-color n8n 2>&1 | tail -n 60 | tr '\n' ' ' | sed 's/%/%25/g; s/\r/%0D/g' || true)"
+          echo "::error title=n8n container state::$n8n_container_state"
+          echo "::error title=n8n container logs::$n8n_container_logs"
           if [ -s "$RUNNER_TEMP/tuc-n8n-setup.log" ]; then
             n8n_setup_log="$(tail -c 1200 "$RUNNER_TEMP/tuc-n8n-setup.log" | tr '\n' ' ' | sed 's/%/%25/g; s/\r/%0D/g')"
             echo "::error title=n8n setup transcript::$n8n_setup_log"
