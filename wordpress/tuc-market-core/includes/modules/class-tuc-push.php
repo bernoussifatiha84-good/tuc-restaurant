@@ -41,8 +41,13 @@ final class TUC_Push
 
     public static function init(): void
     {
-        // Rien à brancher sur `init` : le module est appelé par TUC_Caisse
-        // et par les hooks de TUC_Commande. On garde la classe pure.
+        // Les clés VAPID doivent exister AVANT le premier abonnement : un
+        // navigateur abonné avec une clé, puis une clé régénérée, c'est un
+        // abonnement mort silencieux. On les crée donc à la première visite.
+        // (lecture d'option autoloadée : coût nul)
+        if ((string) get_option('tuc_vapid_priv', '') === '') {
+            self::generer_cles();
+        }
     }
 
     // =====================================================================
