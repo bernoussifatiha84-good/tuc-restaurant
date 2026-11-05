@@ -1,7 +1,7 @@
 # Audit UX & design — références Glovo partagées
 
 **Date :** 5 novembre 2026  
-**Source observée :** 42 captures d’écran fournies en quatre lots dans la conversation. Une capture desktop montre DoorDash, pas Glovo; elle est traitée comme référence comparative séparée.
+**Source observée :** 43 captures distinctes fournies en cinq lots dans la conversation. Une capture desktop montre DoorDash, pas Glovo; elle est traitée comme référence comparative séparée.
 **Important :** audit visuel des captures uniquement. Le site Glovo en direct n’a pas été ouvert depuis cet environnement. Les captures ne permettent pas de confirmer les interactions non visibles, les tailles CSS réelles, les règles de personnalisation ou le fonctionnement du paiement.
 
 ## 1. Synthèse exécutive
@@ -95,18 +95,22 @@ Les captures mobiles montrent un panier vide et un panier rempli. Les nouvelles 
 
 ### F. Commande TUC : transfert vers WhatsApp (règle métier, distincte de Glovo)
 
-Le parcours cible communiqué pour TUC **n’a pas de page de paiement/checkout classique** : depuis le panier, le client appuie sur « Commander » et arrive dans WhatsApp via `wa.me`, avec un message prérempli adressé au **WhatsApp de TUC**, pas à celui du restaurant. Le message récapitule la commande; le client doit encore l’envoyer dans WhatsApp. TUC crée ensuite le profil client, lui transmet son accès par lien magique et l’informe de ses points de fidélité.
+Le parcours TUC envisagé **n’a pas de paiement en ligne**. Pour un visiteur non connecté, le bouton de commande peut ouvrir `wa.me` vers le WhatsApp de TUC avec une référence courte de session/panier. Le client envoie lui-même ce message; le webhook reçoit alors son numéro WhatsApp et la référence. n8n demande au serveur TUC de retrouver/créer le profil, puis renvoie un lien magique à usage unique. Le lien ouvre le site, reconnecte le client et restaure son panier; il complète alors le mode de service et les coordonnées nécessaires avant de confirmer. Un client déjà connecté peut commander directement; un client existant non connecté peut se connecter avec téléphone/mot de passe ou demander un lien magique. Éviter de lui imposer un nouveau message WhatsApp à chaque commande : l’attribution de la provenance peut rester enregistrée côté serveur.
+
+**Parcours recommandé :** panier → identification (téléphone + WhatsApp pour un nouveau client; connexion existante facultative) → envoi par le client du message prérempli → validation du webhook et correspondance numéro/référence → lien magique → retour au panier connecté → choix livraison/retrait/commande à table → adresse sur le site si livraison → vérification zone, frais et total → confirmation de commande → information/crédit des points selon la règle choisie.
 
 **Conséquences pour la conception et l’implémentation :**
-- ne pas demander au client de remplir un formulaire de paiement ni créer un écran qui promet un paiement en ligne;
-- faire apparaître le commerce, le mode de service, les articles/configurations et le total calculé côté serveur dans le panier et le texte prérempli;
-- expliquer clairement que la commande n’est transmise qu’après l’envoi du message WhatsApp; `wa.me` ouvre un brouillon, il ne l’envoie pas automatiquement;
-- ne considérer ni le clic ni l’ouverture de WhatsApp comme une commande reçue : attendre la réception/validation du message avant de confirmer la commande et de créer le profil;
-- envoyer un lien magique à usage unique, limité dans le temps; ne jamais générer ou transmettre un mot de passe en clair. Si un mot de passe est requis, laisser le client le définir après validation du lien;
-- informer le client des points attendus; créditer les points une seule fois selon une règle explicite, idéalement après confirmation/achèvement de la commande plutôt qu’à l’ouverture du brouillon;
-- isoler les données personnelles non nécessaires du message et fournir un moyen de corriger une commande avant son envoi.
+- reprendre de la capture Glovo le champ téléphone et le CTA WhatsApp, mais définir le préfixe marocain **+212** par défaut et retirer Google/e-mail si TUC n’en veut pas;
+- ne pas demander de mot de passe avant d’avoir vérifié le numéro WhatsApp. Après le lien magique, proposer au besoin de définir un mot de passe; ne jamais en envoyer un en clair;
+- `wa.me` ne transmet rien tant que le client n’a pas appuyé sur « Envoyer ». L’ouverture seule ne vérifie pas le numéro, ne crée pas le profil et ne confirme pas de commande;
+- inclure dans le message une référence opaque, temporaire, à usage unique, liée côté serveur au panier et à sa source (accueil, fiche boutique, QR/table). Ne pas exposer d’identifiant séquentiel ni de données personnelles inutiles;
+- n8n doit recevoir le message via l’API officielle/le fournisseur WhatsApp configuré et appeler une API TUC authentifiée; valider webhook, référence, expiration et idempotence;
+- demander l’adresse **sur le site**, après identification et choix « Livraison », mais avant la confirmation finale, afin de valider la zone, les frais et le total. Saisie manuelle d’abord, GPS facultatif. Ne pas demander d’adresse pour retrait ou QR à table; le QR fournit déjà le commerce/la table;
+- afficher le montant final avant le bouton de confirmation; router la commande confirmée vers la caisse TUC du bon commerce, pas vers le WhatsApp personnel du restaurant;
+- créditer les points une seule fois selon une règle définie (de préférence après acceptation/achèvement), et préciser au client quand ils seront disponibles;
+- confirmer le coût réel des messages sortants auprès de Meta/fournisseur : un message initié par l’utilisateur ne garantit pas à lui seul que la réponse avec lien magique sera gratuite.
 
-À capturer ensuite pour ce flux TUC : écran de panier, bouton « Commander », brouillon prérempli ouvert sur WhatsApp (mobile; desktop si supporté), puis message de confirmation contenant le lien magique et l’information de fidélité. Utiliser une commande fictive et masquer les coordonnées réelles.
+Les captures déjà reçues couvrent les références Glovo de connexion, fiche, configurateur et panier. Les seules captures supplémentaires utiles sont celles du flux TUC réel : brouillon WhatsApp + retour par lien magique, puis adresse de livraison sur le site. Si le flux n’est pas encore construit, il peut être conçu sans autre capture Glovo.
 
 ### G. Recherche, filtres et résultats
 
@@ -121,9 +125,9 @@ Les captures montrent une page de résultats « Restaurants » avec la recherche
 
 ### H. Connexion et compte
 
-Une capture montre un écran de bienvenue avec numéro de téléphone, indicatif, connexion WhatsApp et alternatives Google/e-mail, accompagné du texte de consentement et de liens légaux.
+Les captures mobile et desktop montrent l’écran de bienvenue : préfixe téléphonique, numéro, bouton WhatsApp principal, puis Google/e-mail comme alternatives, avec mentions légales.
 
-**Adaptation TUC :** la commande ne doit pas exiger un compte préalable. Si un compte est proposé, afficher son bénéfice en une phrase, privilégier le numéro de téléphone si c’est le canal de suivi choisi, et demander le minimum de données. Les consentements et conditions doivent être lisibles et ne pas être confondus avec une autorisation marketing.
+**Adaptation TUC :** garder un formulaire très court, mettre **+212** par défaut, utiliser WhatsApp pour vérifier le numéro des nouveaux clients et retirer Google/e-mail si ces canaux ne sont pas prévus. Pour un compte existant, proposer téléphone + mot de passe ou un lien magique. Ne pas forcer le compte avant la consultation du menu. Afficher une mention de confidentialité claire, distincte d’un consentement marketing.
 
 ### I. Plus de détails sur le magasin et le panier
 
@@ -187,7 +191,8 @@ Quand l’accès au site est disponible, utiliser une session publique propre, e
 | Étape de paiement classique | non | non | non applicable : ce n’est pas le flux TUC |
 | Panier TUC → brouillon `wa.me` adressé à TUC | non | non | capture du parcours TUC mobile; desktop seulement si supporté |
 | Message envoyé, confirmation, lien magique et points de fidélité | non | non | capture de confirmation/démo si déjà disponible; sinon à concevoir |
-| Connexion | oui | non | desktop seulement si l’écran diffère; non bloquant pour la commande invité |
+| Saisie et validation d’adresse pour livraison, sur le site | non | non | capture si déjà disponible; sinon à concevoir après la connexion |
+| Connexion | oui | oui | rien pour la référence Glovo; concevoir la version TUC en +212 sans Google/e-mail |
 | Page partenaire / devenir restaurateur Glovo | une capture longue reçue (viewport à confirmer) | non | desktop optionnel; le portail TUC sera adapté à ses propres besoins |
 
 Pour les prochaines images, viser environ **390 × 844 ou 393 × 852 px sur mobile** et **1440 × 900 px sur desktop**, en français et avec la même adresse Casablanca. Les fichiers mobiles reçus font 268–275 px de large : ils suffisent pour comprendre les motifs, mais pas pour valider les espacements et la lisibilité à une largeur mobile standard. Masquer téléphone, nom ou adresse personnelle. Ne jamais valider une vraie commande ni un paiement.

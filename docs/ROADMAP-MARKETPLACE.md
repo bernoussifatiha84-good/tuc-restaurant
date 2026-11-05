@@ -31,7 +31,7 @@ Pour cette feuille de route, « gratuite » signifie : **pas de frais de platefo
 ## 3. Personnes et parcours prioritaires
 
 ### Client
-Trouver un commerce → choisir livraison / retrait / commande à table → parcourir le menu → composer le panier → vérifier le récapitulatif et le prix → appuyer sur « Commander » pour ouvrir `wa.me` vers le WhatsApp de TUC avec un message prérempli → envoyer ce message → TUC reçoit/valide la demande et la transmet au bon commerce → création/rattachement du profil client et envoi d’un lien magique → informer le client des points de fidélité gagnés → suivre l’état → payer en espèces selon le mode de service. L’ouverture de WhatsApp seule ne constitue pas une commande envoyée.
+Trouver un commerce → parcourir le menu → composer le panier → pour un nouveau client, vérifier le téléphone via un message `wa.me` prérempli envoyé au WhatsApp de TUC → recevoir un lien magique et retrouver le panier connecté → choisir livraison / retrait / commande à table → saisir l’adresse sur le site seulement si livraison → vérifier zone et prix final → confirmer → transmettre la commande à la caisse du commerce → informer des points gagnés et suivre l’état → payer en espèces selon le mode. Un client déjà connecté passe directement à la commande; un compte existant peut se reconnecter par téléphone/mot de passe ou lien magique. L’ouverture de WhatsApp seule ne crée ni compte ni commande; la provenance est gardée côté serveur, sans forcer un message WhatsApp à chaque commande.
 
 ### Restaurateur sur téléphone
 Créer un accès → créer la boutique → ajouter le nom, une photo, l’adresse, les horaires et les modes de service → ajouter quelques plats avec prix et options → prévisualiser → publier → recevoir et traiter la première commande.
@@ -98,15 +98,16 @@ Les principaux trous fonctionnels connus sont : panier client complet, suivi de 
 - Recherche par nom, cuisine, catégorie et quartier; gérer proprement les résultats vides et les commerces fermés.
 - Panier persistant à court terme, options comprises, quantités modifiables, suppression facile.
 - Livraison : adresse et zone desservie; retrait et QR à table : demander uniquement les détails utiles.
-- Calcul du total côté serveur depuis les prix publiés; vérifier disponibilité, frais, minimum et commerce avant de préparer le récapitulatif.
-- Le CTA « Commander » ouvre `wa.me` vers le numéro WhatsApp officiel de TUC avec le récapitulatif prérempli; le client doit envoyer lui-même le message. Ne jamais adresser ce lien au WhatsApp personnel du restaurateur.
-- Traiter l’ouverture de WhatsApp comme un transfert, pas comme une commande reçue; ne confirmer, créer le profil client ou créditer de points qu’après réception/validation de la demande. Prévoir une référence de commande, l’idempotence et une solution de reprise si l’envoi échoue ou est répété.
-- Après validation du téléphone et de la demande, créer/rattacher le profil et envoyer un lien magique à usage unique, à durée limitée. Ne jamais envoyer un mot de passe en clair; si un mot de passe est nécessaire, le client le définit après ouverture du lien.
-- Confirmer le numéro de commande, le commerce, le montant, le mode et le délai estimé; expliquer le paiement en espèces.
-- Informer sur les points de fidélité et appliquer une règle d’attribution explicite; créditer une seule fois après l’état de commande retenu (par défaut, commande acceptée/terminée, pas simple ouverture du lien WhatsApp).
-- Prévoir un statut de suivi client et des notifications compréhensibles; le compte est créé après l’envoi/validation, pas imposé avant de composer le panier.
+- Pour un nouveau client non connecté, ouvrir `wa.me` vers le numéro WhatsApp officiel de TUC avec une référence opaque, temporaire et à usage unique liée côté serveur au panier et à sa provenance. Le client doit envoyer lui-même le message; ne jamais adresser le lien au WhatsApp personnel du restaurateur.
+- Recevoir le message via le webhook officiel/fournisseur WhatsApp; valider signature, numéro, référence, expiration et idempotence. L’ouverture de WhatsApp seule ne vérifie rien et ne doit créer ni compte ni commande.
+- Après réception valide, créer/rattacher le profil au numéro WhatsApp et envoyer un lien magique à usage unique, limité dans le temps. Ne jamais envoyer un mot de passe en clair; si un mot de passe est requis, le client le définit après ouverture du lien. Les clients déjà connectés passent directement à la commande.
+- Au retour sur le site, restaurer le panier; demander le mode de service. Pour livraison seulement, demander l’adresse sur le site (saisie manuelle, GPS facultatif), vérifier la zone et les frais. Ne pas demander d’adresse pour retrait/QR à table.
+- Calculer le total côté serveur depuis les prix publiés; vérifier disponibilité, minimum et commerce; afficher le montant final avant la confirmation explicite.
+- Après confirmation, envoyer la commande à la caisse TUC du bon commerce; expliquer le paiement en espèces et fournir numéro, mode et délai estimé.
+- Informer sur les points et créditer une seule fois à l’état choisi (par défaut après acceptation/achèvement), jamais à la simple ouverture du lien WhatsApp.
+- Prévoir un statut de suivi client et des notifications compréhensibles; le compte ne doit pas être imposé avant de parcourir le menu.
 
-**Critères de sortie :** parcours E2E valide sur Android/iPhone jusqu’à l’envoi du message WhatsApp puis réception/validation; impossible de modifier un prix via le navigateur; tests contre commande vide, plat d’un autre commerce, double clic, message non envoyé, webhook/réception en double, commerce fermé et erreur réseau; aucun compte, point ou commande confirmée créé sur la seule ouverture de `wa.me`.
+**Critères de sortie :** parcours E2E Android/iPhone : message WhatsApp envoyé/reçu → lien magique → retour connecté au panier → adresse validée si livraison → confirmation de commande; aucun prix modifiable côté navigateur; tests contre référence expirée/réutilisée, message non envoyé, webhook en double, commande vide, commerce fermé et erreur réseau; aucune commande ni compte créé sur la seule ouverture de `wa.me`.
 
 ### Phase 4 — Opérations de caisse robustes (2–3 semaines)
 
