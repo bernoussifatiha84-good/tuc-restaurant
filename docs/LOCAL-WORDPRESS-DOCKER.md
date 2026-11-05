@@ -1,6 +1,6 @@
 # Environnement local WordPress/Docker
 
-Cet environnement sert aux tests fonctionnels WordPress/Docker. Le même Compose est utilisé par le workflow GitHub `WordPress Docker smoke test` sur un runner `ubuntu-latest`; ce workflow installe WordPress, active le plugin et le thème TUC, vérifie HTTP/REST/PHP puis détruit les volumes éphémères. Il ne déploie rien vers UAT ou production.
+Cet environnement sert aux tests fonctionnels WordPress/Docker. Le même Compose est utilisé par le workflow GitHub `WordPress Docker smoke test` sur un runner `ubuntu-latest`; le workflow installe WordPress, vérifie l’activation du plugin/thème, la santé HTTP/REST/PHP et exécute la suite d’intégration `tests/wp-docker-regression.php` sur des fixtures jetables, puis détruit les volumes éphémères. Il ne déploie rien vers UAT ou production.
 
 ## Prérequis
 
@@ -10,7 +10,7 @@ Cet environnement sert aux tests fonctionnels WordPress/Docker. Le même Compose
 
 ## Test Docker sur GitHub
 
-`.github/workflows/wordpress-docker-smoke.yml` lance le test sur un runner GitHub avec Docker lors d’une pull request vers `main`. Il génère des mots de passe éphémères dans le runner, installe WordPress, active `TUC Market Core` et le thème, puis vérifie la page, la route de santé REST et la version PHP. Il supprime ensuite les conteneurs, la base et les identifiants du runner. Ce workflow n’a aucun secret de production et ne déploie pas le site.
+`.github/workflows/wordpress-docker-smoke.yml` lance le test sur un runner GitHub avec Docker lors d’une pull request vers `main`. Il génère des mots de passe éphémères dans le runner, installe WordPress, teste l’activation/désactivation du plugin, et exécute les régressions avec WP-CLI : CPT/santé, calcul serveur du prix et des suppléments, rejet du total falsifié, idempotence, erreurs métier, droits de statut et limitation de débit. Les fixtures sont supprimées par le script; le workflow retire ensuite conteneurs, base et identifiants du runner. Ce workflow n’a aucun secret de production et ne déploie pas le site.
 
 Le déclenchement manuel est disponible une fois le workflow présent sur la branche par défaut; pour tester une branche de travail avant fusion, le déclencheur de pull request est prévu.
 

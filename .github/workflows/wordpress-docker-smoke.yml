@@ -72,14 +72,35 @@ jobs:
           docker compose run --rm --entrypoint wp wpcli theme is-active tuc-theme
           docker compose run --rm --entrypoint wp wpcli core version
 
+      - name: Vérifier désactivation et réactivation du plugin
+        run: |
+          set -euo pipefail
+          docker compose run --rm --entrypoint wp wpcli plugin deactivate tuc-market-core
+          docker compose run --rm --entrypoint wp wpcli plugin is-inactive tuc-market-core
+          docker compose run --rm --entrypoint wp wpcli plugin activate tuc-market-core
+          docker compose run --rm --entrypoint wp wpcli plugin is-active tuc-market-core
+
+      - name: Vérifier la syntaxe de la suite de régression
+        run: docker compose run --rm --entrypoint php wpcli -l /opt/tuc-tests/wp-docker-regression.php
+
+      - name: Exécuter les régressions WordPress/TUC
+        run: docker compose run --rm --entrypoint wp wpcli eval-file /opt/tuc-tests/wp-docker-regression.php
+
       - name: Vérifier HTTP, REST et la version PHP
         shell: bash
         run: |
           set -euo pipefail
           curl --fail --silent --show-error --retry 20 --retry-delay 3 --retry-connrefused \
             http://127.0.0.1:8080/ --output /dev/null
-          curl --fail --silent --show-error --retry 20 --retry-delay 3 --retry-connrefused \
-            http://127.0.0.1:8080/wp-json/tuc/v1/sante
+          health="$(curl --fail --silent --show-error --retry 20 --retry-delay 3 --retry-connrefused \
+            http://127.0.0.1:8080/wp-json/tuc/v1/sante)"
+          printf '%s' "$health" | python3 -c '
+          import json, sys
+          result = json.load(sys.stdin)
+          assert result.get("ok") is True, result
+          assert all(result.get("modules", {}).get(key) is True for key in ("cpt_resto", "cpt_menu", "cpt_commande")), result
+          print("REST health OK · plugin", result.get("plugin"), "· WordPress", result.get("wp"), "· PHP", result.get("php"))
+          '
           docker compose exec --no-TTY wordpress php -v
 
       - name: Échouer sur une erreur PHP fatale du site

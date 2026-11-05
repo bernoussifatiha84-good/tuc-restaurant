@@ -33,6 +33,7 @@ services:
       - tuc_wp_data:/var/www/html
       - ./wordpress/tuc-market-core:/var/www/html/wp-content/plugins/tuc-market-core:ro
       - ./wordpress/tuc-theme:/var/www/html/wp-content/themes/tuc-theme:ro
+      - ./tests:/opt/tuc-tests:ro
 
   wordpress:
     image: ${TUC_WP_IMAGE:-wordpress:php8.2-apache}
