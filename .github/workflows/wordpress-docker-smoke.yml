@@ -167,7 +167,7 @@ jobs:
             echo "::error title=n8n container failed to start::$(printf '%s' "$output" | tr '\n' ' ' | sed 's/%/%25/g; s/\r/%0D/g')"
             exit "$status"
           fi
-          if curl --fail --silent --show-error --retry 60 --retry-delay 2 --retry-connrefused \
+          if curl --fail --silent --show-error --retry 60 --retry-delay 2 --retry-connrefused --retry-all-errors \
             http://127.0.0.1:5678/healthz --output /dev/null; then
             printf 'n8n health endpoint is ready\n' >> "$N8N_SETUP_LOG"
           else
