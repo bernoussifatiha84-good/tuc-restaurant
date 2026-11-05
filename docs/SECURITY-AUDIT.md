@@ -6,7 +6,7 @@
 
 ## Synthèse
 
-La revue a identifié des contrôles insuffisants sur les permissions de caisse/statut, le prix affiché dans le parcours WhatsApp, le polling du lien magique, la validation des endpoints Web Push et plusieurs validations/limites de requêtes publiques. Des correctifs et tests de régression ont été ajoutés. **Ils ne sont pas considérés comme validés tant que le workflow GitHub correspondant au commit de ces changements n’a pas réussi.**
+La revue a identifié des contrôles insuffisants sur les permissions de caisse/statut, le prix affiché dans le parcours WhatsApp, le polling du lien magique, la validation des endpoints Web Push et plusieurs validations/limites de requêtes publiques. Les correctifs ont été validés par le workflow Docker WordPress GitHub sur le commit `798a6481409fa1191a24b5055aa620ae922d0fad` (run [42092149867](https://github.com/bernoussifatiha84-good/tuc-restaurant/actions/runs/42092149867)). Le workflow a linté le PHP du plugin, du thème et des tests, exécuté les régressions d’intégration et vérifié les routes HTTP/REST.
 
 Aucun merge, déploiement, accès UAT/production ou appel au fournisseur WhatsApp n’a été effectué. Les points résiduels ci-dessous empêchent de considérer le parcours multi-commerce et l’authentification WhatsApp comme prêts pour la production.
 
@@ -32,9 +32,9 @@ Aucun merge, déploiement, accès UAT/production ou appel au fournisseur WhatsAp
 
 ## Vérifications
 
-- `git diff --check` : réussi lors de la préparation initiale des changements; à relancer avant livraison.
-- Tests PHP locaux : non disponibles dans le sandbox.
-- Workflow Docker WordPress : **en attente** pour ces modifications. Le workflow est étendu pour lint l’ensemble des fichiers PHP du plugin, du thème et des tests avant les régressions.
+- `git diff --check` : réussi avant les commits.
+- PHP local : non disponible dans le sandbox; syntaxe PHP vérifiée dans l’image WP-CLI PHP 8.2 du runner.
+- Workflow Docker WordPress : **réussi** au run [42092149867](https://github.com/bernoussifatiha84-good/tuc-restaurant/actions/runs/42092149867), commit `798a6481409fa1191a24b5055aa620ae922d0fad`; lint PHP plugin/thème/tests, régressions WordPress/TUC, vérification HTTP/REST et absence d’erreur PHP fatale réussis.
 
 ## Fichiers examinés/corrigés
 
