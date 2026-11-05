@@ -135,6 +135,8 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
+          N8N_SETUP_LOG="$RUNNER_TEMP/tuc-n8n-setup.log"
+          : > "$N8N_SETUP_LOG"
           on_n8n_setup_error() {
             local status=$? failed_command="$BASH_COMMAND" failed_line="$LINENO" n8n_logs
             n8n_logs="$(docker compose logs --no-color n8n 2>/dev/null | tail -n 40 | tr '\n' ' ' | sed 's/%/%25/g; s/\r/%0D/g' || true)"
@@ -144,9 +146,11 @@ jobs:
           run_n8n_cli() {
             local output status excerpt
             if output="$(docker compose run --rm --entrypoint n8n n8n "$@" 2>&1)"; then
+              printf 'COMMAND: n8n %s\n%s\n' "$*" "$output" >> "$N8N_SETUP_LOG"
               printf '%s\n' "$output"
             else
               status=$?
+              printf 'FAILED COMMAND: n8n %s (status %s)\n%s\n' "$*" "$status" "$output" >> "$N8N_SETUP_LOG"
               printf '%s\n' "$output"
               excerpt="$(printf '%s\n' "$output" | tail -c 1400 | tr '\n' ' ' | sed 's/%/%25/g; s/\r/%0D/g')"
               echo "::error title=n8n CLI failed::$excerpt"
@@ -155,11 +159,24 @@ jobs:
           }
           run_n8n_cli import:workflow --input=/opt/tuc-n8n/tuc-wa-smoke.workflow.json
           run_n8n_cli update:workflow --id=f31a00c7-d902-4f4a-91fa-61176d0c39f7 --active=true
-          docker compose up --detach n8n
-          if ! curl --fail --silent --show-error --retry 60 --retry-delay 2 --retry-connrefused \
+          if output="$(docker compose up --detach n8n 2>&1)"; then
+            printf 'COMMAND: docker compose up n8n\n%s\n' "$output" >> "$N8N_SETUP_LOG"
+            printf '%s\n' "$output"
+          else
+            status=$?
+            printf 'FAILED COMMAND: docker compose up n8n (status %s)\n%s\n' "$status" "$output" >> "$N8N_SETUP_LOG"
+            echo "::error title=n8n container failed to start::$(printf '%s' "$output" | tr '\n' ' ' | sed 's/%/%25/g; s/\r/%0D/g')"
+            exit "$status"
+          fi
+          if curl --fail --silent --show-error --retry 60 --retry-delay 2 --retry-connrefused \
             http://127.0.0.1:5678/healthz --output /dev/null; then
-            n8n_logs="$(docker compose logs --no-color n8n | tail -n 30 | tr '\n' ' ' | sed 's/%/%25/g; s/\r/%0D/g')"
-            echo "::error title=n8n failed readiness::$n8n_logs"
+            printf 'n8n health endpoint is ready\n' >> "$N8N_SETUP_LOG"
+          else
+            status=$?
+            n8n_logs="$(docker compose logs --no-color n8n 2>/dev/null | tail -n 30 || true)"
+            printf 'n8n health check failed (status %s)\n%s\n' "$status" "$n8n_logs" >> "$N8N_SETUP_LOG"
+            excerpt="$(printf '%s\n' "$n8n_logs" | tr '\n' ' ' | sed 's/%/%25/g; s/\r/%0D/g')"
+            echo "::error title=n8n failed readiness::$excerpt"
             exit 1
           fi
 
@@ -223,6 +240,10 @@ jobs:
         shell: bash
         run: |
           docker compose logs --no-color || true
+          if [ -s "$RUNNER_TEMP/tuc-n8n-setup.log" ]; then
+            n8n_setup_log="$(tail -n 80 "$RUNNER_TEMP/tuc-n8n-setup.log" | tr '\n' ' ' | sed 's/%/%25/g; s/\r/%0D/g')"
+            echo "::error title=n8n setup transcript::$n8n_setup_log"
+          fi
           if docker compose exec --no-TTY wordpress sh -lc 'test -f /var/www/html/wp-content/debug.log'; then
             debug_log="$(docker compose exec --no-TTY wordpress sh -lc 'tail -n 100 /var/www/html/wp-content/debug.log' || true)"
             printf '%s\n' "$debug_log"
