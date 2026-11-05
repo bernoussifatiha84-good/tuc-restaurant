@@ -1,0 +1,47 @@
+name: tuc-wordpress-local
+
+services:
+  db:
+    image: ${TUC_DB_IMAGE:-mariadb:10.11}
+    restart: unless-stopped
+    environment:
+      MARIADB_DATABASE: ${TUC_DB_NAME:?Copiez .env.example vers .env et renseignez les valeurs locales}
+      MARIADB_USER: ${TUC_DB_USER:?Renseignez TUC_DB_USER dans .env}
+      MARIADB_PASSWORD: ${TUC_DB_PASSWORD:?Renseignez TUC_DB_PASSWORD dans .env}
+      MARIADB_ROOT_PASSWORD: ${TUC_DB_ROOT_PASSWORD:?Renseignez TUC_DB_ROOT_PASSWORD dans .env}
+    volumes:
+      - tuc_db_data:/var/lib/mysql
+    healthcheck:
+      test: ["CMD", "healthcheck.sh", "--connect", "--innodb_initialized"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+      start_period: 20s
+
+  wordpress:
+    image: ${TUC_WP_IMAGE:-wordpress:php8.2-apache}
+    restart: unless-stopped
+    depends_on:
+      db:
+        condition: service_healthy
+    ports:
+      - "127.0.0.1:${TUC_WP_PORT:-8080}:80"
+    environment:
+      WORDPRESS_DB_HOST: db:3306
+      WORDPRESS_DB_NAME: ${TUC_DB_NAME:?Renseignez TUC_DB_NAME dans .env}
+      WORDPRESS_DB_USER: ${TUC_DB_USER:?Renseignez TUC_DB_USER dans .env}
+      WORDPRESS_DB_PASSWORD: ${TUC_DB_PASSWORD:?Renseignez TUC_DB_PASSWORD dans .env}
+      WORDPRESS_DEBUG: "1"
+      WORDPRESS_CONFIG_EXTRA: |
+        define( 'WP_ENVIRONMENT_TYPE', 'local' );
+        define( 'WP_DEBUG_LOG', true );
+        define( 'WP_DEBUG_DISPLAY', false );
+        @ini_set( 'display_errors', 0 );
+    volumes:
+      - tuc_wp_data:/var/www/html
+      - ./wordpress/tuc-market-core:/var/www/html/wp-content/plugins/tuc-market-core:ro
+      - ./wordpress/tuc-theme:/var/www/html/wp-content/themes/tuc-theme:ro
+
+volumes:
+  tuc_db_data:
+  tuc_wp_data:

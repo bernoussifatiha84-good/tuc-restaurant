@@ -61,6 +61,10 @@ Les valeurs de déploiement sont des variables de dépôt : `URL_DEV`, `ROOT_DEV
 
 Copier `wordpress/tuc-theme/` dans `wp-content/themes/tuc-theme/` et `wordpress/tuc-market-core/` dans `wp-content/plugins/tuc-market-core/`, puis activer le plugin et le thème dans WordPress. Le workflow SSH effectue ces activations automatiquement après le transfert.
 
+## Environnement WordPress local
+
+Le fichier [`compose.yaml`](compose.yaml) démarre WordPress + MariaDB localement et monte le thème/plugin du dépôt. Voir le [guide de test Docker](docs/LOCAL-WORDPRESS-DOCKER.md). Cette configuration n’effectue aucun déploiement.
+
 ## Vérifications locales
 
 ```bash
