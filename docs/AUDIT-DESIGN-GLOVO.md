@@ -1,7 +1,7 @@
 # Audit UX & design — références Glovo partagées
 
 **Date :** 5 novembre 2026  
-**Source observée :** 23 captures d’écran fournies en deux lots dans la conversation; le lot suivant est encore attendu.
+**Source observée :** 34 captures d’écran fournies en trois lots dans la conversation. Une capture desktop supplémentaire montre DoorDash, pas Glovo; elle est traitée comme référence comparative séparée.
 **Important :** audit visuel des captures uniquement. Le site Glovo en direct n’a pas été ouvert depuis cet environnement. Les captures ne permettent pas de confirmer les interactions non visibles, les tailles CSS réelles, les règles de personnalisation ou le fonctionnement du paiement.
 
 ## 1. Synthèse exécutive
@@ -18,7 +18,7 @@ Le thème TUC possède déjà une base cohérente avec les captures : accent jau
 
 - Les vues mobiles fournies font environ **268–275 px de large** dans les fichiers. Elles sont utiles pour repérer les composants, mais trop étroites pour décider seules de la mise en page mobile standard. Revalider au minimum à 360, 390 et 430 px.
 - Les captures desktop incluent de longues pages et des fenêtres modales; elles aident à comprendre la hiérarchie générale, pas les comportements de défilement ou de redimensionnement.
-- Le jeu de références semble **mélanger des marchés** : les fiches Casablanca/O’Tacos montrent des prix en MAD, alors que plusieurs rails desktop présentent des enseignes canadiennes et des prix en dollars canadiens. Les données, catégories et promotions ne doivent donc pas être transposées en bloc à TUC Maroc.
+- Le jeu de références semble **mélanger des marchés et des produits** : certaines vues Casablanca/O’Tacos montrent des prix en MAD; d’autres rails desktop présentent des enseignes canadiennes et des prix en dollars canadiens; une capture desktop est explicitement DoorDash. Ces éléments ne sont pas des références Glovo Maroc et doivent rester séparés. Les données, catégories, promotions et motifs propriétaires ne doivent pas être transposés en bloc à TUC.
 - Les captures ne permettent pas de mesurer précisément le contraste, les tailles CSS, l’état clavier/lecteur d’écran, la performance, ni toutes les validations de formulaires.
 
 ### Conséquence
@@ -95,7 +95,7 @@ La vue panier fournie montre le nombre d’articles, les lignes de produits, pri
 
 ### F. Recherche, filtres et résultats
 
-Le second lot montre une page de résultats « Restaurants » avec la recherche en haut, une rangée de catégories, des filtres sous forme de pastilles, le nombre de résultats, une action de réinitialisation et des commerces présentés en cartes verticales avec photo, promo, frais, délai et note.
+Les captures montrent une page de résultats « Restaurants » avec la recherche en haut, une rangée de catégories, des filtres sous forme de pastilles, le nombre de résultats, une action de réinitialisation et des commerces présentés en cartes verticales avec photo, promo, frais, délai et note. Le dernier lot ajoute les panneaux « Trier par » (recommandé, autour de moi, meilleure note, frais de livraison) et « Type de plat », avec une action explicite pour appliquer les résultats. Ces panneaux deviennent une feuille basse sur mobile et une boîte de dialogue sur desktop. Une capture DoorDash distincte montre une navigation desktop latérale; elle n’est pas utilisée comme spécification Glovo.
 
 **Adaptation TUC :**
 - garder la recherche immédiatement disponible après le choix du quartier;
@@ -155,17 +155,22 @@ Le dépôt `craft-anything` décrit des outils Chromium pour ouvrir un site, cap
 
 Quand l’accès au site est disponible, utiliser une session publique propre, en mode visuel/clean-room, sans identifiants ni commande réelle. Capturer des états comparables :
 
-| Parcours | Mobile | Desktop |
-|---|---:|---:|
-| Accueil + état adresse choisi | 390 × 844 et 430 × 932 | 1440 × 900 |
-| Sélecteur d’adresse ouvert | oui | oui |
-| Recherche et résultats / filtres | oui | oui |
-| Fiche commerce + début et milieu du menu | oui | oui |
-| Configuration d’un produit (obligatoire et facultatif) | oui | au moins une vue |
-| Panier rempli et récapitulatif avant envoi | oui | oui |
-| Confirmation/suivi sans création de commande réelle | maquette ou environnement de test | idem |
+| Écran / état | Mobile reçu | Desktop reçu | À envoyer encore |
+|---|---:|---:|---|
+| Accueil et adresse déjà choisie | oui | oui | rien |
+| Sélecteur d’adresse / géolocalisation | oui | oui | rien |
+| Résultats, catégories, filtres, tri et ordre des cartes | oui | oui | rien |
+| Fiche restaurant et navigation du menu | oui | non | 1 fiche desktop, haut + menu déroulé |
+| Configuration d’un plat et suppléments | oui | non | 1 configuration desktop, un groupe obligatoire et un facultatif |
+| Panier vide et rempli | oui | non | panier desktop rempli |
+| Étape finale avant envoi (adresse, instructions, frais, total, cash) | non | non | mobile + desktop, sans cliquer sur « commander » |
+| Confirmation et suivi de commande | non | non | mobile + desktop, idéalement environnement de démo |
+| Connexion | oui | non | desktop seulement si l’écran diffère; ce n’est pas bloquant pour le MVP invité |
+| Inscription restaurateur / création de boutique et du menu | non | non | seulement si une page publique partenaire existe; sinon on concevra ce parcours spécifiquement pour TUC |
 
-Pour chaque capture, noter le marché, l’adresse de test, la langue, l’état de connexion, le viewport et les actions effectuées. Ne pas mélanger captures de pays, devise ou profils différents dans une même mesure.
+Pour les prochaines images, viser environ **390 × 844 ou 393 × 852 px sur mobile** et **1440 × 900 px sur desktop**, en français et avec la même adresse Casablanca. Les fichiers mobiles reçus font 268–275 px de large : ils suffisent pour comprendre les motifs, mais pas pour valider les espacements et la lisibilité à une largeur mobile standard. Masquer téléphone, nom ou adresse personnelle. Ne jamais valider une vraie commande ni un paiement.
+
+Pour chaque capture, noter le marché, l’adresse de test, la langue, l’état de connexion, le viewport et les actions effectuées. Ne pas mélanger captures de pays, devise, service (Glovo vs DoorDash) ou profils différents dans une même mesure.
 
 **État de cet audit :** les captures envoyées par l’utilisateur ont été analysées visuellement; Craft Anything n’a pas été exécuté contre Glovo en direct dans cet environnement.
 
