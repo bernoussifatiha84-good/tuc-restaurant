@@ -54,6 +54,12 @@ docker compose start
 - N’utiliser ni comptes clients réels, ni données personnelles, ni commande/paiement réel. Les URLs de développement restent liées à `127.0.0.1`.
 - Cette configuration n’exécute pas la CI et ne déclenche aucun déploiement.
 
-## Disponibilité dans l’environnement Arena
+## Résultat du premier smoke test GitHub
 
-Au moment de préparer cette configuration, la commande `docker` n’est pas installée dans l’environnement Agent. Les fichiers Compose sont donc préparés, mais **les conteneurs ne sont pas démarrés et le test WordPress réel n’a pas encore été exécuté ici**. Il faut installer/démarrer Docker sur la machine de test ou utiliser un hôte de développement disposant de Docker, puis rejouer les commandes ci-dessus avant de considérer l’étape validée.
+Le test a été exécuté sur un runner GitHub hébergé avec Docker, sous la PR brouillon [#1](https://github.com/bernoussifatiha84-good/tuc-restaurant/pull/1), run [42037839606](https://github.com/bernoussifatiha84-good/tuc-restaurant/actions/runs/42037839606), commit `c43c680` : **succès**.
+
+Le runner a validé `docker compose config`, démarré WordPress et MariaDB, installé WordPress avec WP-CLI, activé **TUC Market Core** et le thème, vérifié la page HTTP, `/wp-json/tuc/v1/sante`, PHP et l’absence d’erreur PHP fatale dans `debug.log`, puis supprimé conteneurs, volumes et identifiants éphémères.
+
+C’est un smoke test d’installation/activation, pas encore une validation complète des parcours, des rôles, du flux WhatsApp, de l’arabe/RTL ou des commandes. La PR reste brouillon; rien n’a été fusionné ni déployé.
+
+Le moteur Docker n’est pas installé dans l’environnement Agent local; l’exécution réelle a donc été faite sur le runner Docker de GitHub, comme demandé.
