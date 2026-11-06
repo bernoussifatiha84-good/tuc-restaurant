@@ -128,10 +128,39 @@ async function main() {
     await orderCard.getByText('Acceptée').waitFor();
     await screenshot(page, 'espace-pro-commandes-mobile.png');
 
-    checkpoint = 'traitement de la commande dans Espace Pro';
-    // Menu public -> option conditionnelle -> panier -> commande -> suivi tokenisé.
-    const clientResponse = await page.goto(`${baseUrl}/tuc-mobile-e2e/`, { waitUntil: 'networkidle' });
-    assert(clientResponse && clientResponse.status() === 200, 'fiche restaurant publique servie par WordPress Docker');
+    checkpoint = 'préparation de la caisse restaurateur et activation du son';
+    await context.grantPermissions(['notifications'], { origin: new URL(baseUrl).origin });
+    const cashierPage = await context.newPage();
+    cashierPage.on('pageerror', (error) => pageErrors.push(`caisse: ${error.message}`));
+    await cashierPage.addInitScript(() => {
+      if (!window.OscillatorNode) return;
+      const start = window.OscillatorNode.prototype.start;
+      window.OscillatorNode.prototype.start = function (...args) {
+        window.__tucToneStarts = (window.__tucToneStarts || 0) + 1;
+        return start.apply(this, args);
+      };
+    });
+    const cashierResponse = await cashierPage.goto(`${baseUrl}/caisse/`, { waitUntil: 'networkidle' });
+    assert(cashierResponse && cashierResponse.status() === 200, 'caisse restaurateur servie par WordPress Docker');
+    await cashierPage.locator('#btn-son').click();
+    await cashierPage.locator('#btn-son[aria-pressed="true"]').waitFor();
+    assert((await cashierPage.evaluate(() => window.__tucToneStarts || 0)) >= 3, 'un tap déverrouille et joue le signal sonore de test');
+    await cashierPage.locator('#etat.on').waitFor();
+    await cashierPage.locator('#liste, #vide').first().waitFor();
+    await screenshot(cashierPage, 'caisse-restaurateur-mobile.png');
+
+    checkpoint = 'lecture du QR de la table 7';
+    const qrResponse = await cashierPage.request.get(`${baseUrl}/wp-json/tuc/v1/qr/tuc-mobile-e2e`);
+    assert.equal(qrResponse.status(), 200, 'la planche QR du restaurant est disponible');
+    const qrSheet = await qrResponse.json();
+    const tableSevenQr = (qrSheet.qr || []).find((entry) => entry.type === 'table' && Number(entry.table) === 7);
+    assert(tableSevenQr && new URL(tableSevenQr.url).searchParams.get('t') === '7', 'le QR Table 7 ouvre la bonne URL');
+
+    // On simule le scan du QR en ouvrant son URL réelle, avec le menu et le contexte table.
+    const clientResponse = await page.goto(tableSevenQr.url, { waitUntil: 'networkidle' });
+    assert(clientResponse && clientResponse.status() === 200, 'la fiche restaurant du QR est servie par WordPress Docker');
+    assert.equal(await page.locator('#tuc-client-menu').getAttribute('data-table'), '7', 'la page client conserve la table 7 issue du QR');
+    await page.getByText('Vous êtes à la table 7', { exact: false }).waitFor();
     const initialCard = page.locator('.tuc-client-card').filter({ hasText: 'Plat initial E2E' });
     await initialCard.locator('[data-add]').click();
     const formatGroup = page.locator('#tuc-customize-groups [data-group-id="format"]');
@@ -143,29 +172,72 @@ async function main() {
     await page.locator('#tuc-customize-form button[type="submit"]').click();
     await page.locator('#tuc-open-cart').click();
     const checkoutTotal = normalizedText(await page.locator('#tuc-checkout-total').innerText());
-    assert(checkoutTotal.includes('37,00MAD') || checkoutTotal.includes('37.00MAD'), `total attendu 37 MAD (options et frais), obtenu: ${checkoutTotal}`);
+    assert(checkoutTotal.includes('32,00MAD') || checkoutTotal.includes('32.00MAD'), `total attendu 32 MAD à table (sans frais de livraison), obtenu: ${checkoutTotal}`);
+    await page.getByText('Commande à la table 7', { exact: false }).waitFor();
+    assert.equal(await page.locator('#tuc-order-mode').isVisible(), false, 'le mode table est fixé par le QR et ne peut pas être remplacé');
     await page.locator('#tuc-customer-phone').fill('+212600000010');
     await page.locator('#tuc-submit-order').click();
     await page.locator('#tuc-order-success').waitFor({ state: 'visible' });
+    const submittedReference = await page.locator('#tuc-order-success strong').innerText();
+
+    // Le restaurateur revient à sa caisse : le rafraîchissement déclenche le signal sonore.
+    await cashierPage.bringToFront();
+    await cashierPage.evaluate(() => document.dispatchEvent(new Event('visibilitychange')));
+    const tableOrder = cashierPage.locator('#liste .carte').filter({ hasText: 'Table 7' });
+    await tableOrder.waitFor({ timeout: 30000 });
+    const tableOrderText = await tableOrder.innerText();
+    assert(tableOrderText.includes('Plat initial E2E'), 'la caisse reçoit le plat commandé à la table 7');
+    assert(tableOrderText.includes('32'), 'la caisse affiche le montant de la commande à table');
+    assert(!tableOrderText.includes('+212600000010'), 'la caisse n’expose pas le numéro de téléphone du client');
+    assert.equal(await tableOrder.getAttribute('data-id'), submittedReference.replace('#', ''), 'la commande de caisse correspond à celle du client');
+    await cashierPage.locator('#son-status').getByText('Alerte sonore jouée', { exact: false }).waitFor();
+    assert((await cashierPage.evaluate(() => window.__tucToneStarts || 0)) >= 6, 'la nouvelle commande déclenche réellement les oscillateurs du signal sonore');
+    await screenshot(cashierPage, 'caisse-nouvelle-commande-table-7.png');
+
     await page.locator('#tuc-order-success').getByRole('button', { name: 'Suivre ma commande' }).click();
     const tracking = page.locator('#tuc-tracking-dialog');
     await tracking.waitFor({ state: 'visible' });
     await tracking.locator('.tuc-tracking-state').getByText('Reçue').waitFor();
     assert((await tracking.innerText()).includes('Plat initial E2E') === false, 'le suivi client ne révèle pas le contenu de la commande');
-    await screenshot(page, 'suivi-client-mobile.png');
 
-    checkpoint = 'commande client, panier et suivi';
-    // Le jeton client est conservé uniquement sur cet appareil et reste disponible après rechargement.
+    checkpoint = 'traitement complet de la commande Table 7 dans la caisse';
+    const etapesCaisse = [
+      ['nouvelle', 'acceptee'],
+      ['acceptee', 'preparation'],
+      ['preparation', 'prete'],
+      ['prete', 'servie'],
+    ];
+    for (const [onglet, statutSuivant] of etapesCaisse) {
+      await cashierPage.locator(`.ong[data-statut="${onglet}"]`).click();
+      const carteCommande = cashierPage.locator('#liste .carte').filter({ hasText: 'Table 7' });
+      await carteCommande.waitFor();
+      const action = carteCommande.locator(`[data-avance][data-vers="${statutSuivant}"]`);
+      const statusResponse = cashierPage.waitForResponse((response) =>
+        response.url().includes('/caisse/statut') && response.request().method() === 'POST');
+      await action.click();
+      assert.equal((await statusResponse).status(), 200, `la caisse enregistre le statut ${statutSuivant}`);
+      await action.waitFor({ state: 'detached' });
+    }
+    await cashierPage.locator('.ong[data-statut="toutes"]').click();
+    const servedOrder = cashierPage.locator('#liste .carte').filter({ hasText: 'Table 7' });
+    await servedOrder.waitFor();
+    await servedOrder.getByText('Terminée · à encaisser').waitFor();
+    await screenshot(cashierPage, 'caisse-commande-table-7-servie.png');
+    await tracking.locator('[data-refresh-tracking]').click();
+    await tracking.locator('.tuc-tracking-state').getByText('Servie').waitFor();
+    await screenshot(page, 'suivi-client-table-7-mobile.png');
+
+    // Le lien de suivi reste enregistré sur l'appareil après rechargement.
     await tracking.locator('[data-close-tracking]').click();
     await page.reload({ waitUntil: 'networkidle' });
     const savedTracking = page.locator('#tuc-open-saved-tracking');
     await savedTracking.waitFor({ state: 'visible' });
     await savedTracking.click();
-    await page.locator('#tuc-tracking-dialog .tuc-tracking-state').getByText('Reçue').waitFor();
+    await page.locator('#tuc-tracking-dialog .tuc-tracking-state').getByText('Servie').waitFor();
 
     assert.deepEqual(pageErrors, [], `erreurs JavaScript navigateur: ${pageErrors.join('; ')}`);
-    console.log('PASS: WordPress Docker + navigateur Chromium mobile 390×844');
-    console.log('PASS: Espace Pro Menu/Boutique/Commandes, option conditionnelle, photo, publication, disponibilité, panier, commande et suivi');
+    console.log('PASS: QR réel de la table 7 → menu → options → panier → commande → suivi client');
+    console.log('PASS: caisse restaurateur → nouvelle commande Table 7 → signal sonore généré → acceptée → cuisine → prête → servie');
   } catch (error) {
     const diagnostic = {
       checkpoint,

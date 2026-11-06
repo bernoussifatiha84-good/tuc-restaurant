@@ -282,10 +282,15 @@ svg{display:block;flex:none}
       </span>
     </div>
 
-    <div style="display:flex;align-items:center;gap:10px;padding:10px 0 12px">
+    <div style="display:flex;flex-wrap:wrap;align-items:center;gap:10px;padding:10px 0 12px">
       <button class="serv" id="serv" type="button" aria-pressed="true">
         <i></i><span id="serv-txt">Service ouvert</span>
       </button>
+      <button class="etat" id="btn-son" type="button" aria-pressed="false" title="Activer le signal sonore des nouvelles commandes" style="height:34px;padding:0 10px">
+        <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M11 5 6 9H3v6h3l5 4z"/><path d="M15.5 8.5a5 5 0 0 1 0 7"/><path d="M19 5a10 10 0 0 1 0 14"/></svg>
+        <span id="btn-son-txt">Son</span>
+      </button>
+      <span id="son-status" role="status" aria-live="polite" style="position:absolute;width:1px;height:1px;overflow:hidden;clip-path:inset(50%)">Son désactivé</span>
       <button class="etat" id="btn-push" type="button" style="margin-inline-start:auto;height:34px;padding:0 12px">
         <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 8A6 6 0 0 0 6 8c0 7-3 9-3 9h18s-3-2-3-9"/><path d="M13.7 21a2 2 0 0 1-3.4 0"/></svg>
         <span id="btn-push-txt">Alertes</span>
@@ -319,6 +324,7 @@ svg{display:block;flex:none}
     <div class="tx">
       <h3>Activez les alertes</h3>
       <p id="push-txt">Sans ça, vous ne verrez les commandes que si cet écran est ouvert.</p>
+      <small style="display:block;margin-top:6px;color:var(--g600)">En arrière-plan, le son dépend aussi du volume, du mode silencieux et des réglages de notifications de ce téléphone. Activez et testez le bouton « Son » en caisse.</small>
       <button class="go" id="btn-activer" type="button">
         Activer les alertes
       </button>
@@ -367,6 +373,7 @@ svg{display:block;flex:none}
     dernierNb: null,
     envoi: false,
   };
+  const son = { context: null, actif: false };
 
   /* ---------------- outils ---------------- */
   const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) =>
@@ -380,6 +387,63 @@ svg{display:block;flex:none}
     t.classList.add('on');
     clearTimeout(t._h);
     t._h = setTimeout(() => t.classList.remove('on'), 2600);
+  }
+
+  function majBoutonSon(actif, message) {
+    const bouton = $('#btn-son');
+    if (bouton) {
+      bouton.setAttribute('aria-pressed', String(actif));
+      $('#btn-son-txt').textContent = actif ? 'Son actif' : 'Son';
+    }
+    $('#son-status').textContent = message;
+  }
+
+  function jouerSignalSonore() {
+    if (!son.actif || !son.context || son.context.state !== 'running') return false;
+    const debut = son.context.currentTime;
+    [0, 0.2, 0.4].forEach((retard, index) => {
+      const oscillateur = son.context.createOscillator();
+      const volume = son.context.createGain();
+      oscillateur.type = 'sine';
+      oscillateur.frequency.setValueAtTime(index === 1 ? 880 : 660, debut + retard);
+      volume.gain.setValueAtTime(0.0001, debut + retard);
+      volume.gain.exponentialRampToValueAtTime(0.18, debut + retard + 0.015);
+      volume.gain.exponentialRampToValueAtTime(0.0001, debut + retard + 0.16);
+      oscillateur.connect(volume);
+      volume.connect(son.context.destination);
+      oscillateur.start(debut + retard);
+      oscillateur.stop(debut + retard + 0.17);
+    });
+    majBoutonSon(true, 'Alerte sonore jouée pour une nouvelle commande.');
+    return true;
+  }
+
+  async function basculerSon() {
+    const bouton = $('#btn-son');
+    bouton.disabled = true;
+    try {
+      if (son.actif) {
+        await son.context.suspend();
+        son.actif = false;
+        majBoutonSon(false, 'Son désactivé.');
+      } else {
+        const AudioContextClass = window.AudioContext || window.webkitAudioContext;
+        if (!AudioContextClass) throw new Error('Audio non pris en charge par ce navigateur.');
+        son.context = son.context || new AudioContextClass();
+        await son.context.resume();
+        son.actif = son.context.state === 'running';
+        if (!son.actif) throw new Error('Autorisez le son sur cet appareil puis réessayez.');
+        majBoutonSon(true, 'Son activé; signal de test joué.');
+        jouerSignalSonore();
+        toast('Son activé sur cet appareil');
+      }
+    } catch (e) {
+      son.actif = false;
+      majBoutonSon(false, e.message || 'Impossible d’activer le son.');
+      toast(e.message || 'Impossible d’activer le son');
+    } finally {
+      bouton.disabled = false;
+    }
   }
 
   async function api(chemin, options = {}) {
@@ -514,6 +578,7 @@ svg{display:block;flex:none}
       // nouvelle arrivée quand on est sur l'onglet « nouvelles »
       if (etat.dernierNb !== null && etat.commandes.length > etat.dernierNb) {
         if (navigator.vibrate) navigator.vibrate([90, 50, 90]);
+        if (!jouerSignalSonore()) majBoutonSon(false, 'Nouvelle commande détectée; activez le son pour entendre les prochaines alertes.');
         toast('Nouvelle commande');
       }
       etat.dernierNb = etat.commandes.length;
@@ -786,6 +851,7 @@ svg{display:block;flex:none}
       majService(!(moi.resto && moi.resto.ferme));
       if (moi.resto && moi.resto.nom) $('#nom-resto').textContent = moi.resto.nom;
 
+      $('#btn-son').addEventListener('click', basculerSon);
       await initPush(moi.vapid);
       const btnPush = $('#btn-push');
       if (btnPush) {

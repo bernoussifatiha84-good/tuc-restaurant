@@ -69,6 +69,7 @@ self.addEventListener('push', (e) => {
       icon: './icone-192.png',
       tag: d.tag,
       renotify: true,
+      silent: false,
       requireInteraction: d.requireInteraction !== false,
       vibrate: d.vibrate || [120, 60, 120, 60, 220],
       badge: './icone-192.png',

@@ -42,7 +42,7 @@ update_post_meta((int) $restaurantId, 'tuc_ferme', '0');
 update_post_meta((int) $restaurantId, 'tuc_frais', 5);
 update_post_meta((int) $restaurantId, 'tuc_minimum', 10);
 update_post_meta((int) $restaurantId, 'tuc_modes', ['livraison', 'emporter', 'table']);
-update_post_meta((int) $restaurantId, 'tuc_tables', 5);
+update_post_meta((int) $restaurantId, 'tuc_tables', 7);
 
 $options = [
     'version' => TUC_Options::VERSION,

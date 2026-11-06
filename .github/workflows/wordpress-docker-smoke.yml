@@ -153,6 +153,11 @@ jobs:
             exit "$status"
           fi
 
+      - name: Vérifier le contrat sonore et les notifications push
+        run: |
+          node --check tests/push-notification-contract.js
+          node tests/push-notification-contract.js
+
       - name: Créer un restaurant et un compte restaurateur synthétiques
         shell: bash
         run: |
