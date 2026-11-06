@@ -125,12 +125,33 @@ jobs:
             exit "$regression_status"
           fi
 
-      - name: Installer Chromium pour le parcours navigateur mobile
+      - name: Installer le client Playwright
         shell: bash
         run: |
           set -euo pipefail
-          npm install --prefix "$RUNNER_TEMP/tuc-playwright" --no-audit --no-fund playwright@1.56.1
-          "$RUNNER_TEMP/tuc-playwright/node_modules/.bin/playwright" install --with-deps chromium
+          if output="$(npm install --prefix "$RUNNER_TEMP/tuc-playwright" --no-audit --no-fund playwright@1.56.1 2>&1)"; then
+            printf '%s\n' "$output"
+          else
+            status=$?
+            printf '%s\n' "$output"
+            excerpt="$(printf '%s\n' "$output" | tail -c 1200 | tr '\n' ' ' | sed 's/%/%25/g; s/\r/%0D/g')"
+            echo "::error title=Playwright npm install failed::$excerpt"
+            exit "$status"
+          fi
+
+      - name: Installer Chromium et ses dépendances système
+        shell: bash
+        run: |
+          set -euo pipefail
+          if output="$("$RUNNER_TEMP/tuc-playwright/node_modules/.bin/playwright" install --with-deps chromium 2>&1)"; then
+            printf '%s\n' "$output"
+          else
+            status=$?
+            printf '%s\n' "$output"
+            excerpt="$(printf '%s\n' "$output" | tail -c 1200 | tr '\n' ' ' | sed 's/%/%25/g; s/\r/%0D/g')"
+            echo "::error title=Chromium install failed::$excerpt"
+            exit "$status"
+          fi
 
       - name: Créer un restaurant et un compte restaurateur synthétiques
         shell: bash
