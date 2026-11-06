@@ -175,7 +175,15 @@ jobs:
         run: |
           set -euo pipefail
           node --check tests/mobile-e2e.js
-          node tests/mobile-e2e.js
+          if output="$(node tests/mobile-e2e.js 2>&1)"; then
+            printf '%s\n' "$output"
+          else
+            status=$?
+            printf '%s\n' "$output"
+            excerpt="$(printf '%s\n' "$output" | tail -c 1800 | tr '\n' ' ' | sed 's/%/%25/g; s/\r/%0D/g')"
+            echo "::error title=Mobile browser E2E failed::$excerpt"
+            exit "$status"
+          fi
 
       - name: Publier les captures du parcours mobile
         if: always()

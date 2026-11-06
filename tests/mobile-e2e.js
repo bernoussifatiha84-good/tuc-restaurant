@@ -9,6 +9,7 @@ const username = process.env.TUC_MOBILE_E2E_USER || 'tuc-mobile-e2e';
 const password = process.env.TUC_MOBILE_E2E_PASSWORD || '';
 const artifacts = process.env.TUC_MOBILE_E2E_ARTIFACTS || '/tmp/tuc-mobile-e2e-artifacts';
 const pageErrors = [];
+let checkpoint = 'initialisation';
 
 function crc32(buffer) {
   let crc = 0xffffffff;
@@ -55,6 +56,7 @@ async function main() {
   page.on('pageerror', (error) => pageErrors.push(error.message));
 
   try {
+    checkpoint = 'connexion restaurateur';
     await page.goto(`${baseUrl}/wp-login.php`, { waitUntil: 'domcontentloaded' });
     await page.locator('#user_login').fill(username);
     await page.locator('#user_pass').fill(password);
@@ -70,6 +72,7 @@ async function main() {
     assert.equal(proOverflow, false, 'Espace Pro mobile ne déborde pas horizontalement à 390 px');
     await screenshot(page, 'espace-pro-menu-mobile.png');
 
+    checkpoint = 'affichage Espace Pro mobile';
     // Parcours réel du formulaire Menu: options, prix/promo, photo et publication.
     await page.locator('#tuc-new-item').click();
     await page.locator('#tuc-item-name').fill('Nouveau plat mobile E2E');
@@ -93,12 +96,14 @@ async function main() {
     await createdRow.locator('img.tuc-menu-thumb').waitFor();
     assert((await createdRow.innerText()).includes('Indisponible') === false, 'nouveau plat publié et disponible');
 
+    checkpoint = 'création du plat, options et photo';
     // Modification rapide de disponibilité depuis le même écran tactile.
     await createdRow.locator('[data-edit]').click();
     await page.locator('#tuc-item-available').uncheck();
     await page.locator('#tuc-menu-editor [data-save-status="publish"]').click();
     await page.locator('#tuc-menu-list .tuc-menu-row').filter({ hasText: 'Nouveau plat mobile E2E' }).getByText(/Indisponible/).waitFor();
 
+    checkpoint = 'modification de disponibilité';
     // Réglages de boutique: mise en pause et reprise contrôlées côté serveur.
     await page.getByRole('button', { name: 'Boutique', exact: true }).click();
     await page.locator('#tuc-store-settings').waitFor();
@@ -109,6 +114,7 @@ async function main() {
     await page.locator('#tuc-store-settings button[type="submit"]').click();
     await page.locator('#tuc-open-dot:not(.is-closed)').waitFor();
 
+    checkpoint = 'réglages boutique ouvert/fermé';
     // Commande réelle de test créée côté serveur, puis traitée dans l’Espace Pro.
     await page.getByRole('button', { name: /Commandes/ }).click();
     const orderCard = page.locator('#tuc-orders-list .tuc-order-card').first();
@@ -118,6 +124,7 @@ async function main() {
     await orderCard.getByText('Acceptée').waitFor();
     await screenshot(page, 'espace-pro-commandes-mobile.png');
 
+    checkpoint = 'traitement de la commande dans Espace Pro';
     // Menu public -> option conditionnelle -> panier -> commande -> suivi tokenisé.
     const clientResponse = await page.goto(`${baseUrl}/tuc-mobile-e2e/`, { waitUntil: 'networkidle' });
     assert(clientResponse && clientResponse.status() === 200, 'fiche restaurant publique servie par WordPress Docker');
@@ -143,6 +150,7 @@ async function main() {
     assert((await tracking.innerText()).includes('Plat initial E2E') === false, 'le suivi client ne révèle pas le contenu de la commande');
     await screenshot(page, 'suivi-client-mobile.png');
 
+    checkpoint = 'commande client, panier et suivi';
     // Le jeton client est conservé uniquement sur cet appareil et reste disponible après rechargement.
     await tracking.locator('[data-close-tracking]').click();
     await page.reload({ waitUntil: 'networkidle' });
@@ -155,6 +163,14 @@ async function main() {
     console.log('PASS: WordPress Docker + navigateur Chromium mobile 390×844');
     console.log('PASS: Espace Pro Menu/Boutique/Commandes, option conditionnelle, photo, publication, disponibilité, panier, commande et suivi');
   } catch (error) {
+    const diagnostic = {
+      checkpoint,
+      error: error.message,
+      pagePath: (() => { try { return new URL(page.url()).pathname; } catch { return ''; } })(),
+      pageTitle: await page.title().catch(() => ''),
+      pageErrors,
+    };
+    console.error(`MOBILE_E2E_FAILURE ${JSON.stringify(diagnostic)}`);
     await screenshot(page, 'mobile-e2e-failure.png').catch(() => {});
     throw error;
   } finally {
