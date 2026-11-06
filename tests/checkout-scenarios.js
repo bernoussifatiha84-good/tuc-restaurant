@@ -354,7 +354,7 @@ async function main() {
     const delayedOrderCard = staffPage.locator(`#liste .carte[data-id="${orderIds.suiviEnCours}"]`);
     await delayedOrderCard.waitFor({ timeout: 10000 });
     assert((await delayedOrderCard.innerText()).includes('À emporter'), 'la commande reçue apparaît dans la file du restaurant');
-    for (const [statut, label, nextAction] of [['acceptee', 'Acceptée', 'En cuisine'], ['preparation', 'En préparation', 'C’est prêt']]) {
+    for (const [statut, label, nextAction] of [['acceptee', 'Acceptée', 'En cuisine'], ['preparation', 'En préparation', 'est prêt']]) {
       const update = await staffPage.evaluate(async ({ id, statut }) => {
         const response = await fetch('/wp-json/tuc/v1/caisse/statut', {
           method: 'POST', credentials: 'same-origin',
