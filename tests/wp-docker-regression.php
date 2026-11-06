@@ -580,10 +580,9 @@ try {
     $otherOrderResponse = $rest('/tuc/v1/commande', [
         'resto' => (string) get_post($otherRestaurantId)->post_name,
         'table' => 0,
+        'mode'  => 'emporter',
         'tel'   => $otherOrderPhone,
         'total' => 7,
-        'lat'   => 33.589,
-        'lng'   => -7.621,
         'cle'   => 'second-restaurant-' . $suffix,
         'items' => [['id' => (int) $otherItemId, 'q' => 1]],
     ]);
