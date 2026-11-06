@@ -55,7 +55,7 @@ async function main() {
     hasTouch: true,
   });
   const page = await context.newPage();
-  page.on('pageerror', (error) => pageErrors.push(error.message));
+  page.on('pageerror', (error) => pageErrors.push(error.stack || error.message));
 
   try {
     checkpoint = 'connexion restaurateur';
@@ -136,7 +136,7 @@ async function main() {
     });
     await cashierContext.grantPermissions(['notifications'], { origin: new URL(baseUrl).origin });
     const cashierPage = await cashierContext.newPage();
-    cashierPage.on('pageerror', (error) => pageErrors.push(`caisse serveur: ${error.message}`));
+    cashierPage.on('pageerror', (error) => pageErrors.push(`caisse serveur: ${error.stack || error.message}`));
     await cashierPage.addInitScript(() => {
       if (!window.OscillatorNode) return;
       const start = window.OscillatorNode.prototype.start;
@@ -210,7 +210,7 @@ async function main() {
       viewport: { width: 390, height: 844 }, deviceScaleFactor: 1, isMobile: true, hasTouch: true,
     });
     const backupPage = await backupContext.newPage();
-    backupPage.on('pageerror', (error) => pageErrors.push(`caisse caissier: ${error.message}`));
+    backupPage.on('pageerror', (error) => pageErrors.push(`caisse caissier: ${error.stack || error.message}`));
     await backupPage.goto(`${baseUrl}/wp-login.php`, { waitUntil: 'domcontentloaded' });
     await backupPage.locator('#user_login').fill(cashierUsername);
     await backupPage.locator('#user_pass').fill(password);
