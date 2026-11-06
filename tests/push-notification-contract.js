@@ -19,17 +19,24 @@ const self = {
 };
 vm.runInNewContext(source, { self, URL, Promise, fetch: async () => { throw new Error('unused'); } });
 
-const payload = {
+const serverPayload = {
   titre: 'Nouvelle commande · Table 7',
   texte: '32 MAD · 1 article',
   url: '/caisse/?c=42',
   tag: 'tuc-cmd-42',
   commande: 42,
+  silent: false,
   requireInteraction: true,
   vibrate: [120, 60, 120, 60, 220],
 };
+const cashierPayload = {
+  ...serverPayload,
+  titre: 'Copie silencieuse · Table 7',
+  silent: true,
+  vibrate: [],
+};
 
-async function envoyerPushAvecClients(clientsPourTest) {
+async function envoyerPush(payload, clientsPourTest) {
   clients = clientsPourTest;
   let completion;
   handlers.get('push')({
@@ -40,24 +47,29 @@ async function envoyerPushAvecClients(clientsPourTest) {
 }
 
 async function main() {
-  await envoyerPushAvecClients([]);
-  assert.equal(notifications.length, 1, 'le push en arrière-plan affiche une notification système');
-  assert.equal(notifications[0].title, payload.titre, 'la notification identifie la table 7');
-  assert.equal(notifications[0].options.body, payload.texte, 'la notification donne le total et le nombre d’articles');
-  assert.equal(notifications[0].options.silent, false, 'la notification demande le son système par défaut');
-  assert.equal(notifications[0].options.requireInteraction, true, 'la notification reste visible jusqu’à action/fermeture');
-  assert.deepEqual(Array.from(notifications[0].options.vibrate), payload.vibrate, 'la notification demande une vibration');
+  await envoyerPush(serverPayload, []);
+  assert.equal(notifications.length, 1, 'le push arrière-plan affiche la notification du serveur');
+  assert.equal(notifications[0].title, serverPayload.titre, 'le serveur voit que la commande est à la table 7');
+  assert.equal(notifications[0].options.body, serverPayload.texte, 'le serveur voit le total et le nombre d’articles');
+  assert.equal(notifications[0].options.silent, false, 'le push du serveur demande le son système par défaut');
+  assert.equal(notifications[0].options.requireInteraction, true, 'la notification serveur reste visible');
+  assert.deepEqual(Array.from(notifications[0].options.vibrate), serverPayload.vibrate, 'le push serveur demande une vibration');
+
+  await envoyerPush(cashierPayload, []);
+  assert.equal(notifications.length, 2, 'le caissier reçoit aussi la commande');
+  assert.equal(notifications[1].options.silent, true, 'la notification de secours du caissier reste silencieuse');
+  assert.deepEqual(Array.from(notifications[1].options.vibrate), [], 'le caissier n’a pas de vibration de serveur');
 
   let refreshed = false;
-  await envoyerPushAvecClients([{
+  await envoyerPush(serverPayload, [{
     visibilityState: 'visible',
     focused: true,
     postMessage: (message) => { postedMessages.push(message); refreshed = true; },
   }]);
-  assert.equal(refreshed, true, 'si la caisse est au premier plan, le push demande son rafraîchissement');
+  assert.equal(refreshed, true, 'si la caisse serveur est au premier plan, le push demande son rafraîchissement');
   assert.deepEqual(JSON.parse(JSON.stringify(postedMessages[0])), { type: 'tuc-rafraichir', commande: 42 });
-  assert.equal(notifications.length, 1, 'pas de notification en double quand la caisse est déjà visible');
-  console.log('PASS: push Table 7 en arrière-plan → notification non silencieuse, persistante et vibrante; caisse visible → rafraîchissement');
+  assert.equal(notifications.length, 2, 'pas de notification système en double quand la caisse est déjà visible');
+  console.log('PASS: Table 7 → serveur bip/vibreur, caissier notification silencieuse, caisse visible rafraîchie');
 }
 
 main().catch((error) => {

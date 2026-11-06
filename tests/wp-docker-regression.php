@@ -145,7 +145,10 @@ try {
     $assert($ownerRole->has_cap(TUC_Roles::CAP_MANAGE_STAFF)
         && !$managerRole->has_cap(TUC_Roles::CAP_MANAGE_STAFF)
         && $cashierRole->has_cap(TUC_Roles::CAP_UPDATE_ORDERS)
-        && !$serverRole->has_cap(TUC_Roles::CAP_ACCESS_CAISSE), 'les capacités métier suivent le moindre privilège');
+        && $serverRole->has_cap(TUC_Roles::CAP_ACCESS_CAISSE)
+        && $serverRole->has_cap(TUC_Roles::CAP_VIEW_ORDERS)
+        && $serverRole->has_cap(TUC_Roles::CAP_UPDATE_ORDERS)
+        && $serverRole->has_cap(TUC_Roles::CAP_AUDIBLE_ORDER_ALERTS), 'le serveur suit les commandes et seul son rôle reçoit les alertes prioritaires');
     $assert(!$ownerRole->has_cap('manage_options') && !$managerRole->has_cap('manage_options')
         && !$cashierRole->has_cap('manage_options') && !$serverRole->has_cap('manage_options'), 'aucun rôle restaurateur ne reçoit les droits administrateur WordPress');
     $assert(!$ownerRole->has_cap('edit_tuc_menu_items') && !$managerRole->has_cap('edit_tuc_menu_items'),
@@ -578,19 +581,36 @@ try {
         'user_email' => 'tuc-cashier-' . substr($suffix, 0, 8) . '@example.invalid',
         'role' => 'tuc_caissier',
     ]);
+    $serverUserId = wp_insert_user([
+        'user_login' => 'tuc-server-' . substr($suffix, 0, 8),
+        'user_pass' => wp_generate_password(32, true, true),
+        'user_email' => 'tuc-server-' . substr($suffix, 0, 8) . '@example.invalid',
+        'role' => 'tuc_serveur',
+    ]);
     $unassignedUserId = wp_insert_user([
         'user_login' => 'tuc-unassigned-' . substr($suffix, 0, 8),
         'user_pass' => wp_generate_password(32, true, true),
         'user_email' => 'tuc-unassigned-' . substr($suffix, 0, 8) . '@example.invalid',
         'role' => 'tuc_caissier',
     ]);
-    foreach ([$ownerUserId, $managerUserId, $cashierUserId, $unassignedUserId] as $roleUserId) {
+    foreach ([$ownerUserId, $managerUserId, $cashierUserId, $serverUserId, $unassignedUserId] as $roleUserId) {
         $assert(!is_wp_error($roleUserId), 'fixture utilisateur métier créée');
         $created['users'][] = (int) $roleUserId;
     }
     update_user_meta((int) $ownerUserId, 'tuc_resto_id', (int) $restaurantId);
     update_user_meta((int) $managerUserId, 'tuc_resto_id', (int) $otherRestaurantId);
     update_user_meta((int) $cashierUserId, 'tuc_resto_id', (int) $restaurantId);
+    update_user_meta((int) $serverUserId, 'tuc_resto_id', (int) $restaurantId);
+    $serverAlert = TUC_Caisse::profil_alerte((int) $serverUserId, 'table', (int) $restaurantId);
+    $cashierAlert = TUC_Caisse::profil_alerte((int) $cashierUserId, 'table', (int) $restaurantId);
+    $managerAlert = TUC_Caisse::profil_alerte((int) $managerUserId, 'table', (int) $otherRestaurantId);
+    $serverOtherTenantAlert = TUC_Caisse::profil_alerte((int) $serverUserId, 'table', (int) $otherRestaurantId);
+    $serverDeliveryAlert = TUC_Caisse::profil_alerte((int) $serverUserId, 'livraison', (int) $restaurantId);
+    $assert($serverAlert['audible'] && !$serverAlert['silent'] && $serverAlert['vibrate'] !== []
+        && !$cashierAlert['audible'] && $cashierAlert['silent'] && $cashierAlert['vibrate'] === []
+        && !$managerAlert['audible'] && $managerAlert['silent']
+        && !$serverOtherTenantAlert['audible'] && !$serverDeliveryAlert['audible'],
+        'bip/vibreur uniquement pour le serveur assigné à une commande à table; caissier/manager silencieux');
     $assert(TUC_Acces::peut(TUC_Roles::CAP_MANAGE_MENU, (int) $restaurantId, (int) $ownerUserId)
         && TUC_Acces::peut(TUC_Roles::CAP_MANAGE_MENU, (int) $otherRestaurantId, (int) $managerUserId)
         && !TUC_Acces::peut(TUC_Roles::CAP_MANAGE_MENU, (int) $restaurantId, (int) $managerUserId)
@@ -755,7 +775,28 @@ try {
     $assert($foreignCashierStatus->get_status() === 403
         && get_post_meta($orderId, 'tuc_statut', true) === 'nouvelle', 'la route de caisse refuse elle aussi une commande hors tenant');
 
+    wp_set_current_user((int) $serverUserId);
+    $serverOrders = TUC_Caisse::commandes(new WP_REST_Request('GET', '/tuc/v1/caisse/commandes'))->get_data()['commandes'] ?? [];
+    $serverOrderIds = array_map(static fn(array $order): int => (int) $order['id'], $serverOrders);
+    $serverMe = TUC_Caisse::moi()->get_data();
+    $serverStatusRequest = new WP_REST_Request('POST', '/tuc/v1/caisse/statut');
+    $serverStatusRequest->set_param('id', (int) $orderId);
+    $serverStatusRequest->set_param('statut', 'acceptee');
+    $serverStatusResult = TUC_Caisse::statut($serverStatusRequest);
+    $assert(TUC_Caisse::peut_acceder() && TUC_Caisse::peut_voir_commandes() && TUC_Caisse::peut_modifier_commandes()
+        && TUC_Caisse::mon_resto()->ID === (int) $restaurantId
+        && in_array((int) $orderId, $serverOrderIds, true)
+        && !in_array((int) $otherOrderId, $serverOrderIds, true)
+        && $serverStatusResult->get_status() === 200
+        && get_post_meta($orderId, 'tuc_statut', true) === 'acceptee'
+        && ($serverMe['alerte_sonore'] ?? false) === true,
+        'le serveur accède aux commandes de son store, suit leur statut et reçoit le profil sonore');
+    update_post_meta($orderId, 'tuc_statut', 'nouvelle');
+
     wp_set_current_user((int) $cashierUserId);
+    $cashierMe = TUC_Caisse::moi()->get_data();
+    $assert(($cashierMe['alerte_sonore'] ?? true) === false,
+        'le caissier reçoit un profil de notification silencieux, sans bip/vibreur');
     $assert(!TUC_Espace_Pro::permission_menu(), 'le caissier ne peut pas gérer le menu via les routes Espace Pro');
     $assert(TUC_Caisse::peut_acceder() && TUC_Caisse::peut_modifier_commandes()
         && !TUC_Caisse::peut_gerer_restaurant()

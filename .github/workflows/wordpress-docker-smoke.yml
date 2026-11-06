@@ -168,6 +168,8 @@ jobs:
             --entrypoint wp wpcli eval-file /opt/tuc-tests/wp-mobile-fixtures.php
           {
             printf 'TUC_MOBILE_E2E_USER=tuc-mobile-e2e\n'
+            printf 'TUC_MOBILE_E2E_SERVER_USER=tuc-mobile-server\n'
+            printf 'TUC_MOBILE_E2E_CASHIER_USER=tuc-mobile-cashier\n'
             printf 'TUC_MOBILE_E2E_PASSWORD=%s\n' "$mobile_password"
           } >> "$GITHUB_ENV"
 

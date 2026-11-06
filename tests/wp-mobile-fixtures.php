@@ -38,6 +38,28 @@ if (is_wp_error($restaurantId)) {
     WP_CLI::error('Impossible de créer le restaurant fictif : ' . $restaurantId->get_error_message());
 }
 update_user_meta((int) $userId, 'tuc_resto_id', (int) $restaurantId);
+
+foreach ([
+    ['login' => 'tuc-mobile-server', 'role' => 'tuc_serveur', 'email' => 'tuc-mobile-server@example.invalid'],
+    ['login' => 'tuc-mobile-cashier', 'role' => 'tuc_caissier', 'email' => 'tuc-mobile-cashier@example.invalid'],
+] as $staffFixture) {
+    $existingStaff = get_user_by('login', $staffFixture['login']);
+    if ($existingStaff instanceof WP_User) {
+        wp_delete_user($existingStaff->ID);
+    }
+    $staffId = wp_insert_user([
+        'user_login' => $staffFixture['login'],
+        'user_pass' => $password,
+        'user_email' => $staffFixture['email'],
+        'display_name' => $staffFixture['role'] === 'tuc_serveur' ? 'Serveur E2E (fictif)' : 'Caissier E2E (fictif)',
+        'role' => $staffFixture['role'],
+    ]);
+    if (is_wp_error($staffId)) {
+        WP_CLI::error('Impossible de créer le compte synthétique ' . $staffFixture['role'] . ' : ' . $staffId->get_error_message());
+    }
+    update_user_meta((int) $staffId, 'tuc_resto_id', (int) $restaurantId);
+}
+
 update_post_meta((int) $restaurantId, 'tuc_ferme', '0');
 update_post_meta((int) $restaurantId, 'tuc_frais', 5);
 update_post_meta((int) $restaurantId, 'tuc_minimum', 10);

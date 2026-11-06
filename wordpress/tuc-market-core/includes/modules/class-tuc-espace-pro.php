@@ -93,7 +93,7 @@ final class TUC_Espace_Pro
                   <option value="tuc_restaurateur" <?php selected($role, 'tuc_restaurateur'); ?>><?php esc_html_e('Restaurateur', 'tuc-core'); ?></option>
                   <option value="tuc_gestionnaire" <?php selected($role, 'tuc_gestionnaire'); ?>><?php esc_html_e('Gestionnaire', 'tuc-core'); ?></option>
                   <option value="tuc_caissier" <?php selected($role, 'tuc_caissier'); ?>><?php esc_html_e('Caissier', 'tuc-core'); ?></option>
-                  <option value="tuc_serveur" <?php selected($role, 'tuc_serveur'); ?>><?php esc_html_e('Serveur (accès non activé)', 'tuc-core'); ?></option>
+                  <option value="tuc_serveur" <?php selected($role, 'tuc_serveur'); ?>><?php esc_html_e('Serveur (commandes, bip + vibration à table)', 'tuc-core'); ?></option>
                 </select>
               </label>
               <label><?php esc_html_e('Restaurant', 'tuc-core'); ?>

@@ -6,6 +6,8 @@ const { chromium } = require('playwright');
 
 const baseUrl = process.env.TUC_MOBILE_E2E_URL || 'http://127.0.0.1:8080';
 const username = process.env.TUC_MOBILE_E2E_USER || 'tuc-mobile-e2e';
+const serverUsername = process.env.TUC_MOBILE_E2E_SERVER_USER || 'tuc-mobile-server';
+const cashierUsername = process.env.TUC_MOBILE_E2E_CASHIER_USER || 'tuc-mobile-cashier';
 const password = process.env.TUC_MOBILE_E2E_PASSWORD || '';
 const artifacts = process.env.TUC_MOBILE_E2E_ARTIFACTS || '/tmp/tuc-mobile-e2e-artifacts';
 const pageErrors = [];
@@ -128,10 +130,13 @@ async function main() {
     await orderCard.getByText('Acceptée').waitFor();
     await screenshot(page, 'espace-pro-commandes-mobile.png');
 
-    checkpoint = 'préparation de la caisse restaurateur et activation du son';
-    await context.grantPermissions(['notifications'], { origin: new URL(baseUrl).origin });
-    const cashierPage = await context.newPage();
-    cashierPage.on('pageerror', (error) => pageErrors.push(`caisse: ${error.message}`));
+    checkpoint = 'connexion du serveur et activation du bip + vibration';
+    const cashierContext = await browser.newContext({
+      viewport: { width: 390, height: 844 }, deviceScaleFactor: 1, isMobile: true, hasTouch: true,
+    });
+    await cashierContext.grantPermissions(['notifications'], { origin: new URL(baseUrl).origin });
+    const cashierPage = await cashierContext.newPage();
+    cashierPage.on('pageerror', (error) => pageErrors.push(`caisse serveur: ${error.message}`));
     await cashierPage.addInitScript(() => {
       if (!window.OscillatorNode) return;
       const start = window.OscillatorNode.prototype.start;
@@ -140,11 +145,17 @@ async function main() {
         return start.apply(this, args);
       };
     });
+    await cashierPage.goto(`${baseUrl}/wp-login.php`, { waitUntil: 'domcontentloaded' });
+    await cashierPage.locator('#user_login').fill(serverUsername);
+    await cashierPage.locator('#user_pass').fill(password);
+    await cashierPage.locator('#wp-submit').click();
+    await cashierPage.waitForLoadState('domcontentloaded');
+    assert(!cashierPage.url().includes('wp-login.php'), 'connexion au compte synthétique du serveur');
     const cashierResponse = await cashierPage.goto(`${baseUrl}/caisse/`, { waitUntil: 'networkidle' });
-    assert(cashierResponse && cashierResponse.status() === 200, 'caisse restaurateur servie par WordPress Docker');
-    await cashierPage.locator('#btn-son').click();
+    assert(cashierResponse && cashierResponse.status() === 200, 'le serveur accède à la caisse mobile de son restaurant');
+    await cashierPage.locator('#btn-son:not([hidden])').click();
     await cashierPage.locator('#btn-son[aria-pressed="true"]').waitFor();
-    assert((await cashierPage.evaluate(() => window.__tucToneStarts || 0)) >= 3, 'un tap déverrouille et joue le signal sonore de test');
+    assert((await cashierPage.evaluate(() => window.__tucToneStarts || 0)) >= 3, 'le serveur active le bip et la vibration avec un geste explicite');
     await cashierPage.locator('#etat.on').waitFor();
     await cashierPage.locator('#liste:not([hidden]), #vide:not([hidden])').waitFor();
     await screenshot(cashierPage, 'caisse-restaurateur-mobile.png');
@@ -192,7 +203,28 @@ async function main() {
     assert.equal(await tableOrder.getAttribute('data-id'), submittedReference.replace('#', ''), 'la commande de caisse correspond à celle du client');
     await cashierPage.locator('#son-status').getByText('Alerte sonore jouée', { exact: false }).waitFor();
     assert((await cashierPage.evaluate(() => window.__tucToneStarts || 0)) >= 6, 'la nouvelle commande déclenche réellement les oscillateurs du signal sonore');
-    await screenshot(cashierPage, 'caisse-nouvelle-commande-table-7.png');
+    await screenshot(cashierPage, 'caisse-serveur-nouvelle-commande-table-7.png');
+
+    checkpoint = 'notification silencieuse du caissier et accès au même restaurant';
+    const backupContext = await browser.newContext({
+      viewport: { width: 390, height: 844 }, deviceScaleFactor: 1, isMobile: true, hasTouch: true,
+    });
+    const backupPage = await backupContext.newPage();
+    backupPage.on('pageerror', (error) => pageErrors.push(`caisse caissier: ${error.message}`));
+    await backupPage.goto(`${baseUrl}/wp-login.php`, { waitUntil: 'domcontentloaded' });
+    await backupPage.locator('#user_login').fill(cashierUsername);
+    await backupPage.locator('#user_pass').fill(password);
+    await backupPage.locator('#wp-submit').click();
+    await backupPage.waitForLoadState('domcontentloaded');
+    assert(!backupPage.url().includes('wp-login.php'), 'connexion au compte synthétique du caissier');
+    const backupResponse = await backupPage.goto(`${baseUrl}/caisse/`, { waitUntil: 'networkidle' });
+    assert(backupResponse && backupResponse.status() === 200, 'le caissier accède à la caisse du même restaurant');
+    const cashierOrder = backupPage.locator('#liste .carte').filter({ hasText: 'Table 7' });
+    await cashierOrder.waitFor();
+    assert.equal(await backupPage.locator('#btn-son').isVisible(), false, 'le caissier voit la commande sans commande de bip/vibreur');
+    assert((await cashierOrder.innerText()).includes('Plat initial E2E'), 'le caissier reçoit aussi la commande Table 7');
+    await screenshot(backupPage, 'caisse-caissier-commande-table-7.png');
+    await cashierPage.bringToFront();
 
     await page.locator('#tuc-order-success').getByRole('button', { name: 'Suivre ma commande' }).click();
     const tracking = page.locator('#tuc-tracking-dialog');

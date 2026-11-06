@@ -56,6 +56,30 @@ final class TUC_Caisse
         return current_user_can('manage_options') || TUC_Acces::peut(TUC_Roles::CAP_MANAGE_RESTAURANT);
     }
 
+    /**
+     * Seul un serveur explicitement rattaché au restaurant reçoit le bip et
+     * la vibration d'une commande à table. Caissier et manager restent notifiés
+     * silencieusement comme filet de sécurité.
+     *
+     * @return array{audible:bool,silent:bool,vibrate:array<int,int>}
+     */
+    public static function profil_alerte(int $user_id, string $mode, int $restaurant_id): array
+    {
+        $user = get_userdata($user_id);
+        $serveur = $mode === 'table'
+            && $user instanceof WP_User
+            && in_array('tuc_serveur', (array) $user->roles, true)
+            && user_can($user_id, TUC_Roles::CAP_AUDIBLE_ORDER_ALERTS)
+            && (int) get_user_meta($user_id, 'tuc_resto_id', true) === $restaurant_id
+            && $restaurant_id > 0;
+
+        return [
+            'audible' => $serveur,
+            'silent' => !$serveur,
+            'vibrate' => $serveur ? [120, 60, 120, 60, 220] : [],
+        ];
+    }
+
     /** Vérifie la capacité métier et l'affectation explicite au restaurant. */
     public static function utilisateur_autorise_restaurant(int $user_id, int $restaurant_id, string $capability): bool
     {
@@ -353,6 +377,9 @@ final class TUC_Caisse
                 'ferme'  => get_post_meta($resto->ID, 'tuc_ferme', true) === '1',
             ] : null,
             'appareils'   => TUC_Push::nb_appareils(get_current_user_id()),
+            'alerte_sonore' => $resto instanceof WP_Post
+                ? self::profil_alerte(get_current_user_id(), 'table', $resto->ID)['audible']
+                : false,
             'vapid'       => TUC_Push::cle_publique(),
             'sw'          => self::base() . '/caisse/sw.js',
             'nonce'       => wp_create_nonce('wp_rest'),
@@ -492,11 +519,22 @@ final class TUC_Caisse
 
     public static function push_test(): WP_REST_Response
     {
+        $resto = self::mon_resto();
+        $profil = self::profil_alerte(
+            get_current_user_id(),
+            'table',
+            $resto instanceof WP_Post ? $resto->ID : 0
+        );
         $bilan = TUC_Push::envoyer(get_current_user_id(), [
-            'titre' => 'Test TUC',
-            'texte' => 'Si vous voyez ça, les commandes arriveront ici.',
+            'titre' => $profil['audible'] ? 'Test sonore TUC' : 'Test de notification TUC',
+            'texte' => $profil['audible']
+                ? 'Vérification du bip et de la vibration pour le serveur.'
+                : 'Notification silencieuse de contrôle pour la caisse.',
             'url'   => self::url(),
             'tag'   => 'tuc-test',
+            'silent' => $profil['silent'],
+            'vibrate' => $profil['vibrate'],
+            'requireInteraction' => true,
         ]);
 
         return new WP_REST_Response([
@@ -528,7 +566,8 @@ final class TUC_Caisse
         $total    = (float) get_post_meta($commande_id, 'tuc_total', true);
         $items    = (array) get_post_meta($commande_id, 'tuc_items', true);
 
-        $ou = $table > 0 ? 'Table ' . $table : ((int) get_post_meta($commande_id, 'tuc_frais', true) > 0 ? 'Livraison' : 'À emporter');
+        $mode = $table > 0 ? 'table' : ((int) get_post_meta($commande_id, 'tuc_frais', true) > 0 ? 'livraison' : 'emporter');
+        $ou = $table > 0 ? 'Table ' . $table : ($mode === 'livraison' ? 'Livraison' : 'À emporter');
         $nb = 0;
         foreach ($items as $l) {
             $nb += (int) ($l['q'] ?? 1);
@@ -545,7 +584,14 @@ final class TUC_Caisse
         ];
 
         foreach (self::comptes_du_resto($resto_id) as $user_id) {
-            TUC_Push::envoyer($user_id, $charge);
+            $profil = self::profil_alerte($user_id, $mode, $resto_id);
+            $chargePourCompte = $charge;
+            $chargePourCompte['silent'] = $profil['silent'];
+            $chargePourCompte['vibrate'] = $profil['vibrate'];
+            if ($mode === 'table' && !$profil['audible']) {
+                $chargePourCompte['texte'] .= ' · copie silencieuse';
+            }
+            TUC_Push::envoyer($user_id, $chargePourCompte);
         }
 
         /** Point d'extension : n8n, imprimante, KDS v2… plus tard, sans toucher ici. */
@@ -562,10 +608,15 @@ final class TUC_Caisse
             'meta_key'   => 'tuc_resto_id',
             'meta_value' => $resto_id,
             'fields'     => 'ID',
-            'number'     => 20,
+            'number'     => 0,
         ]);
         foreach ($users as $u) {
-            $ids[] = (int) $u;
+            $user_id = (int) $u;
+            if ((int) get_user_meta($user_id, 'tuc_resto_id', true) === $resto_id
+                && user_can($user_id, TUC_Roles::CAP_ACCESS_CAISSE)
+                && user_can($user_id, TUC_Roles::CAP_VIEW_ORDERS)) {
+                $ids[] = $user_id;
+            }
         }
 
         // au lancement : un seul resto, donc les admins du site sont la caisse

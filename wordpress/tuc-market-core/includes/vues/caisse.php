@@ -286,9 +286,9 @@ svg{display:block;flex:none}
       <button class="serv" id="serv" type="button" aria-pressed="true">
         <i></i><span id="serv-txt">Service ouvert</span>
       </button>
-      <button class="etat" id="btn-son" type="button" aria-pressed="false" title="Activer le signal sonore des nouvelles commandes" style="height:34px;padding:0 10px">
+      <button class="etat" id="btn-son" type="button" aria-pressed="false" title="Activer le bip et la vibration des commandes à table" style="height:34px;padding:0 10px" <?php echo !$tuc_resto || !TUC_Caisse::profil_alerte(get_current_user_id(), 'table', $tuc_resto->ID)['audible'] ? 'hidden' : ''; ?>>
         <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M11 5 6 9H3v6h3l5 4z"/><path d="M15.5 8.5a5 5 0 0 1 0 7"/><path d="M19 5a10 10 0 0 1 0 14"/></svg>
-        <span id="btn-son-txt">Son</span>
+        <span id="btn-son-txt">Bip + vibreur</span>
       </button>
       <span id="son-status" role="status" aria-live="polite" style="position:absolute;width:1px;height:1px;overflow:hidden;clip-path:inset(50%)">Son désactivé</span>
       <button class="etat" id="btn-push" type="button" style="margin-inline-start:auto;height:34px;padding:0 12px">
@@ -371,6 +371,8 @@ svg{display:block;flex:none}
     minuteur: null,
     minuteurAge: null,
     dernierNb: null,
+    idsConnus: new Set(),
+    alerteSonore: false,
     envoi: false,
   };
   const son = { context: null, actif: false };
@@ -393,13 +395,13 @@ svg{display:block;flex:none}
     const bouton = $('#btn-son');
     if (bouton) {
       bouton.setAttribute('aria-pressed', String(actif));
-      $('#btn-son-txt').textContent = actif ? 'Son actif' : 'Son';
+      $('#btn-son-txt').textContent = actif ? 'Alertes actives' : 'Bip + vibreur';
     }
     $('#son-status').textContent = message;
   }
 
   function jouerSignalSonore() {
-    if (!son.actif || !son.context || son.context.state !== 'running') return false;
+    if (!etat.alerteSonore || !son.actif || !son.context || son.context.state !== 'running') return false;
     const debut = son.context.currentTime;
     [0, 0.2, 0.4].forEach((retard, index) => {
       const oscillateur = son.context.createOscillator();
@@ -433,9 +435,10 @@ svg{display:block;flex:none}
         await son.context.resume();
         son.actif = son.context.state === 'running';
         if (!son.actif) throw new Error('Autorisez le son sur cet appareil puis réessayez.');
-        majBoutonSon(true, 'Son activé; signal de test joué.');
+        majBoutonSon(true, 'Bip et vibration activés; signal de test envoyé.');
+        if (navigator.vibrate) navigator.vibrate([90, 50, 90]);
         jouerSignalSonore();
-        toast('Son activé sur cet appareil');
+        toast('Bip + vibration activés sur cet appareil');
       }
     } catch (e) {
       son.actif = false;
@@ -575,12 +578,21 @@ svg{display:block;flex:none}
         });
       }
 
-      // nouvelle arrivée quand on est sur l'onglet « nouvelles »
-      if (etat.dernierNb !== null && etat.commandes.length > etat.dernierNb) {
-        if (navigator.vibrate) navigator.vibrate([90, 50, 90]);
-        if (!jouerSignalSonore()) majBoutonSon(false, 'Nouvelle commande détectée; activez le son pour entendre les prochaines alertes.');
-        toast('Nouvelle commande');
+      // Bip/vibration réservés au serveur opt-in pour les commandes à table.
+      const arrivantes = etat.commandes.filter((c) => !etat.idsConnus.has(Number(c.id)));
+      if (etat.dernierNb !== null && etat.statut === 'nouvelle' && arrivantes.length) {
+        const table = arrivantes.find((c) => c.mode === 'table');
+        if (table && etat.alerteSonore && son.actif) {
+          if (navigator.vibrate) navigator.vibrate([120, 60, 120, 60, 220]);
+          jouerSignalSonore();
+          toast('Nouvelle commande · Table ' + table.table);
+        } else if (table && !etat.alerteSonore) {
+          toast('Commande Table ' + table.table + ' — copie silencieuse');
+        } else {
+          toast('Nouvelle commande');
+        }
       }
+      etat.commandes.forEach((c) => etat.idsConnus.add(Number(c.id)));
       etat.dernierNb = etat.commandes.length;
 
       rendre();
@@ -848,6 +860,9 @@ svg{display:block;flex:none}
     try {
       const moi = await api('caisse/moi');
       etat.vapid = moi.vapid;
+      etat.alerteSonore = moi.alerte_sonore === true;
+      $('#btn-son').hidden = !etat.alerteSonore;
+      if (!etat.alerteSonore) $('#son-status').textContent = 'Les alertes sonores sont réservées au serveur du restaurant.';
       majService(!(moi.resto && moi.resto.ferme));
       if (moi.resto && moi.resto.nom) $('#nom-resto').textContent = moi.resto.nom;
 
