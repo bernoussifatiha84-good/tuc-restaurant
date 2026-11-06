@@ -132,7 +132,7 @@ async function main() {
     const tablePage = await context.newPage();
     tablePage.on('pageerror', (error) => errors.push(error.stack || error.message));
     await tablePage.goto(`${baseUrl}/tuc-mobile-e2e/?t=7`, { waitUntil: 'networkidle' });
-    assert.equal(await tablePage.evaluate(() => TUCClient.loggedIn), true, 'le compte reste connecté après navigation');
+    assert.equal(Boolean(await tablePage.evaluate(() => TUCClient.loggedIn)), true, 'le compte reste connecté après navigation');
     await ajouterPlat(tablePage);
     assert.equal(await tablePage.locator('#tuc-order-mode').isVisible(), false, 'le QR fixe le mode à table');
     assert((await tablePage.locator('.tuc-table-checkout-note').innerText()).includes('table 7'));
