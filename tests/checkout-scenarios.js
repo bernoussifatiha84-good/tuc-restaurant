@@ -126,23 +126,77 @@ async function testerRechercheParQuartier(browser) {
   const page = await granted.newPage();
   try {
     await page.goto(baseUrl, { waitUntil: 'networkidle' });
-    assert.equal(await page.evaluate(() => sessionStorage.getItem('tuc-search-geo-calls')), null,
-      'la page de recherche ne demande pas le GPS avant une action du client');
-    await page.locator('#tuc-addr').click();
     await page.locator('#tuc-location-dialog[open]').waitFor();
-    assert.equal(await page.getByRole('dialog', { name: 'Choisir une zone de recherche' }).count(), 1, 'la modale de zone a un nom accessible');
+    assert.equal(await page.getByRole('dialog', { name: 'Où souhaitez-vous commander ?' }).count(), 1,
+      'la fenêtre de localisation apparaît au premier accès avec un nom accessible');
+    assert.equal(await page.evaluate(() => sessionStorage.getItem('tuc-search-geo-calls')), null,
+      'l’ouverture automatique de la fenêtre ne demande jamais le GPS');
     await page.locator('#tuc-use-location').click();
-    await page.waitForURL((url) => url.searchParams.get('q') === 'gauthier', { timeout: 10000 });
+    await page.waitForURL((url) => url.searchParams.get('ville') === 'casablanca', { timeout: 10000 });
     await page.waitForLoadState('networkidle');
     assert.equal(await page.evaluate(() => sessionStorage.getItem('tuc-search-geo-calls')), '1',
-      'une seule demande GPS est faite après le clic explicite');
+      'une seule demande GPS est faite après le clic explicite du client');
     assert.equal(new URL(page.url()).searchParams.has('lat'), false, 'la latitude précise ne quitte pas le navigateur dans l’URL');
     assert.equal(new URL(page.url()).searchParams.has('lng'), false, 'la longitude précise ne quitte pas le navigateur dans l’URL');
-    assert.equal(await page.locator('.quartier-card a[href*="tuc-mobile-e2e"]').count(), 1,
-      'la zone estimée filtre sur le vrai quartier WordPress et montre la fiche correspondante');
-    assert((await page.locator('h1').innerText()).includes('Gauthier'));
+    assert.equal(await page.locator('.quartier-card').count(), 2,
+      'la ville affiche les deux fiches WordPress réelles de test');
+    assert((await page.locator('#tuc-location-nearest').innerText()).includes('Gauthier'),
+      'la zone estimée à partir de la position est annoncée sans la présenter comme une adresse exacte');
+    assert.equal(await page.locator('.quartier-distance:not([hidden])').count(), 2,
+      'une distance est calculée uniquement quand les coordonnées du restaurant existent');
+    const distanceLabels = await page.locator('.quartier-distance').allTextContents();
+    assert(distanceLabels.every((label) => label.includes('à vol d’oiseau')),
+      'les distances calculées sont explicitement indiquées comme distances à vol d’oiseau');
+    const distanceKm = distanceLabels.map((label) => Number.parseFloat(label.match(/[0-9]+(?:,[0-9]+)?/)[0].replace(',', '.')));
+    assert(distanceKm[0] < distanceKm[1], 'les restaurants sont triés du plus proche au plus éloigné selon leurs coordonnées réelles');
+    assert((await page.locator('.quartier-card').first().innerText()).includes('Restaurant E2E fictif'),
+      'le restaurant dont les coordonnées correspondent au client est en premier');
   } finally {
     await granted.close();
+  }
+
+  const impreciseContext = await browser.newContext({
+    viewport: { width: 390, height: 844 }, isMobile: true, hasTouch: true,
+    geolocation: { latitude: 33.5900, longitude: -7.6280, accuracy: 2000 },
+  });
+  await impreciseContext.grantPermissions(['geolocation'], { origin });
+  const imprecisePage = await impreciseContext.newPage();
+  try {
+    await imprecisePage.goto(baseUrl, { waitUntil: 'networkidle' });
+    await imprecisePage.locator('#tuc-location-dialog[open]').waitFor();
+    await imprecisePage.locator('#tuc-use-location').click();
+    await imprecisePage.getByText('pas assez précise', { exact: false }).waitFor();
+    await imprecisePage.locator('#tuc-manual-location:not([hidden])').waitFor();
+    assert.equal(new URL(imprecisePage.url()).searchParams.has('ville'), false,
+      'une position trop imprécise ne déclenche pas un tri ou une distance inventés');
+    assert(await imprecisePage.locator('.tuc-quartier-list a').count() > 0,
+      'une précision insuffisante ouvre le choix manuel');
+  } finally {
+    await impreciseContext.close();
+  }
+
+  const manualChoiceContext = await browser.newContext({ viewport: { width: 390, height: 844 }, isMobile: true, hasTouch: true });
+  await manualChoiceContext.addInitScript(() => {
+    Object.defineProperty(navigator, 'geolocation', { configurable: true, value: {
+      getCurrentPosition() {
+        sessionStorage.setItem('tuc-search-geo-calls', String(Number(sessionStorage.getItem('tuc-search-geo-calls') || 0) + 1));
+      },
+    } });
+  });
+  const manualChoicePage = await manualChoiceContext.newPage();
+  try {
+    await manualChoicePage.goto(baseUrl, { waitUntil: 'networkidle' });
+    await manualChoicePage.locator('#tuc-location-dialog[open]').waitFor();
+    await manualChoicePage.locator('#tuc-location-choose-manual').click();
+    await manualChoicePage.locator('#tuc-manual-location:not([hidden])').waitFor();
+    assert.equal(await manualChoicePage.evaluate(() => sessionStorage.getItem('tuc-search-geo-calls')), null,
+      'choisir manuellement dès la fenêtre d’accueil ne sollicite pas le GPS');
+    await manualChoicePage.locator('.tuc-city-list a[data-city="casablanca"]').click();
+    await manualChoicePage.waitForURL((url) => url.searchParams.get('ville') === 'casablanca');
+    assert.equal(await manualChoicePage.evaluate(() => sessionStorage.getItem('tuc-search-geo-calls')), null,
+      'la sélection manuelle de ville est entièrement indépendante du GPS');
+  } finally {
+    await manualChoiceContext.close();
   }
 
   const denied = await browser.newContext({ viewport: { width: 390, height: 844 }, isMobile: true, hasTouch: true });
@@ -157,21 +211,36 @@ async function testerRechercheParQuartier(browser) {
   const fallback = await denied.newPage();
   try {
     await fallback.goto(baseUrl, { waitUntil: 'networkidle' });
-    await fallback.locator('#tuc-addr').click();
+    await fallback.locator('#tuc-location-dialog[open]').waitFor();
     await fallback.locator('#tuc-use-location').click();
-    await fallback.getByText('Permission refusée', { exact: false }).waitFor();
+    await fallback.getByText('Accès à la position refusé', { exact: false }).waitFor();
+    await fallback.locator('#tuc-manual-location:not([hidden])').waitFor();
+    assert.equal(await fallback.locator('.tuc-city-list a[data-city="casablanca"]').count(), 1,
+      'après refus du GPS, le choix manuel de ville est immédiatement présenté');
     assert(await fallback.locator('.tuc-quartier-list a').count() > 0,
-      'le refus de permission conserve le choix manuel de quartier');
+      'après refus du GPS, la liste des quartiers reste disponible');
     const beforeManualChoice = await fallback.evaluate(() => sessionStorage.getItem('tuc-search-geo-calls'));
     await fallback.locator('.tuc-quartier-list a[data-quartier="gauthier"]').click();
     await fallback.waitForURL((url) => url.searchParams.get('q') === 'gauthier');
     await fallback.waitForLoadState('networkidle');
     assert.equal(await fallback.evaluate(() => sessionStorage.getItem('tuc-search-geo-calls')), beforeManualChoice,
       'choisir le quartier manuellement ne rappelle pas le GPS');
+
+    const cityPage = await denied.newPage();
+    await cityPage.goto(baseUrl, { waitUntil: 'networkidle' });
+    assert.equal(await cityPage.locator('#tuc-location-dialog[open]').count(), 0,
+      'le choix manuel mémorisé évite de répéter automatiquement la fenêtre');
+    await cityPage.locator('#tuc-addr').click();
+    await cityPage.locator('#tuc-manual-location:not([hidden])').waitFor();
+    await cityPage.locator('.tuc-city-list a[data-city="casablanca"]').click();
+    await cityPage.waitForURL((url) => url.searchParams.get('ville') === 'casablanca');
+    await cityPage.waitForLoadState('networkidle');
+    assert.equal(await cityPage.evaluate(() => sessionStorage.getItem('tuc-search-geo-calls')), null,
+      'la sélection manuelle de ville fonctionne sans solliciter le GPS');
   } finally {
     await denied.close();
   }
-  console.log('PASS recherche par quartier: GPS après consentement explicite, proximité estimée locale, zone filtrée et repli manuel après refus.');
+  console.log('PASS accueil géolocalisation: fenêtre au premier accès, GPS après consentement, restaurants de Casablanca triés par distance réelle et choix manuel ville/quartier.');
 }
 
 async function main() {

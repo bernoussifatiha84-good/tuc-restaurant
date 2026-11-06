@@ -44,6 +44,22 @@ if (is_wp_error($gauthier)) WP_CLI::error('Impossible de créer le quartier E2E 
 $gauthierId = is_array($gauthier) ? (int) $gauthier['term_id'] : (int) $gauthier;
 wp_set_object_terms((int) $restaurantId, [$gauthierId], 'tuc_quartier_cat', false);
 
+// Second fictional restaurant verifies that client-side proximity sorting uses real CPT coordinates.
+$farRestaurantId = wp_insert_post([
+    'post_type' => TUC_CPT::RESTO,
+    'post_status' => 'publish',
+    'post_title' => 'Restaurant E2E éloigné (fictif)',
+    'post_name' => 'tuc-mobile-e2e-loin',
+], true);
+if (is_wp_error($farRestaurantId)) WP_CLI::error('Impossible de créer le second restaurant E2E : ' . $farRestaurantId->get_error_message());
+$racine = term_exists('racine', 'tuc_quartier_cat');
+if (!$racine) $racine = wp_insert_term('Racine', 'tuc_quartier_cat', ['slug' => 'racine']);
+if (is_wp_error($racine)) WP_CLI::error('Impossible de créer le quartier Racine E2E : ' . $racine->get_error_message());
+$racineId = is_array($racine) ? (int) $racine['term_id'] : (int) $racine;
+wp_set_object_terms((int) $farRestaurantId, [$racineId], 'tuc_quartier_cat', false);
+update_post_meta((int) $farRestaurantId, 'tuc_lat', 33.5950);
+update_post_meta((int) $farRestaurantId, 'tuc_lng', -7.6420);
+
 foreach ([
     ['login' => 'tuc-mobile-server', 'role' => 'tuc_serveur', 'email' => 'tuc-mobile-server@example.invalid'],
     ['login' => 'tuc-mobile-cashier', 'role' => 'tuc_caissier', 'email' => 'tuc-mobile-cashier@example.invalid'],

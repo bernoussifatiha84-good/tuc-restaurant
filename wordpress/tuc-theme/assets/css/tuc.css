@@ -187,3 +187,15 @@ html[dir=rtl] .hd .nav svg{transform:scaleX(-1)}
 .quartier-card a:focus-visible{outline:3px solid var(--teal-d);outline-offset:3px}
 @media(max-width:380px){.tuc-location-dialog{padding:16px}.tuc-quartier-list{gap:6px}.tuc-quartier-list a{padding:7px;font-size:11px}}
 .hero .logo{color:#134D3B}
+
+/* Accueil : choix de zone affiché au premier passage, sans solliciter le GPS avant un clic. */
+#tuc-location-intro{display:grid;gap:10px;margin-top:10px}
+#tuc-location-choose-manual,.tuc-location-back{width:100%;min-height:46px;padding:10px 14px;border:1px solid var(--g300);border-radius:11px;background:#fff;color:var(--ink);font-size:13px;font-weight:800}
+.tuc-location-privacy{margin:0;color:var(--g600);font-size:11px;line-height:1.45}
+.tuc-city-list{display:grid;grid-template-columns:1fr;gap:8px;list-style:none;margin:0;padding:0}
+.tuc-city-list a{display:flex;align-items:center;min-height:46px;padding:9px 12px;border:1px solid var(--g200);border-radius:11px;background:var(--teal-l);color:var(--ink);font-size:13px;font-weight:800}
+.tuc-location-back{margin-top:14px}
+#tuc-location-nearest{margin:0 var(--px) 12px;color:var(--g600);font-size:12px;line-height:1.5}
+.quartier-card-copy .quartier-distance{color:var(--teal-d);font-size:12px;font-weight:800}
+.tuc-location-dialog button:focus-visible,.tuc-location-dialog a:focus-visible{outline:3px solid #17322B;outline-offset:3px}
+#tuc-location-intro[hidden],#tuc-manual-location[hidden]{display:none}

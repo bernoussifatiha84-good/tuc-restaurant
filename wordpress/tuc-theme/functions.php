@@ -136,9 +136,11 @@ add_action('wp_head', function (): void {
 
     if (is_front_page()) {
         $description = __('Découvrez les restaurants, cafés et snacks de Casablanca. Recherchez une adresse ou un plat, explorez les quartiers et consultez les menus.', 'tuc');
-        if (isset($_GET['q']) && taxonomy_exists('tuc_quartier_cat')) {
-            $term = get_term_by('slug', sanitize_title(is_scalar($_GET['q']) ? (string) wp_unslash($_GET['q']) : ''), 'tuc_quartier_cat');
+        if (isset($_GET['q']) && is_scalar($_GET['q']) && taxonomy_exists('tuc_quartier_cat')) {
+            $term = get_term_by('slug', sanitize_title((string) wp_unslash($_GET['q'])), 'tuc_quartier_cat');
             if ($term instanceof WP_Term) $description = sprintf(__('Restaurants disponibles dans le quartier %s à Casablanca.', 'tuc'), $term->name);
+        } elseif (isset($_GET['ville']) && is_scalar($_GET['ville']) && sanitize_title((string) wp_unslash($_GET['ville'])) === 'casablanca') {
+            $description = __('Restaurants et quartiers disponibles à Casablanca. Consultez les menus, les avis et les informations de livraison.', 'tuc');
         }
         echo '<link rel="canonical" href="' . esc_url(home_url('/')) . '">' . "\n";
     } elseif (is_singular()) {
@@ -160,7 +162,7 @@ add_action('wp_head', function (): void {
 
 add_filter('wp_robots', function (array $robots): array {
     // Les filtres par quartier sont utiles aux clients mais ne créent pas des pages SEO distinctes.
-    if (is_front_page() && isset($_GET['q'])) {
+    if (is_front_page() && (isset($_GET['q']) || isset($_GET['ville']))) {
         $robots['noindex'] = true;
     }
     return $robots;
