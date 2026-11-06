@@ -670,7 +670,7 @@ final class TUC_Espace_Pro
         }
         if (user_can($user, TUC_Roles::CAP_ACCESS_CAISSE)
             && TUC_Caisse::utilisateur_autorise_restaurant($user->ID, $restaurantId, TUC_Roles::CAP_ACCESS_CAISSE)) {
-            return TUC_Caisse::url();
+            return home_url('/caisse/');
         }
         return $redirectTo;
     }
