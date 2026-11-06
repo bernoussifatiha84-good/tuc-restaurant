@@ -82,7 +82,7 @@ async function main() {
     // 1. Nouveau client : panier → WhatsApp prérempli → webhook/n8n → lien magique → retour au panier → géolocalisation livraison.
     checkpoint = 'scénario 1 · création de compte WhatsApp et reprise du panier livraison';
     await page.goto(`${baseUrl}/tuc-mobile-e2e/`, { waitUntil: 'networkidle' });
-    assert.equal(await page.evaluate(() => TUCClient.loggedIn), false, 'le premier client est anonyme');
+    assert.equal(Boolean(await page.evaluate(() => TUCClient.loggedIn)), false, 'le premier client est anonyme');
     await ajouterPlat(page);
     await choisirMode(page, 'livraison');
     assert.equal(await page.locator('#tuc-location-panel').isVisible(), true, 'la livraison annonce une demande de position après connexion');
@@ -107,7 +107,7 @@ async function main() {
     assert.equal(await page.locator('#tuc-order-mode').inputValue(), 'livraison', 'le panier reprend le mode livraison choisi avant WhatsApp');
     assert((await page.locator('#tuc-cart-lines').innerText()).includes('Plat initial E2E'), 'le panier est restauré après le lien magique');
     assert.equal(await page.locator('#tuc-customer-phone').inputValue(), customerPhone, 'le téléphone vérifié du compte est repris en caisse');
-    assert.equal(await page.locator('#tuc-customer-phone').isReadOnly(), true, 'le client ne peut pas remplacer le numéro WhatsApp vérifié');
+    assert.equal(await page.locator('#tuc-customer-phone').evaluate((input) => input.readOnly), true, 'le client ne peut pas remplacer le numéro WhatsApp vérifié');
     assert.equal(await page.locator('#tuc-location-panel').isVisible(), true, 'après connexion, le client est invité à partager sa position');
     assert.equal(await page.locator('#tuc-get-location').isVisible(), true, 'la géolocalisation reste sous consentement explicite');
     await page.locator('#tuc-get-location').click();
