@@ -340,8 +340,8 @@ async function main() {
     assert.equal(await fallbackPage.locator('#tuc-order-success').isVisible(), false, 'aucune commande vide n’est créée');
     await modifierPlat(managerPage, itemId, { available: true, price: 20 });
 
-    // 10. Rush restaurant : la caisse traite la commande et le client suit les étapes sans données privées.
-    checkpoint = 'scénario 10 · prise en charge restaurant et suivi client';
+    // 10. File restaurant : le personnel prend en charge la commande et le client suit les étapes sans données privées.
+    checkpoint = 'scénario 10 · commande visible en caisse et suivi client';
     await fallbackPage.reload({ waitUntil: 'networkidle' });
     await ajouterPlat(fallbackPage);
     await choisirMode(fallbackPage, 'emporter');
@@ -355,7 +355,7 @@ async function main() {
     await delayedOrderCard.waitFor({ timeout: 10000 });
     assert((await delayedOrderCard.innerText()).includes('À emporter'), 'la commande reçue apparaît dans la file du restaurant');
     for (const [statut, label, nextAction] of [['acceptee', 'Acceptée', 'En cuisine'], ['preparation', 'En préparation', 'C’est prêt']]) {
-      const statusResponse = staffPage.waitForResponse((response) => response.url().includes('/wp-json/tuc/v1/caisse/statut') && response.request().method() === 'POST');
+      const statusResponse = staffPage.waitForResponse((response) => response.url().includes('caisse/statut') && response.request().method() === 'POST');
       await delayedOrderCard.locator('[data-avance]').click();
       assert.equal((await statusResponse).status(), 200, `le personnel fait avancer le statut vers ${statut}`);
       await delayedOrderCard.locator('[data-avance]').filter({ hasText: nextAction }).waitFor();
