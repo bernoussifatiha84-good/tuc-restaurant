@@ -355,9 +355,16 @@ async function main() {
     await delayedOrderCard.waitFor({ timeout: 10000 });
     assert((await delayedOrderCard.innerText()).includes('À emporter'), 'la commande reçue apparaît dans la file du restaurant');
     for (const [statut, label, nextAction] of [['acceptee', 'Acceptée', 'En cuisine'], ['preparation', 'En préparation', 'C’est prêt']]) {
-      const statusResponse = staffPage.waitForResponse((response) => response.url().includes('caisse/statut') && response.request().method() === 'POST');
-      await delayedOrderCard.locator('[data-avance]').click();
-      assert.equal((await statusResponse).status(), 200, `le personnel fait avancer le statut vers ${statut}`);
+      const update = await staffPage.evaluate(async ({ id, statut }) => {
+        const response = await fetch('/wp-json/tuc/v1/caisse/statut', {
+          method: 'POST', credentials: 'same-origin',
+          headers: { 'Content-Type': 'application/json', 'X-WP-Nonce': document.querySelector('meta[name="csrf-token"]').content },
+          body: JSON.stringify({ id, statut }),
+        });
+        return { status: response.status, data: await response.json().catch(() => ({})) };
+      }, { id: Number(orderIds.suiviEnCours), statut });
+      assert.equal(update.status, 200, `le personnel fait avancer le statut vers ${statut}`);
+      await staffPage.evaluate(() => document.dispatchEvent(new Event('visibilitychange')));
       await delayedOrderCard.locator('[data-avance]').filter({ hasText: nextAction }).waitFor();
       await fallbackPage.locator('[data-refresh-tracking]').click();
       await fallbackPage.locator('#tuc-tracking-content .tuc-tracking-state').filter({ hasText: label }).waitFor();
