@@ -24,15 +24,18 @@ async function inspectPage(page, target) {
   for (const width of widths) {
     await page.setViewportSize({ width, height: 844 });
     lastResponse = await page.goto(target.url, { waitUntil: 'networkidle', timeout: 30000 });
-    const sample = await page.evaluate(() => {
+    const sample = await page.evaluate((requestedWidth) => {
       const visible = (element) => !element.closest('[hidden],dialog:not([open])');
       const nav = performance.getEntriesByType('navigation')[0];
+      const visualWidth = window.visualViewport?.width || innerWidth;
       const lcpEntries = performance.getEntriesByType('largest-contentful-paint');
       const shifts = performance.getEntriesByType('layout-shift').filter((entry) => !entry.hadRecentInput);
       return {
-        width: innerWidth,
+        width: requestedWidth,
+        layoutViewportWidth: innerWidth,
+        visualViewportWidth: Number(visualWidth.toFixed(1)),
         documentWidth: document.documentElement.scrollWidth,
-        horizontalOverflow: document.documentElement.scrollWidth > innerWidth + 1,
+        horizontalOverflow: document.documentElement.scrollWidth > visualWidth + 1,
         title: document.title.trim(),
         description: document.querySelector('meta[name="description"]')?.content?.trim() || '',
         canonical: document.querySelector('link[rel="canonical"]')?.href || '',
@@ -48,7 +51,7 @@ async function inspectPage(page, target) {
         lcpMs: lcpEntries.length ? Math.round(lcpEntries[lcpEntries.length - 1].startTime) : null,
         cls: Number(shifts.reduce((total, entry) => total + entry.value, 0).toFixed(4)),
       };
-    });
+    }, width);
     sample.securityHeaders = Object.fromEntries(
       ['content-security-policy', 'x-frame-options', 'x-content-type-options', 'referrer-policy', 'strict-transport-security']
         .map((name) => [name, lastResponse?.headers()[name] || 'not set'])
@@ -164,6 +167,10 @@ async function main() {
     }
   }
   for (const page of lighthouse) {
+    const cls = Number.parseFloat(page.vitals['cumulative-layout-shift'] || '');
+    const lcpSeconds = Number.parseFloat(page.vitals['largest-contentful-paint'] || '');
+    if (Number.isFinite(cls) && cls > 0.1) issues.push({ page: page.name, severity: 'high', finding: `CLS=${cls}, au-dessus du seuil recommandé de 0.1` });
+    if (Number.isFinite(lcpSeconds) && lcpSeconds > 2.5) issues.push({ page: page.name, severity: 'high', finding: `LCP=${lcpSeconds}s, au-dessus du seuil recommandé de 2.5s` });
     for (const [category, minimum] of [['performance', 90], ['accessibility', 95], ['best-practices', 95], ['seo', 95]]) {
       if (page.scores[category] !== null && page.scores[category] < minimum) {
         issues.push({ page: page.name, severity: 'medium', finding: `Lighthouse ${category}=${page.scores[category]}, seuil audit=${minimum}` });
@@ -187,9 +194,9 @@ async function main() {
       return {
         name: page.name,
         httpStatus: page.httpStatus,
-        widths: page.viewportChecks.map(({ width, documentWidth, horizontalOverflow }) => ({ width, documentWidth, horizontalOverflow })),
+        widths: page.viewportChecks.map(({ width, layoutViewportWidth, visualViewportWidth, documentWidth, horizontalOverflow }) => ({ width, layoutViewportWidth, visualViewportWidth, documentWidth, horizontalOverflow })),
         seo: sample && { title: sample.title, descriptionLength: sample.description.length, canonical: sample.canonical, h1Count: sample.h1Count, placeholderLinks: sample.placeholderLinks.length, imagesMissingAlt: sample.imagesMissingAlt.length },
-        axeViolations: page.accessibility.violations.map(({ id, impact, count }) => ({ id, impact, count })),
+        axeViolations: page.accessibility.violations.map(({ id, impact, count, examples }) => ({ id, impact, count, ...(impact === 'serious' || impact === 'critical' ? { targets: examples.slice(0, 3).map((example) => example.target) } : {}) })),
         unauthenticatedApiProbe: page.unauthenticatedApiProbe,
         securityHeaders: sample?.securityHeaders,
       };
