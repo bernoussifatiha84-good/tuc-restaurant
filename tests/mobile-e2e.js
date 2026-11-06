@@ -146,7 +146,7 @@ async function main() {
     await cashierPage.locator('#btn-son[aria-pressed="true"]').waitFor();
     assert((await cashierPage.evaluate(() => window.__tucToneStarts || 0)) >= 3, 'un tap déverrouille et joue le signal sonore de test');
     await cashierPage.locator('#etat.on').waitFor();
-    await cashierPage.locator('#liste, #vide').first().waitFor();
+    await cashierPage.locator('#liste:not([hidden]), #vide:not([hidden])').waitFor();
     await screenshot(cashierPage, 'caisse-restaurateur-mobile.png');
 
     checkpoint = 'lecture du QR de la table 7';
