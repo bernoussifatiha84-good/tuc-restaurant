@@ -12,6 +12,7 @@
   const cartDialog = $('#tuc-cart-dialog');
   const storeKey = `tuc-cart-v2:${slug}`;
   const trackingKey = `tuc-order-track-v1:${slug}`;
+  const pendingOrderKey = `tuc-pending-order-v1:${slug}:${TUCClient.phone || 'guest'}`;
   const trackingDialog = $('#tuc-tracking-dialog');
   const accountDialog = $('#tuc-account-dialog');
   let trackingTimer = 0;
@@ -21,7 +22,11 @@
   let cart = [];
   let currentItem = null;
   let pendingKey = '';
-  let acceptedServerTotal = null;
+  try {
+    const savedPendingKey = localStorage.getItem(pendingOrderKey) || '';
+    if (/^[A-Za-z0-9._-]{24,64}$/.test(savedPendingKey)) pendingKey = savedPendingKey;
+    else if (savedPendingKey) localStorage.removeItem(pendingOrderKey);
+  } catch (_) { /* clé non persistante si stockage désactivé */ }
   const locationKey = `tuc-delivery-location-v1:${slug}:${TUCClient.phone || 'guest'}`;
   const modeKey = `tuc-order-mode-v1:${slug}`;
   let deliveryLocation = null;
@@ -43,7 +48,10 @@
   const cacheCart = () => {
     try { localStorage.setItem(storeKey, JSON.stringify(cart.map(({ id, q, options }) => ({ id, q, options })))); } catch (_) { /* stockage local facultatif */ }
   };
-  const resetIdempotency = () => { pendingKey = ''; acceptedServerTotal = null; };
+  const resetIdempotency = () => {
+    pendingKey = '';
+    try { localStorage.removeItem(pendingOrderKey); } catch (_) { /* clé non persistante si stockage désactivé */ }
+  };
   const newKey = () => {
     if (window.crypto?.randomUUID) return window.crypto.randomUUID();
     if (window.crypto?.getRandomValues) return Array.from(window.crypto.getRandomValues(new Uint8Array(24)), (byte) => byte.toString(16).padStart(2, '0')).join('');
@@ -452,7 +460,10 @@
       return;
     }
     const phone = $('#tuc-customer-phone').value.trim();
-    if (!pendingKey) pendingKey = newKey();
+    if (!pendingKey) {
+      pendingKey = newKey();
+      try { localStorage.setItem(pendingOrderKey, pendingKey); } catch (_) { /* reprise idempotente non disponible si stockage désactivé */ }
+    }
     const button = $('#tuc-submit-order');
     button.disabled = true;
     button.textContent = 'Envoi en cours…';
@@ -462,7 +473,7 @@
         headers: { 'Content-Type': 'application/json', 'X-WP-Nonce': TUCClient.nonce },
         body: JSON.stringify({
           resto: slug, table: table > 0 ? table : 0, mode: selectedMode(), tel: phone,
-          total: acceptedServerTotal === null ? totals.total : acceptedServerTotal,
+          total: totals.total,
           items: totals.lines.map((line) => ({ id: line.id, q: line.q, options: line.options })),
           ...(selectedMode() === 'livraison' && deliveryLocation ? { lat: deliveryLocation.lat, lng: deliveryLocation.lng } : {}),
           cle: pendingKey
@@ -472,10 +483,17 @@
       if (!response.ok) {
         if (response.status === 409 && Number(body.data?.total_serveur) >= 0) {
           const serverTotal = Number(body.data.total_serveur);
-          checkoutError.textContent = `Le total a changé. Le montant recalculé est ${money(serverTotal)}. Vérifiez votre panier puis confirmez à nouveau.`;
-          $('#tuc-checkout-total').textContent = money(serverTotal);
-          acceptedServerTotal = serverTotal;
-          pendingKey = '';
+          resetIdempotency();
+          await load();
+          checkoutError.textContent = `Le prix ou les frais ont changé. Le nouveau total est ${money(serverTotal)}. Vérifiez le panier actualisé puis confirmez à nouveau.`;
+          checkoutError.hidden = false;
+          return;
+        }
+        if (response.status === 422 && body.code === 'tuc_item_indisponible') {
+          resetIdempotency();
+          await load();
+          checkoutError.textContent = 'Un plat vient d’être épuisé. Le panier a été actualisé; vérifiez les articles restants avant de confirmer.';
+          checkoutError.hidden = false;
           return;
         }
         throw new Error(body.message || 'La commande n’a pas pu être envoyée. Réessayez.');
@@ -495,7 +513,7 @@
       checkoutError.hidden = false;
     } finally {
       button.disabled = false;
-      button.textContent = acceptedServerTotal !== null ? 'Confirmer le nouveau total' : 'Confirmer la commande';
+      button.textContent = 'Confirmer la commande';
       if (restaurant?.open && getTotals().lines.length) button.disabled = false;
       else button.disabled = true;
     }

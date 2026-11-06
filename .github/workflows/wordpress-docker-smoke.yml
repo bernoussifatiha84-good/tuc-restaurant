@@ -322,7 +322,7 @@ jobs:
             exit "$status"
           fi
 
-      - name: Vérifier les cinq scénarios de panier, compte WhatsApp et livraison via n8n
+      - name: Vérifier les dix scénarios de commande client et restaurant
         shell: bash
         env:
           NODE_PATH: ${{ runner.temp }}/tuc-playwright/node_modules
@@ -340,7 +340,7 @@ jobs:
             status=$?
             printf '%s\n' "$output"
             excerpt="$(printf '%s\n' "$output" | tail -c 1800 | tr '\n' ' ' | sed 's/%/%25/g; s/\r/%0D/g')"
-            echo "::error title=Five checkout scenarios failed::$excerpt"
+            echo "::error title=Ten checkout scenarios failed::$excerpt"
             exit "$status"
           fi
 
