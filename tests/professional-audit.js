@@ -230,7 +230,7 @@ async function main() {
   console.log(JSON.stringify(result, null, 2));
   console.log('PROFESSIONAL_AUDIT_JSON_END');
 
-  const blocked = manual.some((entry) => entry.httpStatus < 200 || entry.httpStatus >= 400 || entry.viewportChecks.some((sample) => sample.horizontalOverflow));
+  const blocked = issues.some((issue) => ['blocker', 'high'].includes(issue.severity));
   if (blocked) process.exitCode = 2;
 }
 
