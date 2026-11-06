@@ -23,6 +23,8 @@ final class TUC_Commande
 {
     public const CPT = 'tuc_commande';
     public const STATUTS = ['nouvelle', 'acceptee', 'preparation', 'prete', 'servie', 'refusee', 'annulee'];
+    public const MAX_LOCATION_ACCURACY_METERS = 250;
+    public const MAX_LOCATION_AGE_SECONDS = 30 * 24 * 60 * 60;
 
     public static function init(): void
     {
@@ -157,21 +159,36 @@ final class TUC_Commande
         }
         $latitude = null;
         $longitude = null;
+        $accuracy = null;
+        $locationCapturedAt = null;
         $hasLatitude = $req->has_param('lat');
         $hasLongitude = $req->has_param('lng');
-        if ($mode === 'livraison' && (!$hasLatitude || !$hasLongitude)) {
-            return new WP_Error('tuc_location', 'La position est obligatoire pour confirmer une livraison.', ['status' => 422]);
+        $hasAccuracy = $req->has_param('accuracy');
+        $hasCapturedAt = $req->has_param('captured_at');
+        $hasAnyLocation = $hasLatitude || $hasLongitude || $hasAccuracy || $hasCapturedAt;
+        if ($mode === 'livraison' && (!$hasLatitude || !$hasLongitude || !$hasAccuracy || !$hasCapturedAt)) {
+            return new WP_Error('tuc_location', 'Une position récente et suffisamment précise est obligatoire pour confirmer une livraison.', ['status' => 422]);
         }
-        if ($hasLatitude || $hasLongitude) {
-            if ($mode !== 'livraison' || !$hasLatitude || !$hasLongitude
+        if ($hasAnyLocation) {
+            $accuracyParam = $req->get_param('accuracy');
+            $capturedAtParam = $req->get_param('captured_at');
+            $now = time();
+            if ($mode !== 'livraison' || !$hasLatitude || !$hasLongitude || !$hasAccuracy || !$hasCapturedAt
                 || !is_numeric($latitudeParam) || !is_numeric($longitudeParam)
+                || !is_numeric($accuracyParam) || !is_numeric($capturedAtParam)
                 || !is_finite((float) $latitudeParam) || !is_finite((float) $longitudeParam)
+                || !is_finite((float) $accuracyParam) || !is_finite((float) $capturedAtParam)
                 || (float) $latitudeParam < -90 || (float) $latitudeParam > 90
-                || (float) $longitudeParam < -180 || (float) $longitudeParam > 180) {
-                return new WP_Error('tuc_location', 'Position de livraison invalide.', ['status' => 422]);
+                || (float) $longitudeParam < -180 || (float) $longitudeParam > 180
+                || (float) $accuracyParam <= 0 || (float) $accuracyParam > self::MAX_LOCATION_ACCURACY_METERS
+                || (float) $capturedAtParam < $now - self::MAX_LOCATION_AGE_SECONDS
+                || (float) $capturedAtParam > $now + 300) {
+                return new WP_Error('tuc_location', 'Position invalide, trop imprécise ou expirée. Actualisez votre position et réessayez.', ['status' => 422]);
             }
             $latitude = round((float) $latitudeParam, 6);
             $longitude = round((float) $longitudeParam, 6);
+            $accuracy = round((float) $accuracyParam, 1);
+            $locationCapturedAt = (int) $capturedAtParam;
         }
 
         if (!is_array($items) || $items === [] || count($items) > 50) {
@@ -333,15 +350,19 @@ final class TUC_Commande
             }
             return $id;
         }
-        if ($latitude !== null && $longitude !== null) {
+        if ($latitude !== null && $longitude !== null && $accuracy !== null && $locationCapturedAt !== null) {
             update_post_meta((int) $id, 'tuc_location_lat', $latitude);
             update_post_meta((int) $id, 'tuc_location_lng', $longitude);
+            update_post_meta((int) $id, 'tuc_location_accuracy', $accuracy);
+            update_post_meta((int) $id, 'tuc_location_captured_at', $locationCapturedAt);
             $customer = wp_get_current_user();
             if ($customer instanceof WP_User
                 && in_array(TUC_Compte::ROLE, (array) $customer->roles, true)
                 && TUC_Compte::normaliser((string) get_user_meta($customer->ID, 'tuc_tel', true)) === $tel) {
                 update_user_meta($customer->ID, 'tuc_location_lat', $latitude);
                 update_user_meta($customer->ID, 'tuc_location_lng', $longitude);
+                update_user_meta($customer->ID, 'tuc_location_accuracy', $accuracy);
+                update_user_meta($customer->ID, 'tuc_location_captured_at', $locationCapturedAt);
                 update_user_meta($customer->ID, 'tuc_location_label', 'Position enregistrée pour les prochaines livraisons');
             }
         }

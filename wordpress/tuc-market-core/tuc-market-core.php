@@ -43,6 +43,7 @@ require_once TUC_CORE_DIR . 'includes/modules/class-tuc-compte.php';    // 2b. c
 require_once TUC_CORE_DIR . 'includes/modules/class-tuc-wa-message.php'; // 2c. message pré-rempli (panier en texte)
 require_once TUC_CORE_DIR . 'includes/modules/class-tuc-push.php';      // 6a. Web Push natif (RFC 8291)
 require_once TUC_CORE_DIR . 'includes/modules/class-tuc-caisse.php';   // 6b. PWA de caisse — le canal de commande
+require_once TUC_CORE_DIR . 'includes/modules/class-tuc-security-headers.php'; // en-têtes HTTP défensifs
 
 /**
  * Activation : on ne devine pas, on prépare le minimum et on le vérifie.
@@ -66,6 +67,7 @@ add_action('plugins_loaded', static function (): void {
     TUC_Push::init();          // clés VAPID disponibles dès la première visite
     TUC_Caisse::init();        // module 6 — le P0 : sans elle, une commande n'arrive nulle part
     TUC_Espace_Pro::init();
+    TUC_Security_Headers::init();
 }, 5);
 
 /**

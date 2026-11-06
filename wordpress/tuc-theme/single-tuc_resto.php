@@ -82,7 +82,7 @@ while (have_posts()) : the_post();
         <select id="tuc-order-mode" name="mode"></select>
         <section id="tuc-location-panel" class="tuc-location-panel" hidden aria-labelledby="tuc-location-title">
           <strong id="tuc-location-title"><?php esc_html_e('Position de livraison', 'tuc'); ?></strong>
-          <p><?php esc_html_e('Pour la livraison, partagez votre position avec le restaurant. Elle ne sera transmise qu’avec cette commande.', 'tuc'); ?></p>
+          <p><?php esc_html_e('Pour livrer, partagez une position récente et précise (±250 m maximum). Elle sera transmise avec la commande et conservée sur votre compte pour faciliter vos prochaines livraisons.', 'tuc'); ?></p>
           <button type="button" id="tuc-get-location" class="tuc-client-secondary"><?php esc_html_e('Utiliser ma position', 'tuc'); ?></button>
           <span id="tuc-location-status" role="status" aria-live="polite"></span>
         </section>

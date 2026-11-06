@@ -105,6 +105,14 @@ try {
     $assert(post_type_exists('tuc_resto'), 'CPT restaurant enregistré');
     $assert(post_type_exists('tuc_menu_item'), 'CPT article/menu enregistré');
     $assert(post_type_exists('tuc_commande'), 'CPT commande enregistré');
+    $assert(TUC_Geo::distance2(33.5900, -7.6280, 33.5900, -7.6280) === 0.0
+        && is_infinite(TUC_Geo::distance2(91, 0, 0, 0)), 'la distance géographique est métrique et rejette les coordonnées impossibles');
+    $geoSorted = TUC_Geo::trier([
+        ['id' => 'far', 'lat' => 33.6000, 'lng' => -7.6500],
+        ['id' => 'missing'],
+        ['id' => 'near', 'lat' => 33.5901, 'lng' => -7.6281],
+    ], 33.5900, -7.6280);
+    $assert(array_column($geoSorted, 'id') === ['near', 'far', 'missing'], 'la recherche proximité trie par distance réelle et place les restaurants sans coordonnées en dernier');
     $assert(has_action('rest_api_init', [TUC_Health::class, 'routes']) !== false, 'route de santé branchée sur rest_api_init');
     $assert(has_action('rest_api_init', [TUC_Commande::class, 'routes']) !== false, 'routes de commande branchées sur rest_api_init');
     $assert(has_action('admin_menu', [TUC_Espace_Pro::class, 'admin_menu']) !== false
@@ -327,6 +335,8 @@ try {
         'total' => 31,
         'lat'   => 33.589,
         'lng'   => -7.621,
+        'accuracy' => 75,
+        'captured_at' => time(),
         'cle'   => $idempotenceKey,
         'items' => [[
             'id'      => (int) $itemId,
@@ -365,6 +375,21 @@ try {
     $invalidCoordinates['cle'] = 'invalid-location-' . $suffix;
     $assert($rest('/tuc/v1/commande', $invalidCoordinates)->get_status() === 422,
         'la livraison refuse des coordonnées impossibles avant de créer une commande');
+    $impreciseLocation = $validOrder;
+    $impreciseLocation['accuracy'] = TUC_Commande::MAX_LOCATION_ACCURACY_METERS + 1;
+    $impreciseLocation['cle'] = 'imprecise-location-' . $suffix;
+    $assert($rest('/tuc/v1/commande', $impreciseLocation)->get_status() === 422,
+        'une position dont la précision dépasse 250 mètres est refusée');
+    $staleLocation = $validOrder;
+    $staleLocation['captured_at'] = time() - TUC_Commande::MAX_LOCATION_AGE_SECONDS - 1;
+    $staleLocation['cle'] = 'stale-location-' . $suffix;
+    $assert($rest('/tuc/v1/commande', $staleLocation)->get_status() === 422,
+        'une position datant de plus de 30 jours est refusée');
+    $missingAccuracy = $validOrder;
+    unset($missingAccuracy['accuracy']);
+    $missingAccuracy['cle'] = 'missing-accuracy-' . $suffix;
+    $assert($rest('/tuc/v1/commande', $missingAccuracy)->get_status() === 422,
+        'une livraison doit transmettre la précision réelle de la position');
     update_post_meta($restaurantId, 'tuc_modes', ['livraison', 'emporter']);
     $nonDeliveryLocation = $validOrder;
     $nonDeliveryLocation['mode'] = 'emporter';
@@ -382,8 +407,9 @@ try {
     $orderId = (int) ($orderData['commande'] ?? 0);
     $assert($orderId > 0, 'la réponse retourne un identifiant de commande');
     $assert(abs((float) get_post_meta($orderId, 'tuc_location_lat', true) - 33.589) < 0.000001
-        && abs((float) get_post_meta($orderId, 'tuc_location_lng', true) + 7.621) < 0.000001,
-        'la commande de livraison conserve les coordonnées consenties pour le restaurant');
+        && abs((float) get_post_meta($orderId, 'tuc_location_lng', true) + 7.621) < 0.000001
+        && abs((float) get_post_meta($orderId, 'tuc_location_accuracy', true) - 75.0) < 0.001,
+        'la commande conserve uniquement la position consentie, sa précision et l’heure de capture');
     $created['orders'][] = $orderId;
     $trackingToken = (string) ($orderData['suivi'] ?? '');
     $assert((bool) preg_match('/^[A-Za-z0-9_-]{43}$/', $trackingToken)
@@ -421,7 +447,7 @@ try {
     $ratePhones[] = $optionOrderPhone;
     $optionOrder = $rest('/tuc/v1/commande', [
         'resto' => $slug, 'table' => 0, 'tel' => $optionOrderPhone, 'total' => 39,
-        'lat' => 33.589, 'lng' => -7.621,
+        'lat' => 33.589, 'lng' => -7.621, 'accuracy' => 75, 'captured_at' => time(),
         'cle' => 'options-v2-' . $suffix,
         'items' => [[
             'id' => (int) $optionItemId, 'q' => 1,
@@ -443,7 +469,7 @@ try {
         'la commande conserve le prix final et le détail canonique des groupes sélectionnés');
     $invalidConditional = $rest('/tuc/v1/commande', [
         'resto' => $slug, 'table' => 0, 'tel' => '+212600000032', 'total' => 24,
-        'lat' => 33.589, 'lng' => -7.621,
+        'lat' => 33.589, 'lng' => -7.621, 'accuracy' => 75, 'captured_at' => time(),
         'cle' => 'options-condition-' . $suffix,
         'items' => [['id' => (int) $optionItemId, 'q' => 1, 'options' => [
             ['group_id' => 'format', 'choices' => ['regular']],
@@ -455,7 +481,7 @@ try {
     update_post_meta($restaurantId, 'tuc_modes', ['livraison', 'table']);
     update_post_meta($restaurantId, 'tuc_tables', 2);
     $tableOrder = $validOrder;
-    unset($tableOrder['lat'], $tableOrder['lng']);
+    unset($tableOrder['lat'], $tableOrder['lng'], $tableOrder['accuracy'], $tableOrder['captured_at']);
     $tableOrder['table'] = 2;
     $tableOrder['mode'] = 'table';
     $tableOrder['tel'] = '+212600000033';

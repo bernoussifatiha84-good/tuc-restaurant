@@ -690,6 +690,36 @@ final class TUC_Espace_Pro
             ]);
         }
         if (is_singular(TUC_CPT::RESTO)) {
+            $currentCustomer = wp_get_current_user();
+            $customerId = $currentCustomer instanceof WP_User
+                && in_array(TUC_Compte::ROLE, (array) $currentCustomer->roles, true)
+                ? (int) $currentCustomer->ID : 0;
+            $savedLocation = null;
+            if ($customerId > 0) {
+                $savedLat = get_user_meta($customerId, 'tuc_location_lat', true);
+                $savedLng = get_user_meta($customerId, 'tuc_location_lng', true);
+                $savedAccuracy = get_user_meta($customerId, 'tuc_location_accuracy', true);
+                $savedAt = get_user_meta($customerId, 'tuc_location_captured_at', true);
+                $savedAtInt = is_numeric($savedAt) ? (int) $savedAt : 0;
+                $validLocation = is_numeric($savedLat) && (float) $savedLat >= -90 && (float) $savedLat <= 90
+                    && is_numeric($savedLng) && (float) $savedLng >= -180 && (float) $savedLng <= 180
+                    && is_numeric($savedAccuracy) && (float) $savedAccuracy > 0
+                    && (float) $savedAccuracy <= TUC_Commande::MAX_LOCATION_ACCURACY_METERS
+                    && $savedAtInt >= time() - TUC_Commande::MAX_LOCATION_AGE_SECONDS && $savedAtInt <= time() + 300;
+                if ($validLocation) {
+                    $savedLocation = [
+                        'lat' => (float) $savedLat,
+                        'lng' => (float) $savedLng,
+                        'accuracy' => (float) $savedAccuracy,
+                        'capturedAt' => $savedAtInt,
+                        'label' => (string) get_user_meta($customerId, 'tuc_location_label', true),
+                    ];
+                } elseif (metadata_exists('user', $customerId, 'tuc_location_lat') || metadata_exists('user', $customerId, 'tuc_location_lng')) {
+                    foreach (['tuc_location_lat', 'tuc_location_lng', 'tuc_location_accuracy', 'tuc_location_captured_at', 'tuc_location_label'] as $metaKey) {
+                        delete_user_meta($customerId, $metaKey);
+                    }
+                }
+            }
             wp_enqueue_style('tuc-client-cart', TUC_CORE_URL . 'assets/pro/client-cart.css', [], TUC_CORE_VERSION);
             wp_enqueue_script('tuc-client-cart', TUC_CORE_URL . 'assets/pro/client-cart.js', [], TUC_CORE_VERSION, true);
             wp_localize_script('tuc-client-cart', 'TUCClient', [
@@ -698,15 +728,7 @@ final class TUC_Espace_Pro
                 'phoneLabel' => __('Téléphone pour le suivi de commande', 'tuc-core'),
                 'loggedIn' => is_user_logged_in(),
                 'phone' => is_user_logged_in() ? (string) get_user_meta(get_current_user_id(), 'tuc_tel', true) : '',
-                'location' => is_user_logged_in()
-                    && is_numeric(get_user_meta(get_current_user_id(), 'tuc_location_lat', true))
-                    && is_numeric(get_user_meta(get_current_user_id(), 'tuc_location_lng', true))
-                    ? [
-                        'lat' => (float) get_user_meta(get_current_user_id(), 'tuc_location_lat', true),
-                        'lng' => (float) get_user_meta(get_current_user_id(), 'tuc_location_lng', true),
-                        'label' => (string) get_user_meta(get_current_user_id(), 'tuc_location_label', true),
-                    ]
-                    : null,
+                'location' => $savedLocation,
             ]);
         }
     }

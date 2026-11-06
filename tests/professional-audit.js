@@ -53,7 +53,7 @@ async function inspectPage(page, target) {
       };
     }, width);
     sample.securityHeaders = Object.fromEntries(
-      ['content-security-policy', 'x-frame-options', 'x-content-type-options', 'referrer-policy', 'strict-transport-security']
+      ['content-security-policy', 'x-frame-options', 'x-content-type-options', 'referrer-policy', 'permissions-policy', 'strict-transport-security']
         .map((name) => [name, lastResponse?.headers()[name] || 'not set'])
     );
     measurements.push(sample);
@@ -162,6 +162,9 @@ async function main() {
     if (at390?.unnamedButtons) issues.push({ page: page.name, severity: 'medium', finding: `${at390.unnamedButtons} bouton(s) sans nom accessible détecté(s)` });
     if (page.accessibility.violations.some((violation) => ['critical', 'serious'].includes(violation.impact))) issues.push({ page: page.name, severity: 'high', finding: 'violations Axe de sévérité serious/critical' });
     if (page.browserErrors.length) issues.push({ page: page.name, severity: 'medium', finding: `${page.browserErrors.length} erreur(s) JavaScript navigateur` });
+    for (const header of ['x-content-type-options', 'x-frame-options', 'referrer-policy', 'permissions-policy']) {
+      if (at390?.securityHeaders[header] === 'not set') issues.push({ page: page.name, severity: 'high', finding: `en-tête de sécurité ${header} absent` });
+    }
     for (const probe of page.unauthenticatedApiProbe) {
       if (!probe.protected) issues.push({ page: page.name, severity: 'blocker', finding: `${probe.route} répond ${probe.status} sans session` });
     }

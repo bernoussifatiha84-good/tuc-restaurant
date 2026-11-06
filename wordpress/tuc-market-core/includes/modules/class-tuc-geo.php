@@ -31,7 +31,7 @@ final class TUC_Geo
         ]);
     }
 
-    /** Table de référence des quartiers de Casablanca (20). */
+    /** Centres de référence des dix quartiers actuellement pris en charge à Casablanca. */
     public static function quartiers(): array
     {
         return [
@@ -58,18 +58,41 @@ final class TUC_Geo
      */
     public static function distance2(float $lat1, float $lng1, float $lat2, float $lng2): float
     {
-        $dLat = $lat2 - $lat1;
-        $dLng = ($lng2 - $lng1) * 0.8; // approximation à la latitude du Maroc
-        return $dLat * $dLat + $dLng * $dLng;
+        if ($lat1 < -90 || $lat1 > 90 || $lat2 < -90 || $lat2 > 90
+            || $lng1 < -180 || $lng1 > 180 || $lng2 < -180 || $lng2 > 180) {
+            return INF;
+        }
+        $phi1 = deg2rad($lat1);
+        $phi2 = deg2rad($lat2);
+        $dPhi = $phi2 - $phi1;
+        $dLambda = deg2rad($lng2 - $lng1);
+        $a = sin($dPhi / 2) ** 2 + cos($phi1) * cos($phi2) * sin($dLambda / 2) ** 2;
+        $distance = 6_371_000 * 2 * atan2(sqrt(min(1.0, $a)), sqrt(max(0.0, 1.0 - $a)));
+        return $distance * $distance;
     }
 
     /** Trie une liste de restos par proximité, sans jamais appeler watchPosition. */
     public static function trier(array $restos, float $lat, float $lng): array
     {
+        $restos = array_values($restos);
         usort($restos, static function (array $a, array $b) use ($lat, $lng): int {
-            $da = self::distance2($lat, $lng, (float) ($a['lat'] ?? 0), (float) ($a['lng'] ?? 0));
-            $db = self::distance2($lat, $lng, (float) ($b['lat'] ?? 0), (float) ($b['lng'] ?? 0));
-            return $da <=> $db;
+            $coordinates = static function (array $resto): ?array {
+                $rLat = $resto['lat'] ?? null;
+                $rLng = $resto['lng'] ?? null;
+                if (!is_numeric($rLat) || !is_numeric($rLng)
+                    || (float) $rLat < -90 || (float) $rLat > 90
+                    || (float) $rLng < -180 || (float) $rLng > 180) {
+                    return null;
+                }
+                return [(float) $rLat, (float) $rLng];
+            };
+            $aCoordinates = $coordinates($a);
+            $bCoordinates = $coordinates($b);
+            if ($aCoordinates === null || $bCoordinates === null) {
+                return $aCoordinates === $bCoordinates ? 0 : ($aCoordinates === null ? 1 : -1);
+            }
+            return self::distance2($lat, $lng, $aCoordinates[0], $aCoordinates[1])
+                <=> self::distance2($lat, $lng, $bCoordinates[0], $bCoordinates[1]);
         });
         return $restos;
     }

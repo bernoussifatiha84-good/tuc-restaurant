@@ -29,16 +29,28 @@
   } catch (_) { /* clé non persistante si stockage désactivé */ }
   const locationKey = `tuc-delivery-location-v1:${slug}:${TUCClient.phone || 'guest'}`;
   const modeKey = `tuc-order-mode-v1:${slug}`;
+  const MAX_LOCATION_ACCURACY_METERS = 250;
+  const MAX_LOCATION_AGE_SECONDS = 30 * 24 * 60 * 60;
   let deliveryLocation = null;
   let waSession = null;
   let waPollTimer = 0;
   try {
     const saved = JSON.parse(localStorage.getItem(locationKey) || 'null');
     const candidate = TUCClient.location || saved;
-    if (candidate && Number.isFinite(Number(candidate.lat)) && Number.isFinite(Number(candidate.lng))) {
-      deliveryLocation = { lat: Number(candidate.lat), lng: Number(candidate.lng), label: String(candidate.label || 'Position enregistrée') };
+    const lat = Number(candidate?.lat);
+    const lng = Number(candidate?.lng);
+    const accuracy = Number(candidate?.accuracy);
+    const capturedAt = Number(candidate?.capturedAt);
+    const age = Math.floor(Date.now() / 1000) - capturedAt;
+    if (Number.isFinite(lat) && lat >= -90 && lat <= 90
+      && Number.isFinite(lng) && lng >= -180 && lng <= 180
+      && Number.isFinite(accuracy) && accuracy > 0 && accuracy <= MAX_LOCATION_ACCURACY_METERS
+      && Number.isInteger(capturedAt) && age >= -300 && age <= MAX_LOCATION_AGE_SECONDS) {
+      deliveryLocation = { lat, lng, accuracy, capturedAt, label: String(candidate.label || 'Position enregistrée') };
+    } else if (saved) {
+      localStorage.removeItem(locationKey);
     }
-  } catch (_) { /* géolocalisation facultative */ }
+  } catch (_) { /* géolocalisation facultative; les anciennes positions non vérifiables sont écartées */ }
 
   const escapeHtml = (value) => String(value ?? '').replace(/[&<>"']/g, (char) => ({
     '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#039;'
@@ -261,8 +273,8 @@
     button.hidden = false;
     button.textContent = deliveryLocation ? 'Mettre à jour ma position' : 'Utiliser ma position';
     message.textContent = deliveryLocation
-      ? `${deliveryLocation.label} · ${deliveryLocation.lat.toFixed(5)}, ${deliveryLocation.lng.toFixed(5)}`
-      : 'La localisation est nécessaire pour confirmer une livraison.';
+      ? `${deliveryLocation.label} · précision ±${Math.round(deliveryLocation.accuracy)} m`
+      : 'La livraison exige une position consentie, récente et précise (±250 m maximum).';
   }
   function demanderPosition() {
     const message = $('#tuc-location-status');
@@ -274,9 +286,23 @@
     button.disabled = true;
     message.textContent = 'Recherche de votre position…';
     navigator.geolocation.getCurrentPosition((position) => {
+      const latitude = Number(position.coords.latitude);
+      const longitude = Number(position.coords.longitude);
+      const accuracy = Number(position.coords.accuracy);
+      if (!Number.isFinite(latitude) || latitude < -90 || latitude > 90
+        || !Number.isFinite(longitude) || longitude < -180 || longitude > 180
+        || !Number.isFinite(accuracy) || accuracy <= 0 || accuracy > MAX_LOCATION_ACCURACY_METERS) {
+        button.disabled = false;
+        message.textContent = Number.isFinite(accuracy) && accuracy > MAX_LOCATION_ACCURACY_METERS
+          ? `La position est trop imprécise (±${Math.round(accuracy)} m). Réessayez depuis un endroit dégagé; la livraison exige ±${MAX_LOCATION_ACCURACY_METERS} m maximum.`
+          : 'La position reçue est invalide. Autorisez la localisation puis réessayez.';
+        return;
+      }
       deliveryLocation = {
-        lat: Number(position.coords.latitude.toFixed(6)),
-        lng: Number(position.coords.longitude.toFixed(6)),
+        lat: Number(latitude.toFixed(6)),
+        lng: Number(longitude.toFixed(6)),
+        accuracy: Number(accuracy.toFixed(1)),
+        capturedAt: Math.floor(Date.now() / 1000),
         label: 'Position partagée pour cette livraison',
       };
       try { localStorage.setItem(locationKey, JSON.stringify(deliveryLocation)); } catch (_) { /* stockage facultatif */ }
@@ -475,7 +501,10 @@
           resto: slug, table: table > 0 ? table : 0, mode: selectedMode(), tel: phone,
           total: totals.total,
           items: totals.lines.map((line) => ({ id: line.id, q: line.q, options: line.options })),
-          ...(selectedMode() === 'livraison' && deliveryLocation ? { lat: deliveryLocation.lat, lng: deliveryLocation.lng } : {}),
+          ...(selectedMode() === 'livraison' && deliveryLocation ? {
+            lat: deliveryLocation.lat, lng: deliveryLocation.lng,
+            accuracy: deliveryLocation.accuracy, captured_at: deliveryLocation.capturedAt,
+          } : {}),
           cle: pendingKey
         })
       });

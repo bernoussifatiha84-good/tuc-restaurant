@@ -106,6 +106,74 @@ async function modifierPlat(managerPage, itemId, changes) {
   return result.body;
 }
 
+async function testerRechercheParQuartier(browser) {
+  const origin = new URL(baseUrl).origin;
+  const granted = await browser.newContext({
+    viewport: { width: 320, height: 760 }, isMobile: true, hasTouch: true,
+    geolocation: { latitude: 33.5900, longitude: -7.6280, accuracy: 40 },
+  });
+  await granted.grantPermissions(['geolocation'], { origin });
+  await granted.addInitScript(() => {
+    const nativeGeo = navigator.geolocation;
+    const nativeGet = nativeGeo.getCurrentPosition.bind(nativeGeo);
+    Object.defineProperty(navigator, 'geolocation', { configurable: true, value: {
+      getCurrentPosition(success, failure, options) {
+        sessionStorage.setItem('tuc-search-geo-calls', String(Number(sessionStorage.getItem('tuc-search-geo-calls') || 0) + 1));
+        return nativeGet(success, failure, options);
+      },
+    } });
+  });
+  const page = await granted.newPage();
+  try {
+    await page.goto(baseUrl, { waitUntil: 'networkidle' });
+    assert.equal(await page.evaluate(() => sessionStorage.getItem('tuc-search-geo-calls')), null,
+      'la page de recherche ne demande pas le GPS avant une action du client');
+    await page.locator('#tuc-addr').click();
+    await page.locator('#tuc-location-dialog[open]').waitFor();
+    assert.equal(await page.getByRole('dialog', { name: 'Choisir une zone de recherche' }).count(), 1, 'la modale de zone a un nom accessible');
+    await page.locator('#tuc-use-location').click();
+    await page.waitForURL((url) => url.searchParams.get('q') === 'gauthier', { timeout: 10000 });
+    await page.waitForLoadState('networkidle');
+    assert.equal(await page.evaluate(() => sessionStorage.getItem('tuc-search-geo-calls')), '1',
+      'une seule demande GPS est faite après le clic explicite');
+    assert.equal(new URL(page.url()).searchParams.has('lat'), false, 'la latitude précise ne quitte pas le navigateur dans l’URL');
+    assert.equal(new URL(page.url()).searchParams.has('lng'), false, 'la longitude précise ne quitte pas le navigateur dans l’URL');
+    assert.equal(await page.locator('.quartier-card a[href*="tuc-mobile-e2e"]').count(), 1,
+      'la zone estimée filtre sur le vrai quartier WordPress et montre la fiche correspondante');
+    assert((await page.locator('h1').innerText()).includes('Gauthier'));
+  } finally {
+    await granted.close();
+  }
+
+  const denied = await browser.newContext({ viewport: { width: 390, height: 844 }, isMobile: true, hasTouch: true });
+  await denied.addInitScript(() => {
+    Object.defineProperty(navigator, 'geolocation', { configurable: true, value: {
+      getCurrentPosition(_success, failure) {
+        sessionStorage.setItem('tuc-search-geo-calls', String(Number(sessionStorage.getItem('tuc-search-geo-calls') || 0) + 1));
+        failure({ code: 1 });
+      },
+    } });
+  });
+  const fallback = await denied.newPage();
+  try {
+    await fallback.goto(baseUrl, { waitUntil: 'networkidle' });
+    await fallback.locator('#tuc-addr').click();
+    await fallback.locator('#tuc-use-location').click();
+    await fallback.getByText('Permission refusée', { exact: false }).waitFor();
+    assert(await fallback.locator('.tuc-quartier-list a').count() > 0,
+      'le refus de permission conserve le choix manuel de quartier');
+    const beforeManualChoice = await fallback.evaluate(() => sessionStorage.getItem('tuc-search-geo-calls'));
+    await fallback.locator('.tuc-quartier-list a[data-quartier="gauthier"]').click();
+    await fallback.waitForURL((url) => url.searchParams.get('q') === 'gauthier');
+    await fallback.waitForLoadState('networkidle');
+    assert.equal(await fallback.evaluate(() => sessionStorage.getItem('tuc-search-geo-calls')), beforeManualChoice,
+      'choisir le quartier manuellement ne rappelle pas le GPS');
+  } finally {
+    await denied.close();
+  }
+  console.log('PASS recherche par quartier: GPS après consentement explicite, proximité estimée locale, zone filtrée et repli manuel après refus.');
+}
+
 async function main() {
   assert(password.length >= 24, 'mot de passe E2E éphémère configuré');
   assert(inboundSecret.length >= 32, 'secret entrant n8n éphémère configuré');
@@ -120,6 +188,8 @@ async function main() {
   page.on('pageerror', (error) => errors.push(error.stack || error.message));
 
   try {
+    await testerRechercheParQuartier(browser);
+
     // 1. Nouveau client : panier → WhatsApp prérempli → webhook/n8n → lien magique → retour au panier → géolocalisation livraison.
     checkpoint = 'scénario 1 · création de compte WhatsApp et reprise du panier livraison';
     await page.goto(`${baseUrl}/tuc-mobile-e2e/`, { waitUntil: 'networkidle' });
@@ -156,7 +226,7 @@ async function main() {
     assert.equal(await page.locator('#tuc-location-panel').isVisible(), true, 'après connexion, le client est invité à partager sa position');
     assert.equal(await page.locator('#tuc-get-location').isVisible(), true, 'la géolocalisation reste sous consentement explicite');
     await page.locator('#tuc-get-location').click();
-    await page.getByText('33.58900', { exact: false }).waitFor();
+    await page.getByText('Position partagée pour cette livraison', { exact: false }).waitFor();
     assert.equal(await page.locator('#tuc-submit-order').isEnabled(), true, 'la livraison peut être confirmée après géolocalisation');
     orderIds.inscriptionLivraison = await validerCommande(page, 'inscriptionLivraison');
 
@@ -271,6 +341,23 @@ async function main() {
     assert.equal(await fallbackPage.locator('#tuc-location-panel').isVisible(), false);
     assert.equal(await fallbackPage.locator('#tuc-submit-order').isEnabled(), true, 'le client peut terminer en retrait sans GPS');
     orderIds.gpsRefuseEmporter = await validerCommande(fallbackPage, 'gpsRefuseEmporter');
+
+    // 7b. Une position réseau trop imprécise ne doit pas déverrouiller une livraison.
+    await fallbackPage.locator('[data-success-close]').click();
+    await ajouterPlat(fallbackPage);
+    await choisirMode(fallbackPage, 'livraison');
+    await fallbackPage.evaluate(() => {
+      Object.defineProperty(navigator, 'geolocation', {
+        configurable: true,
+        value: { getCurrentPosition: (success) => success({ coords: { latitude: 33.589, longitude: -7.621, accuracy: 900 } }) },
+      });
+    });
+    await fallbackPage.locator('#tuc-get-location').click();
+    await fallbackPage.getByText('trop imprécise', { exact: false }).waitFor();
+    assert.equal(await fallbackPage.locator('#tuc-submit-order').isDisabled(), true,
+      'une précision de 900 m ne peut pas confirmer la livraison');
+    await choisirMode(fallbackPage, 'emporter');
+    orderIds.gpsImprecisEmporter = await validerCommande(fallbackPage, 'gpsImprecisEmporter');
 
     // 8. Réseau coupé après création serveur, puis reprise après rechargement : une seule commande.
     checkpoint = 'scénario 8 · réponse réseau perdue et retry idempotent';

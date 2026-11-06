@@ -38,6 +38,11 @@ if (is_wp_error($restaurantId)) {
     WP_CLI::error('Impossible de créer le restaurant fictif : ' . $restaurantId->get_error_message());
 }
 update_user_meta((int) $userId, 'tuc_resto_id', (int) $restaurantId);
+$gauthier = term_exists('gauthier', 'tuc_quartier_cat');
+if (!$gauthier) $gauthier = wp_insert_term('Gauthier', 'tuc_quartier_cat', ['slug' => 'gauthier']);
+if (is_wp_error($gauthier)) WP_CLI::error('Impossible de créer le quartier E2E : ' . $gauthier->get_error_message());
+$gauthierId = is_array($gauthier) ? (int) $gauthier['term_id'] : (int) $gauthier;
+wp_set_object_terms((int) $restaurantId, [$gauthierId], 'tuc_quartier_cat', false);
 
 foreach ([
     ['login' => 'tuc-mobile-server', 'role' => 'tuc_serveur', 'email' => 'tuc-mobile-server@example.invalid'],
@@ -64,6 +69,11 @@ update_option('tuc_wa_numero', '212600000000', false); // numéro factice réser
 update_option('tuc_wa_secret', (string) getenv('TUC_WA_SECRET'), false);
 update_post_meta((int) $restaurantId, 'tuc_ferme', '0');
 update_post_meta((int) $restaurantId, 'tuc_frais', 5);
+update_post_meta((int) $restaurantId, 'tuc_cuisine', 'Cuisine de test');
+update_post_meta((int) $restaurantId, 'tuc_temps_min', 15);
+update_post_meta((int) $restaurantId, 'tuc_temps_max', 25);
+update_post_meta((int) $restaurantId, 'tuc_lat', 33.5900);
+update_post_meta((int) $restaurantId, 'tuc_lng', -7.6280);
 update_post_meta((int) $restaurantId, 'tuc_minimum', 10);
 update_post_meta((int) $restaurantId, 'tuc_modes', ['livraison', 'emporter', 'table']);
 update_post_meta((int) $restaurantId, 'tuc_tables', 7);
@@ -112,6 +122,8 @@ $orderRequest->set_param('mode', 'livraison');
 $orderRequest->set_param('tel', '+212600000099');
 $orderRequest->set_param('lat', 33.589);
 $orderRequest->set_param('lng', -7.621);
+$orderRequest->set_param('accuracy', 75);
+$orderRequest->set_param('captured_at', time());
 $orderRequest->set_param('total', 25);
 $orderRequest->set_param('cle', 'mobile-fixture-' . wp_generate_uuid4());
 $orderRequest->set_param('items', [[

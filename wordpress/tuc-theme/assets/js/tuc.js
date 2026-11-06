@@ -1,6 +1,5 @@
 /* =========================================================
-   TUC Market — scripts du thème
-   Aucune dépendance. 4 Ko. Uniquement de l'interface.
+   TUC Market — interactions du thème, sans dépendance.
    ========================================================= */
 (function () {
   'use strict';
@@ -16,80 +15,102 @@
     prev.addEventListener('click', function () { rail.scrollBy({ left: -step(), behavior: 'smooth' }); });
     next.addEventListener('click', function () { rail.scrollBy({ left: step(), behavior: 'smooth' }); });
 
-    function upd() {
+    function update() {
       var max = rail.scrollWidth - rail.clientWidth - 2;
       prev.disabled = rail.scrollLeft <= 2;
       next.disabled = rail.scrollLeft >= max || max <= 0;
     }
-    rail.addEventListener('scroll', upd, { passive: true });
-    upd();
+    rail.addEventListener('scroll', update, { passive: true });
+    window.addEventListener('resize', update, { passive: true });
+    update();
   });
 
   /* ---- ancres des catégories ---- */
-  document.querySelectorAll('.cat').forEach(function (a) {
-    var href = a.getAttribute('href') || '';
-    if (href.charAt(0) !== '#') return;
-    a.addEventListener('click', function (e) {
-      var t = document.querySelector(href);
-      if (!t) return;
-      e.preventDefault();
-      window.scrollTo({ top: t.offsetTop - 12, behavior: 'smooth' });
+  document.querySelectorAll('.cat[href^="#"]').forEach(function (link) {
+    link.addEventListener('click', function (event) {
+      var target = document.getElementById(link.hash.slice(1));
+      if (!target) return;
+      event.preventDefault();
+      target.scrollIntoView({ behavior: window.matchMedia('(prefers-reduced-motion: reduce)').matches ? 'auto' : 'smooth', block: 'start' });
+      history.replaceState(null, '', link.hash);
     });
   });
 
-  /* ---- quartier : modale légère ---- */
-  var btn = document.getElementById('tuc-addr');
-  if (!btn) return;
+  /* ---- choix de zone de recherche : la position exacte reste dans le navigateur ---- */
+  var trigger = document.getElementById('tuc-addr');
+  var dialog = document.getElementById('tuc-location-dialog');
+  if (!trigger || !dialog) return;
 
-  var QUARTIERS = ['Maârif', 'Gauthier', 'Racine', 'Anfa', 'Bourgogne', 'Derb Ghallef',
-    'Sidi Maârouf', 'Hay Hassani', 'Aïn Diab', 'Oulfa', 'CIL', 'Beauséjour',
-    'Bouskoura', 'Sidi Belyout', 'Hay Mohammadi', 'Derb Sultan'];
+  var geoButton = document.getElementById('tuc-use-location');
+  var closeButton = document.getElementById('tuc-location-close');
+  var message = document.getElementById('tuc-location-message');
+  var searchUrl = dialog.dataset.searchUrl || window.location.origin + '/';
+  var MAX_NEIGHBORHOOD_DISTANCE_METERS = 25000;
 
-  btn.addEventListener('click', function () {
-    var scrim = document.createElement('div');
-    scrim.style.cssText = 'position:fixed;inset:0;z-index:200;background:rgba(15,15,15,.45);'
-      + 'display:flex;align-items:flex-end;justify-content:center';
-    scrim.innerHTML =
-      '<div style="width:100%;max-width:520px;background:#fff;border-radius:20px 20px 0 0;'
-      + 'padding:20px 16px 28px;max-height:86vh;overflow:auto;box-shadow:0 -12px 40px rgba(0,0,0,.3)">'
-      + '<div style="display:flex;align-items:center;gap:12px">'
-      + '<h2 style="margin:0;font-size:19px;font-weight:800;letter-spacing:-.4px">Où cherchez-vous ?</h2>'
-      + '<button id="tuc-x" style="margin-inline-start:auto;width:32px;height:32px;border-radius:50%;'
-      + 'background:#F7F7F7;display:flex;align-items:center;justify-content:center;font-size:16px">✕</button></div>'
-      + '<button id="tuc-geo" style="margin-top:14px;width:100%;height:48px;border-radius:99px;'
-      + 'background:#E8F7F3;color:#0A8166;font-size:14px;font-weight:800">Utiliser ma position</button>'
-      + '<div style="margin:16px 0 8px;font-size:10.5px;font-weight:800;letter-spacing:.08em;'
-      + 'text-transform:uppercase;color:#9A9A9A">Quartiers</div>'
-      + '<div id="tuc-q" style="display:grid;grid-template-columns:1fr 1fr;gap:7px">'
-      + QUARTIERS.map(function (n) {
-          return '<button class="tq" data-q="' + n + '" style="height:42px;border-radius:10px;'
-            + 'background:#F7F7F7;font-size:12.5px;font-weight:700;padding:0 11px;text-align:start">' + n + '</button>';
-        }).join('')
-      + '</div></div>';
-    document.body.appendChild(scrim);
-
-    scrim.querySelector('#tuc-x').addEventListener('click', function () { scrim.remove(); });
-    scrim.addEventListener('click', function (e) { if (e.target === scrim) scrim.remove(); });
-    scrim.querySelector('#tuc-geo').addEventListener('click', function () {
-      if (!navigator.geolocation) return;
-      navigator.geolocation.getCurrentPosition(function () {
-        setQuartier('Maârif'); scrim.remove();
-      }, function () {}, { maximumAge: 600000, timeout: 8000, enableHighAccuracy: false });
-    });
-    scrim.querySelectorAll('.tq').forEach(function (b) {
-      b.addEventListener('click', function () { setQuartier(b.dataset.q); scrim.remove(); });
-    });
+  trigger.addEventListener('click', function () {
+    if (!dialog.open) dialog.showModal();
+    if (message) message.textContent = '';
+  });
+  if (closeButton) closeButton.addEventListener('click', function () { dialog.close(); });
+  dialog.addEventListener('click', function (event) {
+    if (event.target === dialog) dialog.close();
   });
 
-  function setQuartier(q) {
-    var t = document.getElementById('tuc-addr-txt');
-    if (t) t.textContent = q;
-    btn.classList.remove('todo');
-    try { localStorage.setItem('tuc_quartier', q); } catch (e) {}
+  function distanceMeters(lat1, lng1, lat2, lng2) {
+    var radians = function (degrees) { return degrees * Math.PI / 180; };
+    var dLat = radians(lat2 - lat1);
+    var dLng = radians(lng2 - lng1);
+    var a = Math.sin(dLat / 2) ** 2
+      + Math.cos(radians(lat1)) * Math.cos(radians(lat2)) * Math.sin(dLng / 2) ** 2;
+    return 6371000 * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
   }
 
-  try {
-    var saved = localStorage.getItem('tuc_quartier');
-    if (saved) setQuartier(saved);
-  } catch (e) {}
+  function goToNeighborhood(position) {
+    var latitude = Number(position.coords.latitude);
+    var longitude = Number(position.coords.longitude);
+    var accuracy = Number(position.coords.accuracy);
+    if (!Number.isFinite(latitude) || !Number.isFinite(longitude)
+      || latitude < -90 || latitude > 90 || longitude < -180 || longitude > 180
+      || !Number.isFinite(accuracy) || accuracy <= 0 || accuracy > 5000) {
+      throw new Error('La position n’est pas assez précise pour choisir un quartier. Choisissez-le dans la liste.');
+    }
+
+    var nearest = null;
+    document.querySelectorAll('.tuc-quartier-list [data-quartier]').forEach(function (link) {
+      var lat = Number(link.dataset.centerLat);
+      var lng = Number(link.dataset.centerLng);
+      if (!Number.isFinite(lat) || !Number.isFinite(lng)) return;
+      var distance = distanceMeters(latitude, longitude, lat, lng);
+      if (!nearest || distance < nearest.distance) nearest = { slug: link.dataset.quartier, distance: distance };
+    });
+
+    if (!nearest || nearest.distance > MAX_NEIGHBORHOOD_DISTANCE_METERS) {
+      throw new Error('Votre position est en dehors des quartiers actuellement référencés. Choisissez une zone dans la liste.');
+    }
+
+    // Seul le slug de quartier, jamais la latitude/longitude, est placé dans l’URL.
+    var destination = new URL(searchUrl, window.location.href);
+    destination.search = '';
+    destination.searchParams.set('q', nearest.slug);
+    window.location.assign(destination.href);
+  }
+
+  if (geoButton) geoButton.addEventListener('click', function () {
+    if (!navigator.geolocation) {
+      message.textContent = 'La géolocalisation n’est pas prise en charge. Choisissez un quartier dans la liste.';
+      return;
+    }
+    geoButton.disabled = true;
+    message.textContent = 'Recherche du quartier le plus proche…';
+    navigator.geolocation.getCurrentPosition(function (position) {
+      try { goToNeighborhood(position); }
+      catch (error) { message.textContent = error.message; }
+      finally { geoButton.disabled = false; }
+    }, function (error) {
+      geoButton.disabled = false;
+      if (error.code === 1) message.textContent = 'Permission refusée. Vous pouvez choisir un quartier manuellement; aucun service n’est bloqué.';
+      else if (error.code === 3) message.textContent = 'La recherche a expiré. Réessayez ou choisissez un quartier manuellement.';
+      else message.textContent = 'Position indisponible. Réessayez ou choisissez un quartier manuellement.';
+    }, { enableHighAccuracy: false, timeout: 10000, maximumAge: 300000 });
+  });
 })();
