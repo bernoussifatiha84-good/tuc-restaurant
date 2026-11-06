@@ -657,12 +657,20 @@ final class TUC_Espace_Pro
 
     public static function redirect_apres_connexion(string $redirectTo, string $requested, $user): string
     {
-        if (!$user instanceof WP_User || !user_can($user, TUC_Roles::CAP_MANAGE_MENU)) {
+        if (!$user instanceof WP_User) {
             return $redirectTo;
         }
         $restaurantId = (int) get_user_meta($user->ID, 'tuc_resto_id', true);
-        if ($restaurantId > 0 && TUC_Caisse::utilisateur_autorise_restaurant($user->ID, $restaurantId, TUC_Roles::CAP_MANAGE_MENU)) {
+        if ($restaurantId <= 0) {
+            return $redirectTo;
+        }
+        if (user_can($user, TUC_Roles::CAP_MANAGE_MENU)
+            && TUC_Caisse::utilisateur_autorise_restaurant($user->ID, $restaurantId, TUC_Roles::CAP_MANAGE_MENU)) {
             return home_url('/espace-pro/');
+        }
+        if (user_can($user, TUC_Roles::CAP_ACCESS_CAISSE)
+            && TUC_Caisse::utilisateur_autorise_restaurant($user->ID, $restaurantId, TUC_Roles::CAP_ACCESS_CAISSE)) {
+            return TUC_Caisse::url();
         }
         return $redirectTo;
     }

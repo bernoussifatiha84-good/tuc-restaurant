@@ -633,6 +633,9 @@ try {
     $assert(TUC_Espace_Pro::permission_menu(), 'le restaurateur affecté peut gérer le menu de son restaurant');
     $assert(TUC_Espace_Pro::redirect_apres_connexion('/wp-admin/', '', get_userdata((int) $ownerUserId)) === home_url('/espace-pro/'),
         'la connexion d’un gestionnaire de menu affecté mène à l’espace mobile');
+    $assert(TUC_Espace_Pro::redirect_apres_connexion('/wp-admin/', '', get_userdata((int) $serverUserId)) === home_url('/caisse/')
+        && TUC_Espace_Pro::redirect_apres_connexion('/wp-admin/', '', get_userdata((int) $cashierUserId)) === home_url('/caisse/'),
+        'serveur et caissier sont redirigés directement vers la caisse de leur restaurant');
     $proOrderData = TUC_Espace_Pro::commandes_pro(new WP_REST_Request('GET', '/tuc/v1/pro/commandes'))->get_data();
     $proOrderIds = array_map(static fn(array $order): int => (int) $order['id'], $proOrderData['orders'] ?? []);
     $assert(in_array($orderId, $proOrderIds, true) && !in_array($otherOrderId, $proOrderIds, true)
