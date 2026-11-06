@@ -28,7 +28,7 @@ Le plugin déclare les contenus `tuc_resto`, `tuc_menu_item` et `tuc_commande`; 
 ### Validation encore nécessaire
 
 - Le code reste dans la branche PR, non déployée; aucun accès de restaurateur n’a été accordé.
-- Exécuter le smoke test WordPress complet/CI de cette tranche et corriger les régressions avant toute décision de déploiement.
+- Smoke test WordPress Docker complet passé sur le commit `2dd07d7` (run [42141785151](https://github.com/bernoussifatiha84-good/tuc-restaurant/actions/runs/42141785151)), incluant syntaxe PHP, régressions WordPress/TUC et E2E n8n. C’est une validation CI, pas un déploiement.
 - Tester l’interface sur de vrais appareils et avec des restaurateurs consentants; aucun test utilisateur réel n’a été effectué.
 - Faire confirmer par le propriétaire l’usage des pages brouillon et réglages PayPal/MaxMind avant toute action WooCommerce. Le rapport d’inventaire [lecture seule](INVENTAIRE-WOOCOMMERCE-UAT-2026-11-05.md) ne contient pas leurs valeurs sensibles.
 
@@ -132,7 +132,7 @@ Prévoir sauvegarde brouillon, duplication de plat, confirmation des changements
 
 ### Phase F — Panier, commande et caisse de bout en bout
 
-**État dans cette PR** : la fiche client propose personnalisation, panier, mode de service, téléphone, total confirmé, idempotence et création d’une commande cash à la caisse. Le parcours automatisé doit encore réussir le smoke test CI avant validation; aucun paiement réel ni pilote UAT n’a eu lieu.
+**État dans cette PR** : la fiche client propose personnalisation, panier, mode de service, téléphone, total confirmé, idempotence et création d’une commande cash à la caisse. Le smoke test complet est passé au run [42141785151](https://github.com/bernoussifatiha84-good/tuc-restaurant/actions/runs/42141785151); aucun paiement réel ni pilote UAT n’a eu lieu.
 
 - Raccorder le panier client TUC au même catalogue et aux mêmes identifiants d’options.
 - Revalider côté serveur : restaurant, disponibilité, options, quantités, promo, frais et total au moment de confirmer.

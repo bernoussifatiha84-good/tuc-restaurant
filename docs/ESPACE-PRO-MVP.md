@@ -58,5 +58,5 @@ La fiche client charge les plats publiés depuis l’API publique; le panier sto
 
 - Pas de gestion des horaires, catégories, commandes dans l’Espace Pro, duplication, compression photo côté navigateur ou historique des modifications.
 - Le prototype n’a pas été testé sur appareils réels ni avec des restaurateurs; les traductions RTL ne sont pas activées.
-- Le workflow WordPress Docker smoke test et ses régressions doivent réussir sur la tête finale de la branche avant toute décision de déploiement.
+- Le workflow WordPress Docker smoke test est passé sur le commit `2dd07d7` (run [42141785151](https://github.com/bernoussifatiha84-good/tuc-restaurant/actions/runs/42141785151)), y compris PHP lint, régressions WordPress/TUC et E2E n8n. La couverture CI ne remplace pas un téléversement photo valide ni un test sur appareil réel.
 - WooCommerce et ses données/options restent hors de ce changement; aucune désactivation, suppression ou migration n’est autorisée sans validation explicite et sauvegarde vérifiable.
