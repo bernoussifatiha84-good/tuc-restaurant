@@ -322,6 +322,28 @@ jobs:
             exit "$status"
           fi
 
+      - name: Vérifier les cinq scénarios de panier, compte WhatsApp et livraison via n8n
+        shell: bash
+        env:
+          NODE_PATH: ${{ runner.temp }}/tuc-playwright/node_modules
+          TUC_MOBILE_E2E_URL: http://127.0.0.1:8080
+          TUC_N8N_URL: http://127.0.0.1:5678
+        run: |
+          set -euo pipefail
+          set -a
+          source .env
+          set +a
+          node --check tests/checkout-scenarios.js
+          if output="$(node tests/checkout-scenarios.js 2>&1)"; then
+            printf '%s\n' "$output"
+          else
+            status=$?
+            printf '%s\n' "$output"
+            excerpt="$(printf '%s\n' "$output" | tail -c 1800 | tr '\n' ' ' | sed 's/%/%25/g; s/\r/%0D/g')"
+            echo "::error title=Five checkout scenarios failed::$excerpt"
+            exit "$status"
+          fi
+
       - name: Vérifier HTTP, REST et la version PHP
         shell: bash
         run: |

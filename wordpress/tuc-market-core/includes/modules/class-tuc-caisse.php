@@ -422,7 +422,10 @@ final class TUC_Caisse
 
         foreach ($posts as $p) {
             $table = (int) get_post_meta($p->ID, 'tuc_table', true);
-            $mode = $table > 0 ? 'table' : ((int) get_post_meta($p->ID, 'tuc_frais', true) > 0 ? 'livraison' : 'emporter');
+            $mode = sanitize_key((string) get_post_meta($p->ID, 'tuc_mode', true));
+            if (!in_array($mode, ['table', 'livraison', 'emporter'], true)) {
+                $mode = $table > 0 ? 'table' : ((int) get_post_meta($p->ID, 'tuc_frais', true) > 0 ? 'livraison' : 'emporter');
+            }
 
             $sortie[] = [
                 'id'        => $p->ID,
@@ -430,6 +433,14 @@ final class TUC_Caisse
                 'table'     => $table,
                 'mode'      => $mode,
                 'tel'       => (string) get_post_meta($p->ID, 'tuc_tel', true),
+                'lat'       => is_numeric(get_post_meta($p->ID, 'tuc_location_lat', true)) ? (float) get_post_meta($p->ID, 'tuc_location_lat', true) : null,
+                'lng'       => is_numeric(get_post_meta($p->ID, 'tuc_location_lng', true)) ? (float) get_post_meta($p->ID, 'tuc_location_lng', true) : null,
+                'location_url' => is_numeric(get_post_meta($p->ID, 'tuc_location_lat', true))
+                    && is_numeric(get_post_meta($p->ID, 'tuc_location_lng', true))
+                    ? 'https://maps.google.com/?q=' . rawurlencode(
+                        (string) get_post_meta($p->ID, 'tuc_location_lat', true) . ',' . (string) get_post_meta($p->ID, 'tuc_location_lng', true)
+                    )
+                    : '',
                 'items'     => (array) get_post_meta($p->ID, 'tuc_items', true),
                 'sous_total' => (float) get_post_meta($p->ID, 'tuc_sous_total', true),
                 'frais'     => (float) get_post_meta($p->ID, 'tuc_frais', true),
@@ -565,9 +576,11 @@ final class TUC_Caisse
         $table    = (int) get_post_meta($commande_id, 'tuc_table', true);
         $total    = (float) get_post_meta($commande_id, 'tuc_total', true);
         $items    = (array) get_post_meta($commande_id, 'tuc_items', true);
-
-        $mode = $table > 0 ? 'table' : ((int) get_post_meta($commande_id, 'tuc_frais', true) > 0 ? 'livraison' : 'emporter');
-        $ou = $table > 0 ? 'Table ' . $table : ($mode === 'livraison' ? 'Livraison' : 'À emporter');
+        $mode = sanitize_key((string) get_post_meta($commande_id, 'tuc_mode', true));
+        if (!in_array($mode, ['table', 'livraison', 'emporter'], true)) {
+            $mode = $table > 0 ? 'table' : ((int) get_post_meta($commande_id, 'tuc_frais', true) > 0 ? 'livraison' : 'emporter');
+        }
+        $ou = $mode === 'table' ? 'Table ' . $table : ($mode === 'livraison' ? 'Livraison' : 'À emporter');
         $nb = 0;
         foreach ($items as $l) {
             $nb += (int) ($l['q'] ?? 1);

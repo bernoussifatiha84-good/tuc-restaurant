@@ -696,6 +696,17 @@ final class TUC_Espace_Pro
                 'rest' => esc_url_raw(rest_url('tuc/v1/')),
                 'nonce' => wp_create_nonce('wp_rest'),
                 'phoneLabel' => __('Téléphone pour le suivi de commande', 'tuc-core'),
+                'loggedIn' => is_user_logged_in(),
+                'phone' => is_user_logged_in() ? (string) get_user_meta(get_current_user_id(), 'tuc_tel', true) : '',
+                'location' => is_user_logged_in()
+                    && is_numeric(get_user_meta(get_current_user_id(), 'tuc_location_lat', true))
+                    && is_numeric(get_user_meta(get_current_user_id(), 'tuc_location_lng', true))
+                    ? [
+                        'lat' => (float) get_user_meta(get_current_user_id(), 'tuc_location_lat', true),
+                        'lng' => (float) get_user_meta(get_current_user_id(), 'tuc_location_lng', true),
+                        'label' => (string) get_user_meta(get_current_user_id(), 'tuc_location_label', true),
+                    ]
+                    : null,
             ]);
         }
     }

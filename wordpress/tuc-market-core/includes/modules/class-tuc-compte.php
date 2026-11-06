@@ -26,6 +26,7 @@ final class TUC_Compte
     {
         add_action('init', [self::class, 'role']);
         add_action('rest_api_init', [self::class, 'routes']);
+        add_action('template_redirect', [self::class, 'connexion_magique'], 0);
     }
 
     public static function role(): void
@@ -123,12 +124,45 @@ final class TUC_Compte
         return [get_user_by('id', $uid), true];
     }
 
-    /** Lien magique : usage unique, 15 minutes. */
-    public static function lien_magique(int $uid): string
+    /** Lien magique : usage unique, 15 minutes, retour interne vers le panier. */
+    public static function lien_magique(int $uid, string $retour = ''): string
     {
         $jeton = wp_generate_password(40, false, false);
-        set_transient('tuc_magie_' . hash('sha256', $jeton), $uid, 15 * MINUTE_IN_SECONDS);
+        $retour = self::chemin_retour($retour);
+        set_transient('tuc_magie_' . hash('sha256', $jeton), [
+            'uid' => $uid,
+            'retour' => $retour,
+        ], 15 * MINUTE_IN_SECONDS);
         return add_query_arg('tuc_magie', $jeton, home_url('/connexion/'));
+    }
+
+    /** Valide l'URL de retour sur le site courant afin d'éviter les redirections ouvertes. */
+    private static function chemin_retour(string $retour): string
+    {
+        return wp_validate_redirect($retour, home_url('/'));
+    }
+
+    /** Échange le jeton de l'URL WhatsApp contre un cookie de session, puis nettoie l'URL. */
+    public static function connexion_magique(): void
+    {
+        if (!isset($_GET['tuc_magie'])) {
+            return;
+        }
+        nocache_headers();
+        header('Referrer-Policy: no-referrer');
+        header('X-Content-Type-Options: nosniff');
+        $request = new WP_REST_Request('POST', '/tuc/v1/magie');
+        $request->set_param('jeton', sanitize_text_field((string) wp_unslash($_GET['tuc_magie'])));
+        $result = self::consommer_magie($request);
+        if (is_wp_error($result)) {
+            status_header(410);
+            echo '<!doctype html><html lang="fr"><meta charset="utf-8"><meta name="referrer" content="no-referrer"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Lien expiré</title><body><main><h1>Lien expiré ou déjà utilisé</h1><p>Retournez sur WhatsApp pour demander un nouveau lien de connexion.</p></main></body></html>';
+            exit;
+        }
+        $data = $result instanceof WP_REST_Response ? $result->get_data() : [];
+        $retour = (string) ($data['retour'] ?? home_url('/'));
+        wp_safe_redirect($retour, 303);
+        exit;
     }
 
     public static function routes(): void
@@ -226,6 +260,7 @@ final class TUC_Compte
         $but   = sanitize_key((string) ($req->get_param('but') ?? 'compte')); // compte | commande
         $resto = sanitize_title((string) ($req->get_param('resto') ?? ''));
         $table = (int) ($req->get_param('table') ?? 0);
+        $retour = self::chemin_retour((string) ($req->get_param('retour') ?? home_url('/')));
 
         $numero = preg_replace('/[^0-9]/', '', (string) get_option('tuc_wa_numero', ''));
         if ($numero === '') {
@@ -255,6 +290,7 @@ final class TUC_Compte
             'but'        => $but,
             'resto'      => $resto,
             'table'      => $table,
+            'retour'     => $retour,
             'poll_hash'  => hash('sha256', $pollSecret),
         ], 30 * MINUTE_IN_SECONDS);
 
@@ -264,12 +300,15 @@ final class TUC_Compte
             $texte = sprintf('TUC — JE VEUX CRÉER MON COMPTE ref:%s', $code);
         }
 
-        return new WP_REST_Response([
+        $response = new WP_REST_Response([
             'url'   => 'https://wa.me/' . $numero . '?text=' . rawurlencode($texte),
             'code'  => $code,
             'poll'  => $pollSecret,
             'expire' => 30,
         ], 200);
+        $response->header('Cache-Control', 'no-store, private, max-age=0');
+        $response->header('Pragma', 'no-cache');
+        return $response;
     }
 
     /**
@@ -296,7 +335,7 @@ final class TUC_Compte
             return new WP_Error('tuc_compte', 'Création du compte impossible.', ['status' => 500]);
         }
 
-        $magie = self::lien_magique($user->ID);
+        $magie = self::lien_magique($user->ID, (string) ($ctx['retour'] ?? ''));
 
         // le navigateur d'origine pourra récupérer ce lien via /wa-statut
         set_transient('tuc_wa_ok_' . $code, [
@@ -312,8 +351,9 @@ final class TUC_Compte
             'login'   => $user->user_login,
             // n8n renvoie ce texte tel quel dans la conversation (fenêtre 24 h)
             'reponse' => sprintf(
-                "Bienvenue chez TUC 👋\n\nIdentifiant : %s\nConnexion directe (valable 15 min) : %s\n\nVous pourrez définir votre mot de passe une fois connecté.",
+                "Bienvenue chez TUC 👋\n\nIdentifiant : %s\nTéléphone vérifié : +%s\nConnexion directe (valable 15 min) : %s\n\nPour votre sécurité, aucun mot de passe n’est envoyé dans WhatsApp. Vous pourrez en définir un après connexion.",
                 $user->user_login,
+                self::normaliser((string) get_user_meta($user->ID, 'tuc_tel', true)),
                 $magie
             ),
         ], 201);
@@ -442,17 +482,21 @@ final class TUC_Compte
     {
         $jeton = (string) $req->get_param('jeton');
         $cle = 'tuc_magie_' . hash('sha256', $jeton);
-        $uid = get_transient($cle);
-
-        if ($uid === false) {
+        $record = get_transient($cle);
+        if ($record === false) {
             return new WP_Error('tuc_jeton', 'Lien expiré ou déjà utilisé.', ['status' => 410]);
         }
         delete_transient($cle); // usage unique
+        $uid = is_array($record) ? (int) ($record['uid'] ?? 0) : (int) $record;
+        if ($uid <= 0 || !get_userdata($uid)) {
+            return new WP_Error('tuc_jeton', 'Compte associé au lien introuvable.', ['status' => 410]);
+        }
+        $retour = is_array($record) ? (string) ($record['retour'] ?? home_url('/')) : home_url('/');
 
-        wp_set_current_user((int) $uid);
-        wp_set_auth_cookie((int) $uid, true, is_ssl());
+        wp_set_current_user($uid);
+        wp_set_auth_cookie($uid, true, is_ssl());
 
-        return new WP_REST_Response(['ok' => true, 'uid' => (int) $uid], 200);
+        return new WP_REST_Response(['ok' => true, 'uid' => $uid, 'retour' => $retour], 200);
     }
 
     public static function changer_mdp(WP_REST_Request $req)

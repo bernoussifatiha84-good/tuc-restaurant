@@ -144,6 +144,11 @@ svg{display:block;flex:none}
 .c-age.tard{background:#FFF0F3;color:var(--red)}
 
 .c-lignes{padding:10px 14px 4px;display:flex;flex-direction:column;gap:7px}
+.c-contact{display:grid;gap:8px;margin:9px 14px 2px;padding:10px 11px;border-radius:12px;background:#f1f6f1;border:1px solid var(--g200);font-size:12px}
+.c-contact strong{color:var(--g800)}
+.c-contact-actions{display:flex;flex-wrap:wrap;gap:7px}
+.c-contact-actions a,.c-contact-actions button{min-height:36px;display:inline-flex;align-items:center;justify-content:center;padding:0 10px;border:1px solid var(--g200);border-radius:9px;background:#fff;color:var(--g800);font:700 11px system-ui,sans-serif;text-decoration:none}
+.c-contact-actions button{background:var(--teal-d);color:#fff;border-color:var(--teal-d)}
 .lig{display:flex;align-items:baseline;gap:9px;font-size:13.5px}
 .lig .q{font-weight:800;color:var(--teal-d);font-variant-numeric:tabular-nums;
   min-width:24px}
@@ -475,6 +480,20 @@ svg{display:block;flex:none}
     return m + ' min';
   }
 
+  async function partagerCommande(button) {
+    const text = button.dataset.shareText || '';
+    if (!text) return;
+    try {
+      if (navigator.share) {
+        await navigator.share({ title: 'Livraison TUC', text });
+      } else {
+        window.open('https://wa.me/?text=' + encodeURIComponent(text), '_blank', 'noopener');
+      }
+    } catch (error) {
+      if (error.name !== 'AbortError') toast('Le partage n’a pas pu être ouvert.');
+    }
+  }
+
   function carte(c) {
     const lignes = (c.items || []).slice(0, 4).map((l) => {
       const opts = (l.opts || []).filter(Boolean);
@@ -492,6 +511,18 @@ svg{display:block;flex:none}
 
     const ou = c.mode === 'table' ? 'Table ' + c.table
       : c.mode === 'livraison' ? 'Livraison' : 'À emporter';
+    const phoneDigits = String(c.tel || '').replace(/[^0-9]/g, '');
+    const hasLocation = c.mode === 'livraison' && c.lat !== null && c.lng !== null && Number.isFinite(Number(c.lat)) && Number.isFinite(Number(c.lng));
+    const mapUrl = hasLocation ? (c.location_url || `https://maps.google.com/?q=${c.lat},${c.lng}`) : '';
+    const shareText = [`Livraison TUC #${c.id}`, `Téléphone : +${phoneDigits}`, `Localisation : ${mapUrl}`].join(String.fromCharCode(10));
+    const contact = c.mode === 'livraison' && phoneDigits ? `<div class="c-contact">
+      <strong>Contact client · +${esc(phoneDigits)}</strong>
+      <div class="c-contact-actions">
+        <a href="tel:+${esc(phoneDigits)}">Appeler</a>
+        <a href="https://wa.me/${esc(phoneDigits)}?text=${encodeURIComponent(`Bonjour, votre commande #${c.id} est en cours de livraison.`)}" target="_blank" rel="noopener noreferrer">WhatsApp</a>
+        ${hasLocation ? `<a href="${esc(mapUrl)}" target="_blank" rel="noopener noreferrer">Voir la position</a><button type="button" data-share-text="${esc(shareText)}" aria-label="Partager le téléphone et la position avec le livreur">Partager au livreur</button>` : '<span>Position non fournie</span>'}
+      </div>
+    </div>` : '';
 
     // une seule action principale, selon l'étape — pas de menu à 6 boutons
     const suite = {
@@ -516,6 +547,7 @@ svg{display:block;flex:none}
         <span class="c-age ${ageClasse(c.age)}" data-age-txt>${esc(ageTexte(c.age))}</span>
         <span class="c-heure">${esc(c.heure)}</span>
       </div>
+      ${contact}
       <div class="c-lignes">${lignes}</div>
       ${plus}
       <div class="c-tot">
@@ -696,6 +728,9 @@ svg{display:block;flex:none}
   }
 
   document.addEventListener('click', (e) => {
+    const partage = e.target.closest('[data-share-text]');
+    if (partage) { partagerCommande(partage); return; }
+
     const av = e.target.closest('[data-avance]');
     if (av) { changer(Number(av.dataset.avance), av.dataset.vers, av); return; }
 

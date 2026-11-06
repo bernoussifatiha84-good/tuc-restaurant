@@ -13,6 +13,7 @@
   const storeKey = `tuc-cart-v2:${slug}`;
   const trackingKey = `tuc-order-track-v1:${slug}`;
   const trackingDialog = $('#tuc-tracking-dialog');
+  const accountDialog = $('#tuc-account-dialog');
   let trackingTimer = 0;
   const labels = { livraison: 'Livraison', emporter: 'À emporter', table: 'À table' };
   let restaurant = null;
@@ -21,6 +22,18 @@
   let currentItem = null;
   let pendingKey = '';
   let acceptedServerTotal = null;
+  const locationKey = `tuc-delivery-location-v1:${slug}:${TUCClient.phone || 'guest'}`;
+  const modeKey = `tuc-order-mode-v1:${slug}`;
+  let deliveryLocation = null;
+  let waSession = null;
+  let waPollTimer = 0;
+  try {
+    const saved = JSON.parse(localStorage.getItem(locationKey) || 'null');
+    const candidate = TUCClient.location || saved;
+    if (candidate && Number.isFinite(Number(candidate.lat)) && Number.isFinite(Number(candidate.lng))) {
+      deliveryLocation = { lat: Number(candidate.lat), lng: Number(candidate.lng), label: String(candidate.label || 'Position enregistrée') };
+    }
+  } catch (_) { /* géolocalisation facultative */ }
 
   const escapeHtml = (value) => String(value ?? '').replace(/[&<>"']/g, (char) => ({
     '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#039;'
@@ -225,6 +238,50 @@
     const fee = selectedMode() === 'livraison' ? Number(restaurant?.fee || 0) : 0;
     return { lines, subtotal: Math.round(subtotal * 100) / 100, fee, total: Math.round((subtotal + fee) * 100) / 100 };
   }
+  function renderLocationPanel() {
+    const panel = $('#tuc-location-panel');
+    const button = $('#tuc-get-location');
+    const message = $('#tuc-location-status');
+    const delivery = selectedMode() === 'livraison';
+    panel.hidden = !delivery;
+    if (!delivery) return;
+    if (!TUCClient.loggedIn) {
+      button.hidden = true;
+      message.textContent = 'Après la connexion sécurisée par WhatsApp, votre position sera demandée.';
+      return;
+    }
+    button.hidden = false;
+    button.textContent = deliveryLocation ? 'Mettre à jour ma position' : 'Utiliser ma position';
+    message.textContent = deliveryLocation
+      ? `${deliveryLocation.label} · ${deliveryLocation.lat.toFixed(5)}, ${deliveryLocation.lng.toFixed(5)}`
+      : 'La localisation est nécessaire pour confirmer une livraison.';
+  }
+  function demanderPosition() {
+    const message = $('#tuc-location-status');
+    const button = $('#tuc-get-location');
+    if (!navigator.geolocation) {
+      message.textContent = 'La localisation n’est pas disponible dans ce navigateur.';
+      return;
+    }
+    button.disabled = true;
+    message.textContent = 'Recherche de votre position…';
+    navigator.geolocation.getCurrentPosition((position) => {
+      deliveryLocation = {
+        lat: Number(position.coords.latitude.toFixed(6)),
+        lng: Number(position.coords.longitude.toFixed(6)),
+        label: 'Position partagée pour cette livraison',
+      };
+      try { localStorage.setItem(locationKey, JSON.stringify(deliveryLocation)); } catch (_) { /* stockage facultatif */ }
+      button.disabled = false;
+      renderLocationPanel();
+      updateCart();
+    }, (error) => {
+      button.disabled = false;
+      message.textContent = error.code === 1
+        ? 'Autorisez la localisation dans votre navigateur, ou réessayez.'
+        : 'Position introuvable. Vérifiez le GPS et réessayez.';
+    }, { enableHighAccuracy: false, timeout: 15000, maximumAge: 60000 });
+  }
   function updateCart() {
     const totals = getTotals();
     const count = totals.lines.reduce((sum, line) => sum + line.q, 0);
@@ -245,9 +302,12 @@
     } else minimumNotice.hidden = true;
     const button = $('#tuc-submit-order');
     const validTable = table === 0 || (Number(restaurant?.tables || 0) >= table && table > 0);
-    button.disabled = count === 0 || !restaurant?.open || !validTable || (table === 0 && serviceModes().length === 0) || (minimum > 0 && totals.subtotal < minimum);
+    const locationRequired = TUCClient.loggedIn && selectedMode() === 'livraison' && !deliveryLocation;
+    button.disabled = count === 0 || !restaurant?.open || !validTable || (table === 0 && serviceModes().length === 0) || (minimum > 0 && totals.subtotal < minimum) || locationRequired;
     if (!restaurant?.open) button.textContent = 'Restaurant fermé';
     else button.textContent = 'Confirmer la commande';
+    renderLocationPanel();
+    try { if (table === 0) localStorage.setItem(modeKey, selectedMode()); } catch (_) { /* mode non persistant si stockage désactivé */ }
     cacheCart();
   }
 
@@ -262,6 +322,10 @@
       const modes = serviceModes();
       select.innerHTML = modes.length ? modes.map((mode) => `<option value="${mode}">${labels[mode]}</option>`).join('') : '<option value="">Mode de service non configuré</option>';
       select.disabled = modes.length === 0;
+      try {
+        const savedMode = localStorage.getItem(modeKey);
+        if (modes.includes(savedMode)) select.value = savedMode;
+      } catch (_) { /* mode par défaut */ }
       if (!modes.length) setStatus('Ce restaurant n’a pas encore configuré ses modes de commande.', true);
     }
   }
@@ -286,6 +350,20 @@
       if (!response.ok) throw new Error(data.message || 'Menu indisponible.');
       restaurant = data.restaurant;
       menu = Array.isArray(data.items) ? data.items : [];
+      const phoneInput = $('#tuc-customer-phone');
+      const phoneLabel = $('label[for="tuc-customer-phone"]');
+      const phoneHelp = $('#tuc-phone-help');
+      phoneInput.required = Boolean(TUCClient.loggedIn);
+      if (TUCClient.loggedIn) {
+        if (TUCClient.phone) {
+          phoneInput.value = `+${String(TUCClient.phone).replace(/^\+/, '')}`;
+          phoneInput.readOnly = true;
+        }
+      } else {
+        phoneLabel.hidden = true;
+        phoneInput.hidden = true;
+        phoneHelp.textContent = 'Votre numéro sera vérifié automatiquement par le message que vous enverrez depuis WhatsApp.';
+      }
       $('#tuc-menu-heading').textContent = `Le menu de ${restaurant.name}`;
       if (!restaurant.open) setStatus('Ce restaurant est fermé pour le moment.', true);
       else if (table > 0 && (!restaurant.tables || table > restaurant.tables)) setStatus('Le numéro de table indiqué est invalide. Demandez de l’aide au personnel.', true);
@@ -294,12 +372,66 @@
       renderMenu();
       restoreCart();
       updateCart();
+      const currentUrl = new URL(window.location.href);
+      if (currentUrl.searchParams.get('tuc_reprendre') === '1') {
+        currentUrl.searchParams.delete('tuc_reprendre');
+        window.history.replaceState({}, '', currentUrl.pathname + currentUrl.search + currentUrl.hash);
+        if (cart.length) {
+          $('#tuc-checkout-area').hidden = false;
+          $('#tuc-cart-lines').hidden = false;
+          window.setTimeout(() => { if (!cartDialog.open) cartDialog.showModal(); }, 0);
+        }
+      }
       const savedTracking = readTracking();
       if (savedTracking) saveTracking(savedTracking);
       if (table > 0 && (!restaurant.tables || table > restaurant.tables)) $$('.tuc-add-to-cart').forEach((button) => { button.disabled = true; });
     } catch (error) {
       setStatus(error.message || 'Impossible de charger le menu. Réessayez.', true);
       products.innerHTML = '<div class="tuc-client-empty"><strong>Menu momentanément indisponible</strong><p>Actualisez la page ou réessayez un peu plus tard.</p></div>';
+    }
+  }
+
+  async function pollWhatsAppStatus() {
+    if (!waSession) return;
+    try {
+      const query = new URLSearchParams({ code: waSession.code, poll: waSession.poll });
+      const response = await fetch(`${TUCClient.rest}wa-statut?${query}`, { credentials: 'same-origin', cache: 'no-store' });
+      const data = await response.json().catch(() => ({}));
+      if (response.ok && data.pret && data.magie) {
+        window.clearTimeout(waPollTimer);
+        $('#tuc-account-status').textContent = 'Votre compte est prêt. Le lien de connexion a aussi été envoyé dans WhatsApp.';
+        $('#tuc-wa-resume').href = data.magie;
+        $('#tuc-wa-resume').hidden = false;
+        return;
+      }
+    } catch (_) { /* le polling reprendra tant que le code est valide */ }
+    waPollTimer = window.setTimeout(pollWhatsAppStatus, 2000);
+  }
+  async function preparerWhatsApp() {
+    const button = $('#tuc-start-whatsapp');
+    const statusMessage = $('#tuc-account-status');
+    button.disabled = true;
+    statusMessage.textContent = 'Préparation du message sécurisé…';
+    try {
+      const retour = new URL(window.location.href);
+      retour.searchParams.set('tuc_reprendre', '1');
+      const response = await fetch(`${TUCClient.rest}wa-lien`, {
+        method: 'POST', credentials: 'same-origin',
+        headers: { 'Content-Type': 'application/json', 'X-WP-Nonce': TUCClient.nonce },
+        body: JSON.stringify({ but: 'compte', retour: retour.toString() }),
+      });
+      const data = await response.json().catch(() => ({}));
+      if (!response.ok || !data.url || !data.code || !data.poll) throw new Error(data.message || 'Impossible de préparer WhatsApp. Réessayez.');
+      waSession = { code: data.code, poll: data.poll };
+      const openLink = $('#tuc-open-whatsapp');
+      openLink.href = data.url;
+      openLink.hidden = false;
+      button.hidden = true;
+      statusMessage.textContent = 'Ouvrez WhatsApp, envoyez le message prérempli, puis revenez ici. Cette page attend la confirmation.';
+      pollWhatsAppStatus();
+    } catch (error) {
+      statusMessage.textContent = error.message;
+      button.disabled = false;
     }
   }
 
@@ -310,6 +442,15 @@
     const totals = getTotals();
     if (!totals.lines.length) { checkoutError.textContent = 'Votre panier est vide.'; checkoutError.hidden = false; return; }
     if (!$('#tuc-checkout-form').reportValidity()) return;
+    if (!TUCClient.loggedIn) {
+      if (!accountDialog.open) accountDialog.showModal();
+      return;
+    }
+    if (selectedMode() === 'livraison' && !deliveryLocation) {
+      checkoutError.textContent = 'Partagez votre position pour confirmer une livraison.';
+      checkoutError.hidden = false;
+      return;
+    }
     const phone = $('#tuc-customer-phone').value.trim();
     if (!pendingKey) pendingKey = newKey();
     const button = $('#tuc-submit-order');
@@ -323,6 +464,7 @@
           resto: slug, table: table > 0 ? table : 0, mode: selectedMode(), tel: phone,
           total: acceptedServerTotal === null ? totals.total : acceptedServerTotal,
           items: totals.lines.map((line) => ({ id: line.id, q: line.q, options: line.options })),
+          ...(selectedMode() === 'livraison' && deliveryLocation ? { lat: deliveryLocation.lat, lng: deliveryLocation.lng } : {}),
           cle: pendingKey
         })
       });
@@ -390,6 +532,10 @@
   });
   $('#tuc-checkout-form').addEventListener('submit', submitOrder);
   $('#tuc-order-mode').addEventListener('change', () => { resetIdempotency(); updateCart(); });
+  $('#tuc-get-location').addEventListener('click', demanderPosition);
+  $('#tuc-start-whatsapp').addEventListener('click', preparerWhatsApp);
+  $('[data-close-account]', accountDialog)?.addEventListener('click', () => accountDialog.close());
+  accountDialog?.addEventListener('click', (event) => { if (event.target === accountDialog) accountDialog.close(); });
   $('#tuc-customer-phone').addEventListener('input', () => { resetIdempotency(); updateCart(); });
   $('#tuc-order-success').addEventListener('click', (event) => {
     if (event.target.closest('[data-success-close]')) cartDialog.close();

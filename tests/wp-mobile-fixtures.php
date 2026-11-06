@@ -60,6 +60,8 @@ foreach ([
     update_user_meta((int) $staffId, 'tuc_resto_id', (int) $restaurantId);
 }
 
+update_option('tuc_wa_numero', '212600000000', false); // numéro factice réservé à l’E2E, jamais utilisé en production
+update_option('tuc_wa_secret', (string) getenv('TUC_WA_SECRET'), false);
 update_post_meta((int) $restaurantId, 'tuc_ferme', '0');
 update_post_meta((int) $restaurantId, 'tuc_frais', 5);
 update_post_meta((int) $restaurantId, 'tuc_minimum', 10);
@@ -108,6 +110,8 @@ $orderRequest->set_param('resto', 'tuc-mobile-e2e');
 $orderRequest->set_param('table', 0);
 $orderRequest->set_param('mode', 'livraison');
 $orderRequest->set_param('tel', '+212600000099');
+$orderRequest->set_param('lat', 33.589);
+$orderRequest->set_param('lng', -7.621);
 $orderRequest->set_param('total', 25);
 $orderRequest->set_param('cle', 'mobile-fixture-' . wp_generate_uuid4());
 $orderRequest->set_param('items', [[

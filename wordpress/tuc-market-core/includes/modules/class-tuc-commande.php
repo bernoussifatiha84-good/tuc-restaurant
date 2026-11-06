@@ -102,6 +102,8 @@ final class TUC_Commande
         $modeParam = $req->get_param('mode');
         $phoneParam = $req->get_param('tel');
         $totalParam = $req->get_param('total');
+        $latitudeParam = $req->get_param('lat');
+        $longitudeParam = $req->get_param('lng');
         $resto_slug = is_scalar($slugParam) ? sanitize_title((string) $slugParam) : '';
         $table      = is_scalar($tableParam) ? absint($tableParam) : 0;
         $mode       = is_scalar($modeParam) ? sanitize_key((string) $modeParam) : '';
@@ -145,6 +147,31 @@ final class TUC_Commande
         }
         if (!preg_match('/^[1-9][0-9]{7,14}$/', $tel)) {
             return new WP_Error('tuc_tel', 'Numéro de téléphone invalide.', ['status' => 422]);
+        }
+        $currentUser = wp_get_current_user();
+        if ($currentUser instanceof WP_User && in_array(TUC_Compte::ROLE, (array) $currentUser->roles, true)) {
+            $verifiedPhone = TUC_Compte::normaliser((string) get_user_meta($currentUser->ID, 'tuc_tel', true));
+            if ($verifiedPhone !== '' && !hash_equals($verifiedPhone, $tel)) {
+                return new WP_Error('tuc_tel_compte', 'Le téléphone doit correspondre au numéro WhatsApp vérifié du compte.', ['status' => 403]);
+            }
+        }
+        $latitude = null;
+        $longitude = null;
+        $hasLatitude = $req->has_param('lat');
+        $hasLongitude = $req->has_param('lng');
+        if ($mode === 'livraison' && (!$hasLatitude || !$hasLongitude)) {
+            return new WP_Error('tuc_location', 'La position est obligatoire pour confirmer une livraison.', ['status' => 422]);
+        }
+        if ($hasLatitude || $hasLongitude) {
+            if ($mode !== 'livraison' || !$hasLatitude || !$hasLongitude
+                || !is_numeric($latitudeParam) || !is_numeric($longitudeParam)
+                || !is_finite((float) $latitudeParam) || !is_finite((float) $longitudeParam)
+                || (float) $latitudeParam < -90 || (float) $latitudeParam > 90
+                || (float) $longitudeParam < -180 || (float) $longitudeParam > 180) {
+                return new WP_Error('tuc_location', 'Position de livraison invalide.', ['status' => 422]);
+            }
+            $latitude = round((float) $latitudeParam, 6);
+            $longitude = round((float) $longitudeParam, 6);
         }
 
         if (!is_array($items) || $items === [] || count($items) > 50) {
@@ -305,6 +332,18 @@ final class TUC_Commande
                 delete_option($lockOption);
             }
             return $id;
+        }
+        if ($latitude !== null && $longitude !== null) {
+            update_post_meta((int) $id, 'tuc_location_lat', $latitude);
+            update_post_meta((int) $id, 'tuc_location_lng', $longitude);
+            $customer = wp_get_current_user();
+            if ($customer instanceof WP_User
+                && in_array(TUC_Compte::ROLE, (array) $customer->roles, true)
+                && TUC_Compte::normaliser((string) get_user_meta($customer->ID, 'tuc_tel', true)) === $tel) {
+                update_user_meta($customer->ID, 'tuc_location_lat', $latitude);
+                update_user_meta($customer->ID, 'tuc_location_lng', $longitude);
+                update_user_meta($customer->ID, 'tuc_location_label', 'Position enregistrée pour les prochaines livraisons');
+            }
         }
         $trackingToken = self::nouveau_jeton_suivi((int) $id, $cle);
         update_post_meta((int) $id, 'tuc_suivi_hash', hash('sha256', $trackingToken));

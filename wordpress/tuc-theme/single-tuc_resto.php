@@ -77,14 +77,32 @@ while (have_posts()) : the_post();
       <form id="tuc-checkout-form" class="tuc-checkout-form">
         <label for="tuc-customer-phone"><?php esc_html_e('Téléphone mobile', 'tuc'); ?></label>
         <input id="tuc-customer-phone" name="tel" type="tel" inputmode="tel" autocomplete="tel" required minlength="8" maxlength="20" placeholder="06 12 34 56 78">
-        <small><?php esc_html_e('Utilisé pour le suivi de votre commande.', 'tuc'); ?></small>
+        <small id="tuc-phone-help"><?php esc_html_e('Utilisé pour le suivi de votre commande.', 'tuc'); ?></small>
         <label id="tuc-mode-label" for="tuc-order-mode"><?php esc_html_e('Mode de service', 'tuc'); ?></label>
         <select id="tuc-order-mode" name="mode"></select>
+        <section id="tuc-location-panel" class="tuc-location-panel" hidden aria-labelledby="tuc-location-title">
+          <strong id="tuc-location-title"><?php esc_html_e('Position de livraison', 'tuc'); ?></strong>
+          <p><?php esc_html_e('Pour la livraison, partagez votre position avec le restaurant. Elle ne sera transmise qu’avec cette commande.', 'tuc'); ?></p>
+          <button type="button" id="tuc-get-location" class="tuc-client-secondary"><?php esc_html_e('Utiliser ma position', 'tuc'); ?></button>
+          <span id="tuc-location-status" role="status" aria-live="polite"></span>
+        </section>
         <p id="tuc-checkout-error" class="tuc-form-error" role="alert" hidden></p>
         <button id="tuc-submit-order" class="tuc-client-primary" type="submit"><?php esc_html_e('Confirmer la commande', 'tuc'); ?></button>
       </form>
     </div>
     <div id="tuc-order-success" class="tuc-order-success" hidden></div>
+  </dialog>
+
+  <dialog id="tuc-account-dialog" class="tuc-client-dialog tuc-account-dialog" aria-labelledby="tuc-account-title">
+    <div class="tuc-dialog-head"><div><p class="tuc-order-kicker"><?php esc_html_e('COMPTE SÉCURISÉ', 'tuc'); ?></p><h2 id="tuc-account-title"><?php esc_html_e('Continuer avec WhatsApp', 'tuc'); ?></h2></div><button type="button" class="tuc-dialog-close" data-close-account aria-label="Fermer">×</button></div>
+    <div class="tuc-account-content">
+      <p><?php esc_html_e('Envoyez le message prérempli depuis votre WhatsApp. Nous créerons ou retrouverons votre compte à partir du numéro expéditeur, puis vous recevrez un lien magique pour reprendre ce panier.', 'tuc'); ?></p>
+      <button type="button" id="tuc-start-whatsapp" class="tuc-client-primary"><?php esc_html_e('Préparer mon message WhatsApp', 'tuc'); ?></button>
+      <a id="tuc-open-whatsapp" class="tuc-client-secondary" href="#" target="_blank" rel="noopener noreferrer" hidden><?php esc_html_e('Ouvrir WhatsApp et envoyer le message', 'tuc'); ?></a>
+      <p id="tuc-account-status" role="status" aria-live="polite"></p>
+      <a id="tuc-wa-resume" class="tuc-client-primary" href="#" hidden><?php esc_html_e('Reprendre mon panier en toute sécurité', 'tuc'); ?></a>
+      <small><?php esc_html_e('Le lien de connexion est à usage unique et expire après 15 minutes. Aucun mot de passe n’est envoyé dans WhatsApp.', 'tuc'); ?></small>
+    </div>
   </dialog>
 
   <dialog id="tuc-tracking-dialog" class="tuc-client-dialog tuc-tracking-dialog" aria-labelledby="tuc-tracking-title">

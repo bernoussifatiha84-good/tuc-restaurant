@@ -325,6 +325,8 @@ try {
         'table' => 0,
         'tel'   => '+212600000001',
         'total' => 31,
+        'lat'   => 33.589,
+        'lng'   => -7.621,
         'cle'   => $idempotenceKey,
         'items' => [[
             'id'      => (int) $itemId,
@@ -353,6 +355,24 @@ try {
     $weakKeyOrder = $validOrder;
     $weakKeyOrder['cle'] = 'short-key';
     $assert($rest('/tuc/v1/commande', $weakKeyOrder)->get_status() === 422, 'une clé d’idempotence trop courte est refusée');
+    $missingCoordinates = $validOrder;
+    unset($missingCoordinates['lat'], $missingCoordinates['lng']);
+    $missingCoordinates['cle'] = 'missing-location-' . $suffix;
+    $assert($rest('/tuc/v1/commande', $missingCoordinates)->get_status() === 422,
+        'une commande en livraison sans position explicite est refusée');
+    $invalidCoordinates = $validOrder;
+    $invalidCoordinates['lat'] = 91;
+    $invalidCoordinates['cle'] = 'invalid-location-' . $suffix;
+    $assert($rest('/tuc/v1/commande', $invalidCoordinates)->get_status() === 422,
+        'la livraison refuse des coordonnées impossibles avant de créer une commande');
+    update_post_meta($restaurantId, 'tuc_modes', ['livraison', 'emporter']);
+    $nonDeliveryLocation = $validOrder;
+    $nonDeliveryLocation['mode'] = 'emporter';
+    $nonDeliveryLocation['total'] = 26;
+    $nonDeliveryLocation['cle'] = 'location-non-delivery-' . $suffix;
+    $assert($rest('/tuc/v1/commande', $nonDeliveryLocation)->get_status() === 422,
+        'les coordonnées ne sont acceptées que pour le mode livraison');
+    update_post_meta($restaurantId, 'tuc_modes', ['livraison']);
 
     // Le total serveur = (10 + 3) × 2 + 5 frais = 31 MAD.
     $orderResponse = $rest('/tuc/v1/commande', $validOrder);
@@ -361,6 +381,9 @@ try {
     $assert(abs((float) ($orderData['total'] ?? 0) - 31.0) < 0.001, 'le serveur recalcule plat, supplément, quantité et frais');
     $orderId = (int) ($orderData['commande'] ?? 0);
     $assert($orderId > 0, 'la réponse retourne un identifiant de commande');
+    $assert(abs((float) get_post_meta($orderId, 'tuc_location_lat', true) - 33.589) < 0.000001
+        && abs((float) get_post_meta($orderId, 'tuc_location_lng', true) + 7.621) < 0.000001,
+        'la commande de livraison conserve les coordonnées consenties pour le restaurant');
     $created['orders'][] = $orderId;
     $trackingToken = (string) ($orderData['suivi'] ?? '');
     $assert((bool) preg_match('/^[A-Za-z0-9_-]{43}$/', $trackingToken)
@@ -398,6 +421,7 @@ try {
     $ratePhones[] = $optionOrderPhone;
     $optionOrder = $rest('/tuc/v1/commande', [
         'resto' => $slug, 'table' => 0, 'tel' => $optionOrderPhone, 'total' => 39,
+        'lat' => 33.589, 'lng' => -7.621,
         'cle' => 'options-v2-' . $suffix,
         'items' => [[
             'id' => (int) $optionItemId, 'q' => 1,
@@ -419,6 +443,7 @@ try {
         'la commande conserve le prix final et le détail canonique des groupes sélectionnés');
     $invalidConditional = $rest('/tuc/v1/commande', [
         'resto' => $slug, 'table' => 0, 'tel' => '+212600000032', 'total' => 24,
+        'lat' => 33.589, 'lng' => -7.621,
         'cle' => 'options-condition-' . $suffix,
         'items' => [['id' => (int) $optionItemId, 'q' => 1, 'options' => [
             ['group_id' => 'format', 'choices' => ['regular']],
@@ -430,6 +455,7 @@ try {
     update_post_meta($restaurantId, 'tuc_modes', ['livraison', 'table']);
     update_post_meta($restaurantId, 'tuc_tables', 2);
     $tableOrder = $validOrder;
+    unset($tableOrder['lat'], $tableOrder['lng']);
     $tableOrder['table'] = 2;
     $tableOrder['mode'] = 'table';
     $tableOrder['tel'] = '+212600000033';
@@ -556,6 +582,8 @@ try {
         'table' => 0,
         'tel'   => $otherOrderPhone,
         'total' => 7,
+        'lat'   => 33.589,
+        'lng'   => -7.621,
         'cle'   => 'second-restaurant-' . $suffix,
         'items' => [['id' => (int) $otherItemId, 'q' => 1]],
     ]);
@@ -627,6 +655,13 @@ try {
     wp_set_current_user((int) $ownerUserId);
     $ownerOrders = TUC_Caisse::commandes(new WP_REST_Request('GET', '/tuc/v1/caisse/commandes'))->get_data()['commandes'] ?? [];
     $ownerOrderIds = array_map(static fn(array $order): int => (int) $order['id'], $ownerOrders);
+    $matchingOwnerOrders = array_values(array_filter($ownerOrders, static fn(array $order): bool => (int) $order['id'] === (int) $orderId));
+    $ownerOrder = $matchingOwnerOrders[0] ?? null;
+    $assert(is_array($ownerOrder) && $ownerOrder['tel'] === '212600000001'
+        && abs((float) $ownerOrder['lat'] - 33.589) < 0.000001
+        && abs((float) $ownerOrder['lng'] + 7.621) < 0.000001
+        && str_contains((string) $ownerOrder['location_url'], '33.589'),
+        'la caisse du restaurant reçoit le téléphone, les coordonnées et le lien cartographique de livraison');
     $assert(TUC_Caisse::peut_acceder() && TUC_Caisse::mon_resto()->ID === (int) $restaurantId
         && in_array((int) $orderId, $ownerOrderIds, true)
         && !in_array($otherOrderId, $ownerOrderIds, true), 'le restaurateur ne voit que les commandes de son restaurant');
