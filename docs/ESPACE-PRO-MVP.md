@@ -1,6 +1,6 @@
 # Espace Pro, options, panier et suivi TUC
 
-**État :** implémentation de code sur la branche `arena/87e5dbce-tuc-restaurant`, PR #1 ouverte. Rien n’est déployé; aucune donnée réelle n’a été migrée et aucun compte restaurateur/gestionnaire n’a été affecté. L’exécution finale du smoke test WordPress Docker reste à obtenir après ces changements. Ce document n’est pas une autorisation de mise en service.
+**État :** implémentation de code sur la branche `arena/87e5dbce-tuc-restaurant`, PR #1 ouverte. Smoke test WordPress Docker réussi sur le code au commit `1cf6f04` (run [42145910794](https://github.com/bernoussifatiha84-good/tuc-restaurant/actions/runs/42145910794)). Rien n’est déployé; aucune donnée réelle n’a été migrée et aucun compte restaurateur/gestionnaire n’a été affecté. Ce document n’est pas une autorisation de mise en service.
 
 ## 1. Rôles et isolation
 
@@ -56,7 +56,7 @@ Aucun paiement en ligne n’est ajouté : le règlement est sur place. WooCommer
 
 ## Tests et limites de mise en service
 
-- Les tests WordPress Docker doivent couvrir le schéma/migration, rôle et isolation inter-tenant, réglages mobile, commandes et suivi sans données client sensibles. Le résultat du dernier run sera consigné ici après CI.
+- Le smoke WordPress Docker passe sur le commit `1cf6f04` (run [42145910794](https://github.com/bernoussifatiha84-good/tuc-restaurant/actions/runs/42145910794)), dont les régressions couvrent migration/restauration options, rôle et isolation inter-tenant, réglages mobile, commandes et suivi sans données client sensibles.
 - Le parseur PHP/`node --check` local ne remplacent pas le lint PHP et l’exécution runtime WordPress Docker.
 - Photos réelles, navigateurs mobiles, RTL/arabe, charge et essais avec restaurateurs consentants restent à valider sur environnement de test.
 - Pas de migration de données réelles, aucun compte métier affecté, aucun déploiement.

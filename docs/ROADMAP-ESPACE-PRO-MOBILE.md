@@ -27,7 +27,7 @@ Le plugin déclare les contenus `tuc_resto`, `tuc_menu_item` et `tuc_commande`; 
 ### Validation encore nécessaire
 
 - Le code reste dans la branche PR, non déployée; aucun accès de restaurateur n’a été accordé.
-- La tête précédente `656c672` avait passé le smoke WordPress Docker (run [42142107785](https://github.com/bernoussifatiha84-good/tuc-restaurant/actions/runs/42142107785)); ce résultat ne couvre pas les changements en cours. Le nouveau commit doit repasser le lint PHP, les régressions WordPress/TUC et les E2E n8n avant de déclarer la vérification finale réussie. CI n’est pas un déploiement.
+- Le smoke WordPress Docker est passé sur le code au commit `1cf6f04` (run [42145910794](https://github.com/bernoussifatiha84-good/tuc-restaurant/actions/runs/42145910794)) : lint PHP, régressions WordPress/TUC et E2E n8n réussis. Cette vérification CI ne vaut pas déploiement ni validation sur appareils réels.
 - Tester l’interface sur de vrais appareils et avec des restaurateurs consentants; aucun test utilisateur réel n’a été effectué.
 - Faire confirmer par le propriétaire l’usage des pages brouillon et réglages PayPal/MaxMind avant toute action WooCommerce. Le rapport d’inventaire [lecture seule](INVENTAIRE-WOOCOMMERCE-UAT-2026-11-05.md) ne contient pas leurs valeurs sensibles.
 
