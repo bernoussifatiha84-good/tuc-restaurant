@@ -125,6 +125,46 @@ jobs:
             exit "$regression_status"
           fi
 
+      - name: Installer Chromium pour le parcours navigateur mobile
+        shell: bash
+        run: |
+          set -euo pipefail
+          npm install --prefix "$RUNNER_TEMP/tuc-playwright" --no-audit --no-fund playwright@1.56.1
+          "$RUNNER_TEMP/tuc-playwright/node_modules/.bin/playwright" install --with-deps chromium
+
+      - name: Créer un restaurant et un compte restaurateur synthétiques
+        shell: bash
+        run: |
+          set -euo pipefail
+          mobile_password="$(openssl rand -hex 24)"
+          echo "::add-mask::$mobile_password"
+          docker compose run --rm -e TUC_MOBILE_E2E_PASSWORD="$mobile_password" \
+            --entrypoint wp wpcli eval-file /opt/tuc-tests/wp-mobile-fixtures.php
+          {
+            printf 'TUC_MOBILE_E2E_USER=tuc-mobile-e2e\n'
+            printf 'TUC_MOBILE_E2E_PASSWORD=%s\n' "$mobile_password"
+          } >> "$GITHUB_ENV"
+
+      - name: Parcours E2E mobile navigateur sur WordPress Docker
+        shell: bash
+        env:
+          NODE_PATH: ${{ runner.temp }}/tuc-playwright/node_modules
+          TUC_MOBILE_E2E_URL: http://127.0.0.1:8080
+          TUC_MOBILE_E2E_ARTIFACTS: ${{ runner.temp }}/tuc-mobile-e2e-artifacts
+        run: |
+          set -euo pipefail
+          node --check tests/mobile-e2e.js
+          node tests/mobile-e2e.js
+
+      - name: Publier les captures du parcours mobile
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: tuc-wordpress-mobile-e2e
+          path: ${{ runner.temp }}/tuc-mobile-e2e-artifacts/
+          if-no-files-found: ignore
+          retention-days: 7
+
       - name: Préparer les fixtures du parcours WhatsApp E2E
         run: |
           set -euo pipefail
