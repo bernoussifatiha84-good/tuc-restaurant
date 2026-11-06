@@ -2,6 +2,7 @@
 
 const { chromium } = require('playwright');
 const axe = require('axe-core');
+const fs = require('node:fs');
 const { pathToFileURL } = require('node:url');
 
 const baseUrl = (process.env.TUC_MOBILE_E2E_URL || 'http://127.0.0.1:8080').replace(/\/$/, '');
@@ -178,6 +179,43 @@ async function main() {
     manual,
     lighthouse,
   };
+  const brief = {
+    verdict: result.verdict,
+    lighthouse: lighthouse.map(({ name, scores, vitals }) => ({ name, scores, vitals })),
+    pages: manual.map((page) => {
+      const sample = page.viewportChecks.find((entry) => entry.width === 390);
+      return {
+        name: page.name,
+        httpStatus: page.httpStatus,
+        widths: page.viewportChecks.map(({ width, documentWidth, horizontalOverflow }) => ({ width, documentWidth, horizontalOverflow })),
+        seo: sample && { title: sample.title, descriptionLength: sample.description.length, canonical: sample.canonical, h1Count: sample.h1Count, placeholderLinks: sample.placeholderLinks.length, imagesMissingAlt: sample.imagesMissingAlt.length },
+        axeViolations: page.accessibility.violations.map(({ id, impact, count }) => ({ id, impact, count })),
+        unauthenticatedApiProbe: page.unauthenticatedApiProbe,
+        securityHeaders: sample?.securityHeaders,
+      };
+    }),
+    issues: issues.slice(0, 20),
+    additionalIssueCount: Math.max(0, issues.length - 20),
+  };
+  const markdown = [
+    '## Audit web TUC — WordPress + Docker + navigateur Chromium',
+    '',
+    `**Verdict automatisé : ${result.verdict}**`,
+    '',
+    '| Page | Performance | Accessibilité | Bonnes pratiques | SEO |',
+    '|---|---:|---:|---:|---:|',
+    ...lighthouse.map((page) => `| ${page.name} | ${page.scores.performance ?? '—'} | ${page.scores.accessibility ?? '—'} | ${page.scores['best-practices'] ?? '—'} | ${page.scores.seo ?? '—'} |`),
+    '',
+    '### Principaux constats',
+    ...(issues.length ? issues.slice(0, 30).map((issue) => `- **${issue.severity} · ${issue.page}** — ${issue.finding}`) : ['- Aucun écart aux seuils automatisés configurés.']),
+    '',
+    `Détails de chaque viewport, Axe, en-têtes HTTP, API protégées et métriques Lighthouse : artefact JSON du run. Nombre total de constats : ${issues.length}.`,
+  ].join('\n');
+  if (process.env.GITHUB_STEP_SUMMARY) fs.appendFileSync(process.env.GITHUB_STEP_SUMMARY, `${markdown}\n`);
+  if (process.env.TUC_AUDIT_REPORT_PATH) fs.writeFileSync(process.env.TUC_AUDIT_REPORT_PATH, `${JSON.stringify(result, null, 2)}\n`);
+
+  const annotation = JSON.stringify(brief).replace(/%/g, '%25').replace(/\r/g, '%0D').replace(/\n/g, '%0A');
+  console.log(`::warning title=TUC professional audit::${annotation.slice(0, 5500)}`);
   console.log('PROFESSIONAL_AUDIT_JSON_BEGIN');
   console.log(JSON.stringify(result, null, 2));
   console.log('PROFESSIONAL_AUDIT_JSON_END');
