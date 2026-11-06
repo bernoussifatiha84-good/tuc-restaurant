@@ -1,6 +1,7 @@
 # Feuille de route — Espace restaurateur mobile TUC
 
-**État :** proposition produit/technique, à valider avant implémentation.  
+**État :** MVP technique implémenté dans la branche PR, non déployé. Aucun compte métier n’a été affecté et aucun restaurateur réel n’a encore testé l’interface.
+
 **Dépend de :** [Roadmap produit & technique](ROADMAP-MARKETPLACE.md), phases 0–4.
 
 ## Décision d’architecture proposée
@@ -11,17 +12,25 @@ Faire du plugin **TUC Market Core la source de vérité** des restaurants, menus
 
 Cette décision vise le produit souhaité; elle ne signifie pas que le plugin actuel possède déjà toutes ces fonctions.
 
-## Point de départ vérifié dans le code et sur l’UAT
+## Point de départ vérifié et état actuel
 
-Le plugin déclare les contenus `tuc_resto` et `tuc_menu_item`. Les plats ont des métadonnées pour le prix, la promotion, la disponibilité, l’identifiant du restaurant et des options. Le calcul de prix serveur connaît des suppléments associés aux choix d’options. Le plugin contient aussi une caisse PWA.
+Le plugin déclare les contenus `tuc_resto`, `tuc_menu_item` et `tuc_commande`; la caisse TUC reste le canal de réception. Le relevé WooCommerce UAT est strictement en lecture seule : WooCommerce demeure installé mais inactif, sans suppression, migration ou nouvelle désactivation.
 
-Les écarts connus à traiter avant une ouverture aux restaurateurs :
+### MVP implémenté dans la branche PR — pas encore déployé
 
-- le modèle d’options actuel n’est pas un moteur complet de groupes obligatoires, min/max et règles conditionnelles;
-- le code du panier client n’est pas raccordé au flux de commande de bout en bout;
-- il n’existe pas encore d’espace mobile permettant au restaurateur de gérer son menu;
-- première tranche de sécurité codée dans la branche PR : rôles TUC dédiés (restaurateur, gestionnaire, caissier, serveur), capacités sans `manage_options` et filtrage des commandes par `tuc_resto_id`; tests d’intégration à deux restaurants réussis. Ce code n’est pas déployé et aucun utilisateur métier n’est affecté; le serveur reste sans accès caisse;
-- l’inventaire UAT en lecture seule du 5 novembre 2026 constate WooCommerce 11.2.1 installé mais inactif, aucun produit/variante/coupon/commande, quatre pages WooCommerce assignées en brouillon, et des options PayPal/MaxMind résiduelles dont les valeurs n’ont pas été lues; voir le [rapport](INVENTAIRE-WOOCOMMERCE-UAT-2026-11-05.md). Il reste à faire valider leur usage par le propriétaire du site avant toute action.
+- Page d’affectation des rôles TUC aux comptes existants, réservée aux administrateurs WordPress; l’affectation exige un restaurant publié et aucun compte n’est assigné automatiquement.
+- Routes dédiées pour créer, lire, modifier, publier et archiver les plats, ainsi que téléverser une photo JPEG/PNG/WebP (5 Mo). Les réponses et mutations sont limitées au restaurant explicitement affecté; les rôles TUC n’ont pas accès à l’API REST native d’édition du CPT.
+- Modèle d’options version 2 avec groupes, choix unique/multiple via min/max, choix requis/facultatifs, suppléments, disponibilité et conditions sur un groupe précédent. Les anciens choix plats restent lus sans migration forcée.
+- Espace Pro mobile pour le menu : brouillons/publication, disponibilité, pourcentage de promotion, groupes d’options, photos et aperçu.
+- Fiche client raccordée au menu public, à un panier persistant localement et à la création de commande. Le serveur revalide restaurant, table/mode, disponibilité, options, prix, minimum et frais; la commande conserve un instantané lisible.
+- Les promotions MVP sont des pourcentages sans programmation de dates; aucun paiement en ligne n’est ajouté (règlement sur place).
+
+### Validation encore nécessaire
+
+- Le code reste dans la branche PR, non déployée; aucun accès de restaurateur n’a été accordé.
+- Exécuter le smoke test WordPress complet/CI de cette tranche et corriger les régressions avant toute décision de déploiement.
+- Tester l’interface sur de vrais appareils et avec des restaurateurs consentants; aucun test utilisateur réel n’a été effectué.
+- Faire confirmer par le propriétaire l’usage des pages brouillon et réglages PayPal/MaxMind avant toute action WooCommerce. Le rapport d’inventaire [lecture seule](INVENTAIRE-WOOCOMMERCE-UAT-2026-11-05.md) ne contient pas leurs valeurs sensibles.
 
 ## Principes UX mobile non négociables
 
@@ -49,7 +58,7 @@ Les écarts connus à traiter avant une ouverture aux restaurateurs :
 
 ### Phase B — Modèle métier et sécurité multi-restaurant
 
-**État initial du code sur la branche PR** : les rôles/capacités TUC sont définis et les routes de caisse/commandes appliquent une affectation explicite pour les rôles métier; un test d’intégration avec deux restaurants confirme l’isolation de lecture et de mise à jour des commandes. Aucun compte n’est affecté automatiquement. L’interface d’affectation, les routes de gestion du menu/médias et les tests complets de tous les accès restent à faire; le changement n’est pas déployé en UAT/production.
+**État dans cette PR** : l’interface admin d’affectation, les routes REST menu/médias, les contrôles d’appartenance et le verrouillage de l’API native du CPT sont ajoutés. Les tests couvrent les rôles, les accès croisés et les affectations invalides. Aucun compte n’est affecté automatiquement; le changement n’est pas déployé en UAT/production. Le téléversement réel et les parcours sur appareil restent à valider en environnement de test.
 
 **Travail**
 - Définir les rôles minimaux : propriétaire, responsable, caissier et serveur; préciser les actions autorisées pour chacun.
@@ -66,6 +75,8 @@ Les écarts connus à traiter avant une ouverture aux restaurateurs :
 
 ### Phase C — Prototype UX mobile et tests avec restaurateurs
 
+**État dans cette PR** : prototype responsive du gestionnaire de menu réalisé (cible 320–360 px, tablette et aperçu client). Il n’inclut pas encore le tableau de bord des commandes/boutique. Les tests avec de vrais restaurateurs et appareils n’ont pas eu lieu.
+
 **Écrans à prototyper**
 1. Connexion/accueil Pro, avec la boutique active clairement nommée.
 2. Vue d’ensemble : boutique ouverte/fermée, état du menu, commandes récentes et actions rapides.
@@ -79,6 +90,8 @@ Tester les tâches réelles — ajouter un plat, changer son prix, le rendre ind
 **Critère de sortie** : des utilisateurs de test terminent ces tâches sans aide, comprennent si la modification est enregistrée/publiée et ne confondent pas « supprimer » et « rendre indisponible ».
 
 ### Phase D — Catalogue TUC et règles d’options fiables
+
+**État dans cette PR** : schéma d’options v2 et validation/calcul de prix côté serveur implémentés; les anciennes listes plates sont compatibles. La promotion MVP est un pourcentage immédiat, sans période programmée ni cumul avancé. Les tests couvrent groupes requis, min/max, supplément, disponibilité, condition et ancien format.
 
 **Modèle cible d’un plat**
 - Restaurant propriétaire, catégorie, nom, description, photo, prix de base, disponibilité et statut brouillon/publié.
@@ -99,6 +112,8 @@ Tester les tâches réelles — ajouter un plat, changer son prix, le rendre ind
 
 ### Phase E — Tableau de bord mobile MVP
 
+**État dans cette PR** : la liste, création/modification, brouillon/publication, disponibilité, promotion %, options, photo et aperçu sont disponibles dans le prototype mobile. Catégories, duplication, horaires, accueil, commandes et suivi des modifications ne sont pas inclus dans ce premier périmètre.
+
 **Ordre de livraison suggéré**
 1. Liste des plats et changement rapide de disponibilité.
 2. Ajout/modification de plat et catégorie.
@@ -116,6 +131,8 @@ Prévoir sauvegarde brouillon, duplication de plat, confirmation des changements
 - Pas de commande ou de paiement réel utilisé dans les tests.
 
 ### Phase F — Panier, commande et caisse de bout en bout
+
+**État dans cette PR** : la fiche client propose personnalisation, panier, mode de service, téléphone, total confirmé, idempotence et création d’une commande cash à la caisse. Le parcours automatisé doit encore réussir le smoke test CI avant validation; aucun paiement réel ni pilote UAT n’a eu lieu.
 
 - Raccorder le panier client TUC au même catalogue et aux mêmes identifiants d’options.
 - Revalider côté serveur : restaurant, disponibilité, options, quantités, promo, frais et total au moment de confirmer.

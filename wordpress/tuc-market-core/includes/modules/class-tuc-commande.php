@@ -59,33 +59,44 @@ final class TUC_Commande
         ]);
     }
 
-    /** Prix unitaire réel d'un plat, options comprises. Jamais le prix du client. */
-    public static function prix_unite(int $item_id, array $options = []): float
+    /** Prix serveur (promotion + suppléments validés), jamais celui du client. */
+    public static function details_prix(int $item_id, array $options = []): array|WP_Error
     {
-        $base = (float) get_post_meta($item_id, 'tuc_prix', true);
-        $definies = (array) get_post_meta($item_id, 'tuc_options', true);
-
-        $supplement = 0.0;
-        foreach ($options as $choix) {
-            $id_opt = is_array($choix) ? ($choix['id'] ?? '') : (string) $choix;
-            foreach ($definies as $o) {
-                if (($o['id'] ?? '') === $id_opt) {
-                    $supplement += (float) ($o['prix'] ?? 0);
-                    break;
-                }
-            }
+        $selection = TUC_Options::valider_selection(get_post_meta($item_id, 'tuc_options', true), $options);
+        if (is_wp_error($selection)) {
+            return $selection;
         }
+        $base = max(0.0, (float) get_post_meta($item_id, 'tuc_prix', true));
+        $promo = max(0, min(100, (int) get_post_meta($item_id, 'tuc_promo_pct', true)));
+        $prixApresPromo = round($base * (100 - $promo) / 100, 2);
 
-        return $base + $supplement;
+        return [
+            'list_price' => round($base, 2),
+            'promo_pct' => $promo,
+            'unit_price' => round($prixApresPromo + $selection['surcharge'], 2),
+            'options' => $selection,
+        ];
+    }
+
+    public static function prix_unite(int $item_id, array $options = []): float|WP_Error
+    {
+        $details = self::details_prix($item_id, $options);
+        return is_wp_error($details) ? $details : $details['unit_price'];
     }
 
     public static function creer(WP_REST_Request $req)
     {
-        $resto_slug = sanitize_title((string) $req->get_param('resto'));
-        $table      = (int) ($req->get_param('table') ?? 0);
-        $telBrut    = preg_replace('/[^0-9+]/', '', (string) $req->get_param('tel'));
+        $slugParam = $req->get_param('resto');
+        $tableParam = $req->get_param('table');
+        $modeParam = $req->get_param('mode');
+        $phoneParam = $req->get_param('tel');
+        $totalParam = $req->get_param('total');
+        $resto_slug = is_scalar($slugParam) ? sanitize_title((string) $slugParam) : '';
+        $table      = is_scalar($tableParam) ? absint($tableParam) : 0;
+        $mode       = is_scalar($modeParam) ? sanitize_key((string) $modeParam) : '';
+        $telBrut    = is_scalar($phoneParam) ? preg_replace('/[^0-9+]/', '', (string) $phoneParam) : '';
         $tel        = TUC_Compte::normaliser($telBrut);
-        $annonce    = (float) $req->get_param('total');
+        $annonce    = is_numeric($totalParam) ? (float) $totalParam : 0.0;
         $items      = json_decode((string) wp_json_encode($req->get_param('items')), true) ?: [];
 
         // ---- 1. le restaurant existe et il est ouvert ----
@@ -96,6 +107,31 @@ final class TUC_Commande
         if (get_post_meta($resto->ID, 'tuc_ferme', true) === '1') {
             return new WP_Error('tuc_ferme', 'Le restaurant est fermé.', ['status' => 423]);
         }
+        $modesBruts = array_filter((array) get_post_meta($resto->ID, 'tuc_modes', true), 'is_scalar');
+        $modesAutorises = array_values(array_intersect(
+            array_map(static fn($modeAutorise): string => sanitize_key((string) $modeAutorise), $modesBruts),
+            ['livraison', 'emporter', 'table']
+        ));
+        if ($mode === '') {
+            if ($table > 0) {
+                $mode = 'table';
+            } elseif (in_array('livraison', $modesAutorises, true)) {
+                $mode = 'livraison';
+            } elseif (in_array('emporter', $modesAutorises, true)) {
+                $mode = 'emporter';
+            } elseif ($modesAutorises !== []) {
+                $mode = $modesAutorises[0];
+            } else {
+                $mode = (float) get_post_meta($resto->ID, 'tuc_frais', true) > 0 ? 'livraison' : 'emporter';
+            }
+        }
+        $nbTables = max(0, (int) get_post_meta($resto->ID, 'tuc_tables', true));
+        if (!in_array($mode, ['livraison', 'emporter', 'table'], true)
+            || ($modesAutorises !== [] && !in_array($mode, $modesAutorises, true))
+            || ($mode === 'table' && ($table < 1 || $table > $nbTables))
+            || ($mode !== 'table' && $table !== 0)) {
+            return new WP_Error('tuc_mode', 'Mode de service ou numéro de table invalide.', ['status' => 422]);
+        }
         if (!preg_match('/^[1-9][0-9]{7,14}$/', $tel)) {
             return new WP_Error('tuc_tel', 'Numéro de téléphone invalide.', ['status' => 422]);
         }
@@ -105,7 +141,11 @@ final class TUC_Commande
         }
 
         // ---- 2. idempotence : un double-tap ne crée pas deux commandes ----
-        $cle = (string) $req->get_param('cle');
+        $cleParam = $req->get_param('cle');
+        if ($cleParam !== null && !is_scalar($cleParam)) {
+            return new WP_Error('tuc_cle', 'Clé de commande invalide.', ['status' => 422]);
+        }
+        $cle = is_scalar($cleParam) ? (string) $cleParam : '';
         if ($cle !== '' && !preg_match('/^[A-Za-z0-9._-]{1,64}$/', $cle)) {
             return new WP_Error('tuc_cle', 'Clé de commande invalide.', ['status' => 422]);
         }
@@ -146,42 +186,26 @@ final class TUC_Commande
                 return new WP_Error('tuc_item_resto', 'Article hors du menu de ce restaurant.', ['status' => 422]);
             }
 
-            $pu = self::prix_unite($item_id, $opts);
-            $total += $pu * $qte;
-
-            // Le client envoie des identifiants d'options (`sauce-bbq`). La
-            // caisse et le message WhatsApp, eux, doivent afficher « Sauce BBQ
-            // +4 », pas « sauce-bbq ». On résout le libellé ici, une seule
-            // fois : le prix affiché et le prix facturé restent la même source.
-            $opts_lisibles = [];
-            foreach ($opts as $choix) {
-                $id_opt = is_array($choix) ? (string) ($choix['id'] ?? '') : (string) $choix;
-                if ($id_opt === '') {
-                    continue;
-                }
-                $libelle = $id_opt;
-                $prix    = 0.0;
-                foreach ((array) get_post_meta($item_id, 'tuc_options', true) as $o) {
-                    if ((string) ($o['id'] ?? '') === $id_opt) {
-                        $libelle = (string) ($o['nom'] ?? $id_opt);
-                        $prix    = (float) ($o['prix'] ?? 0);
-                        break;
-                    }
-                }
-                $opts_lisibles[] = trim($libelle . ($prix > 0 ? ' +' . rtrim(rtrim(number_format($prix, 2, ',', ''), '0'), ',') : ''));
+            $prix = self::details_prix($item_id, $opts);
+            if (is_wp_error($prix)) {
+                return $prix;
             }
+            $total += $prix['unit_price'] * $qte;
 
             $lignes[] = [
-                'id'    => $item_id,
-                'nom'   => $plat->post_title,
-                'q'     => $qte,
-                'pu'    => $pu,
-                'opts'  => array_map('sanitize_text_field', $opts_lisibles),
+                'id'          => $item_id,
+                'nom'         => $plat->post_title,
+                'q'           => $qte,
+                'pu'          => $prix['unit_price'],
+                'prix_avant_promo' => $prix['list_price'],
+                'promo_pct'   => $prix['promo_pct'],
+                'options'     => $prix['options']['selections'],
+                'opts'        => array_map('sanitize_text_field', $prix['options']['labels']),
             ];
         }
 
-        // frais de livraison : 0 si commande à table
-        $frais = $table > 0 ? 0.0 : (float) get_post_meta($resto->ID, 'tuc_frais', true);
+        // Les frais ne s’appliquent qu’à la livraison, jamais à emporter ou à table.
+        $frais = $mode === 'livraison' ? max(0.0, (float) get_post_meta($resto->ID, 'tuc_frais', true)) : 0.0;
         $minimum = (float) get_post_meta($resto->ID, 'tuc_minimum', true);
 
         if ($minimum > 0 && $total < $minimum) {
@@ -227,6 +251,7 @@ final class TUC_Commande
             'meta_input'  => [
                 'tuc_resto'  => $resto->ID,
                 'tuc_table'  => $table,
+                'tuc_mode'   => $mode,
                 'tuc_items'  => $lignes,
                 'tuc_sous_total' => $total,
                 'tuc_frais'  => $frais,

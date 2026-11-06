@@ -378,26 +378,17 @@ final class TUC_Compte
             if (count($options) > 20) {
                 return new WP_Error('tuc_options', 'Trop d’options pour un article.', ['status' => 422]);
             }
-            $prixUnitaire = TUC_Commande::prix_unite($itemId, $options);
-            $optionsLisibles = [];
-            foreach ($options as $choix) {
-                $optionId = is_array($choix) ? (string) ($choix['id'] ?? '') : (string) $choix;
-                foreach ((array) get_post_meta($itemId, 'tuc_options', true) as $option) {
-                    if ($optionId !== '' && (string) ($option['id'] ?? '') === $optionId) {
-                        $nom = sanitize_text_field((string) ($option['nom'] ?? $optionId));
-                        $prixOption = (float) ($option['prix'] ?? 0);
-                        $optionsLisibles[] = $nom . ($prixOption > 0 ? ' +' . number_format($prixOption, 2, ',', '') : '');
-                        break;
-                    }
-                }
+            $detailsPrix = TUC_Commande::details_prix($itemId, $options);
+            if (is_wp_error($detailsPrix)) {
+                return $detailsPrix;
             }
             $lignes[] = [
                 'nom'  => sanitize_text_field($plat->post_title),
                 'q'    => $qte,
-                'pu'   => $prixUnitaire,
-                'opts' => $optionsLisibles,
+                'pu'   => $detailsPrix['unit_price'],
+                'opts' => $detailsPrix['options']['labels'],
             ];
-            $sousTotal += $prixUnitaire * $qte;
+            $sousTotal += $detailsPrix['unit_price'] * $qte;
         }
 
         $minimum = (float) get_post_meta($resto->ID, 'tuc_minimum', true);

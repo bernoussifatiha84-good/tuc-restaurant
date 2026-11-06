@@ -19,7 +19,7 @@ final class TUC_Roles
     public const CAP_MANAGE_PROMOTIONS = 'tuc_manage_promotions';
     public const CAP_MANAGE_STAFF = 'tuc_manage_staff';
 
-    private const SCHEMA_VERSION = 1;
+    private const SCHEMA_VERSION = 2;
 
     public static function init(): void
     {
@@ -68,6 +68,21 @@ final class TUC_Roles
             }
             foreach ($definition['caps'] as $capability) {
                 $role->add_cap($capability);
+            }
+        }
+
+        // Le CPT menu garde son éditeur natif uniquement pour les administrateurs.
+        // Les comptes TUC passent par les routes tenant-scoped de l’Espace Pro.
+        $administrator = get_role('administrator');
+        if ($administrator !== null) {
+            foreach ([
+                'edit_tuc_menu_item', 'read_tuc_menu_item', 'delete_tuc_menu_item',
+                'edit_tuc_menu_items', 'edit_others_tuc_menu_items', 'publish_tuc_menu_items',
+                'read_private_tuc_menu_items', 'delete_tuc_menu_items', 'delete_private_tuc_menu_items',
+                'delete_published_tuc_menu_items', 'delete_others_tuc_menu_items',
+                'edit_private_tuc_menu_items', 'edit_published_tuc_menu_items',
+            ] as $capability) {
+                $administrator->add_cap($capability);
             }
         }
 

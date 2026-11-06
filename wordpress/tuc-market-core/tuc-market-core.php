@@ -2,7 +2,7 @@
 /**
  * Plugin Name: TUC Market Core
  * Description: Cœur métier TUC : fiches restaurant, quartiers, commandes, QR de table, santé du site. Comme partikulier-core, il porte le module de santé que le déploiement interroge.
- * Version: 0.8.5
+ * Version: 0.8.6
  * Requires at least: 6.4
  * Requires PHP: 8.1
  * Author: TUC
@@ -15,13 +15,16 @@ if (!defined('ABSPATH')) {
     exit;
 }
 
-const TUC_CORE_VERSION = '0.8.5';
+const TUC_CORE_VERSION = '0.8.6';
 const TUC_CORE_FILE    = __FILE__;
 define('TUC_CORE_DIR', plugin_dir_path(__FILE__));
+define('TUC_CORE_URL', plugin_dir_url(__FILE__));
 
 require_once TUC_CORE_DIR . 'includes/class-tuc-health.php';
 require_once TUC_CORE_DIR . 'includes/class-tuc-activator.php';
 require_once TUC_CORE_DIR . 'includes/class-tuc-roles.php';
+require_once TUC_CORE_DIR . 'includes/modules/class-tuc-options.php';
+require_once TUC_CORE_DIR . 'includes/modules/class-tuc-espace-pro.php';
 
 // modules métier — tout dans un seul plugin, pas dix
 require_once TUC_CORE_DIR . 'includes/modules/class-tuc-cpt.php';       // 1. CPT resto + menu
@@ -55,6 +58,7 @@ add_action('plugins_loaded', static function (): void {
     TUC_Compte::init();
     TUC_Push::init();          // clés VAPID disponibles dès la première visite
     TUC_Caisse::init();        // module 6 — le P0 : sans elle, une commande n'arrive nulle part
+    TUC_Espace_Pro::init();
 }, 5);
 
 /**

@@ -105,10 +105,22 @@ try {
     $assert(post_type_exists('tuc_commande'), 'CPT commande enregistré');
     $assert(has_action('rest_api_init', [TUC_Health::class, 'routes']) !== false, 'route de santé branchée sur rest_api_init');
     $assert(has_action('rest_api_init', [TUC_Commande::class, 'routes']) !== false, 'routes de commande branchées sur rest_api_init');
+    $assert(has_action('admin_menu', [TUC_Espace_Pro::class, 'admin_menu']) !== false
+        && has_action('admin_post_tuc_affecter_membre', [TUC_Espace_Pro::class, 'affecter_membre']) !== false,
+        'page d’affectation et action protégée des comptes sont branchées');
     $registeredRoutes = rest_get_server()->get_routes();
     $cashierRoute = $registeredRoutes['/tuc/v1/caisse/commandes'][0] ?? [];
     $openingRoute = $registeredRoutes['/tuc/v1/caisse/ouverture'][0] ?? [];
     $legacyStatusRoute = $registeredRoutes['/tuc/v1/commande/(?P<id>\d+)/statut'][0] ?? [];
+    $proMenuRoutes = $registeredRoutes['/tuc/v1/pro/menu'] ?? [];
+    $proItemRoute = $registeredRoutes['/tuc/v1/pro/menu/(?P<id>\d+)'][0] ?? [];
+    $proPhotoRoute = $registeredRoutes['/tuc/v1/pro/menu/(?P<id>\d+)/photo'][0] ?? [];
+    $publicMenuRoute = $registeredRoutes['/tuc/v1/menu/(?P<slug>[a-z0-9-]+)'][0] ?? [];
+    $assert(count($proMenuRoutes) >= 2
+        && count(array_filter($proMenuRoutes, static fn(array $route): bool => is_callable($route['permission_callback'] ?? null))) === count($proMenuRoutes)
+        && is_callable($proItemRoute['permission_callback'] ?? null)
+        && is_callable($proPhotoRoute['permission_callback'] ?? null)
+        && is_callable($publicMenuRoute['callback'] ?? null), 'API de gestion menu/médias privée et route menu public enregistrées');
     $assert(is_callable($cashierRoute['permission_callback'] ?? null)
         && is_callable($openingRoute['permission_callback'] ?? null)
         && is_callable($legacyStatusRoute['permission_callback'] ?? null), 'les endpoints caisse/statut sont effectivement enregistrés avec permission_callback');
@@ -124,7 +136,49 @@ try {
         && !$serverRole->has_cap(TUC_Roles::CAP_ACCESS_CAISSE), 'les capacités métier suivent le moindre privilège');
     $assert(!$ownerRole->has_cap('manage_options') && !$managerRole->has_cap('manage_options')
         && !$cashierRole->has_cap('manage_options') && !$serverRole->has_cap('manage_options'), 'aucun rôle restaurateur ne reçoit les droits administrateur WordPress');
+    $assert(!$ownerRole->has_cap('edit_tuc_menu_items') && !$managerRole->has_cap('edit_tuc_menu_items'),
+        'le CPT menu natif ne contourne pas les routes tenant-scoped de l’Espace Pro');
+    $administratorRole = get_role('administrator');
+    $assert($administratorRole !== null && $administratorRole->has_cap('edit_tuc_menu_items'),
+        'seuls les administrateurs conservent l’éditeur natif du CPT menu');
     $assert(TUC_Caisse::CAP === TUC_Roles::CAP_ACCESS_CAISSE, 'la caisse s’appuie sur une capacité métier dédiée');
+    $optionDefinition = [
+        'version' => 2,
+        'groups' => [
+            ['id' => 'format', 'name' => 'Format', 'required' => true, 'min' => 1, 'max' => 1, 'choices' => [
+                ['id' => 'regular', 'name' => 'Régulier', 'price_delta' => 0],
+                ['id' => 'xl', 'name' => 'XL', 'price_delta' => 10],
+            ]],
+            ['id' => 'extras', 'name' => 'Suppléments', 'required' => false, 'min' => 0, 'max' => 2, 'choices' => [
+                ['id' => 'cheese', 'name' => 'Fromage', 'price_delta' => 3],
+                ['id' => 'olives', 'name' => 'Olives', 'price_delta' => 2],
+                ['id' => 'jalapeno', 'name' => 'Jalapeño', 'price_delta' => 1],
+            ]],
+            ['id' => 'xl_sauce', 'name' => 'Sauce XL', 'required' => true, 'min' => 1, 'max' => 1,
+                'visible_if' => ['group_id' => 'format', 'choice_ids' => ['xl']], 'choices' => [
+                    ['id' => 'bbq', 'name' => 'BBQ', 'price_delta' => 1],
+                ]],
+        ],
+    ];
+    $validOptionSelection = TUC_Options::valider_selection($optionDefinition, [
+        ['group_id' => 'format', 'choices' => ['xl']],
+        ['group_id' => 'extras', 'choices' => ['cheese', 'olives']],
+        ['group_id' => 'xl_sauce', 'choices' => ['bbq']],
+    ]);
+    $assert(!is_wp_error($validOptionSelection) && abs($validOptionSelection['surcharge'] - 16) < 0.001,
+        'les groupes, suppléments et choix conditionnels sont recalculés côté serveur');
+    $assert(is_wp_error(TUC_Options::valider_selection($optionDefinition, [])), 'un groupe obligatoire sans choix est refusé');
+    $assert(is_wp_error(TUC_Options::valider_selection($optionDefinition, [
+        ['group_id' => 'format', 'choices' => ['regular']],
+        ['group_id' => 'xl_sauce', 'choices' => ['bbq']],
+    ])), 'un choix conditionnel invisible est refusé');
+    $assert(is_wp_error(TUC_Options::valider_selection($optionDefinition, [
+        ['group_id' => 'format', 'choices' => ['regular']],
+        ['group_id' => 'extras', 'choices' => ['cheese', 'olives', 'jalapeno']],
+    ])), 'le maximum de sélections d’un groupe est appliqué');
+    $assert(!is_wp_error(TUC_Options::valider_selection([
+        ['id' => 'extra-fromage', 'nom' => 'Extra fromage', 'prix' => 3],
+    ], [['id' => 'extra-fromage']])), 'les anciennes options plates restent compatibles');
     $assert(!TUC_Push::endpoint_valide('http://127.0.0.1/internal')
         && !TUC_Push::endpoint_valide('https://localhost/push')
         && !TUC_Push::endpoint_valide('https://127.0.0.1:8443/push'), 'les endpoints Web Push locaux/non HTTPS sont rejetés');
@@ -230,6 +284,75 @@ try {
 
     $storedItems = (array) get_post_meta($orderId, 'tuc_items', true);
     $assert(($storedItems[0]['opts'][0] ?? '') === 'Extra fromage +3', 'le libellé et le supplément sont stockés lisiblement');
+
+    $optionItemId = wp_insert_post([
+        'post_type' => 'tuc_menu_item', 'post_status' => 'publish',
+        'post_title' => 'Plat options v2 ' . $suffix,
+    ], true);
+    $assert(!is_wp_error($optionItemId), 'fixture article options v2 créée');
+    $created['items'][] = (int) $optionItemId;
+    update_post_meta($optionItemId, 'tuc_resto_id', (int) $restaurantId);
+    update_post_meta($optionItemId, 'tuc_prix', 20);
+    update_post_meta($optionItemId, 'tuc_promo_pct', 10);
+    update_post_meta($optionItemId, 'tuc_options', $optionDefinition);
+    $optionOrderPhone = '+212600000031';
+    $ratePhones[] = $optionOrderPhone;
+    $optionOrder = $rest('/tuc/v1/commande', [
+        'resto' => $slug, 'table' => 0, 'tel' => $optionOrderPhone, 'total' => 39,
+        'cle' => 'options-v2-' . $suffix,
+        'items' => [[
+            'id' => (int) $optionItemId, 'q' => 1,
+            'options' => [
+                ['group_id' => 'format', 'choices' => ['xl']],
+                ['group_id' => 'extras', 'choices' => ['cheese', 'olives']],
+                ['group_id' => 'xl_sauce', 'choices' => ['bbq']],
+            ],
+        ]],
+    ]);
+    $optionOrderData = $optionOrder->get_data();
+    $assert($optionOrder->get_status() === 201 && abs((float) ($optionOrderData['total'] ?? 0) - 39) < 0.001,
+        'le flux commande applique promotion, groupes, suppléments conditionnels et frais côté serveur');
+    $optionOrderId = (int) ($optionOrderData['commande'] ?? 0);
+    $created['orders'][] = $optionOrderId;
+    $optionOrderLines = (array) get_post_meta($optionOrderId, 'tuc_items', true);
+    $assert(abs((float) ($optionOrderLines[0]['pu'] ?? 0) - 34) < 0.001
+        && count((array) ($optionOrderLines[0]['options'] ?? [])) === 3,
+        'la commande conserve le prix final et le détail canonique des groupes sélectionnés');
+    $invalidConditional = $rest('/tuc/v1/commande', [
+        'resto' => $slug, 'table' => 0, 'tel' => '+212600000032', 'total' => 24,
+        'cle' => 'options-condition-' . $suffix,
+        'items' => [['id' => (int) $optionItemId, 'q' => 1, 'options' => [
+            ['group_id' => 'format', 'choices' => ['regular']],
+            ['group_id' => 'xl_sauce', 'choices' => ['bbq']],
+        ]]],
+    ]);
+    $assert($invalidConditional->get_status() === 422, 'la commande refuse un choix conditionnel non visible');
+
+    update_post_meta($restaurantId, 'tuc_modes', ['livraison', 'table']);
+    update_post_meta($restaurantId, 'tuc_tables', 2);
+    $tableOrder = $validOrder;
+    $tableOrder['table'] = 2;
+    $tableOrder['mode'] = 'table';
+    $tableOrder['tel'] = '+212600000033';
+    $tableOrder['total'] = 26;
+    $tableOrder['cle'] = 'table-order-' . $suffix;
+    $ratePhones[] = $tableOrder['tel'];
+    $tableOrderResponse = $rest('/tuc/v1/commande', $tableOrder);
+    $tableOrderData = $tableOrderResponse->get_data();
+    $assert($tableOrderResponse->get_status() === 201 && abs((float) ($tableOrderData['total'] ?? 0) - 26) < 0.001,
+        'une commande à table valide ne facture pas les frais de livraison');
+    $tableOrderId = (int) ($tableOrderData['commande'] ?? 0);
+    $created['orders'][] = $tableOrderId;
+    $assert(get_post_meta($tableOrderId, 'tuc_mode', true) === 'table'
+        && (int) get_post_meta($tableOrderId, 'tuc_table', true) === 2,
+        'le mode et le numéro de table sont enregistrés sur la commande');
+    $badTableOrder = $tableOrder;
+    $badTableOrder['table'] = 3;
+    $badTableOrder['tel'] = '+212600000034';
+    $badTableOrder['cle'] = 'invalid-table-' . $suffix;
+    $assert($rest('/tuc/v1/commande', $badTableOrder)->get_status() === 422, 'un numéro de table supérieur au nombre configuré est refusé');
+    update_post_meta($restaurantId, 'tuc_modes', ['livraison']);
+    update_post_meta($restaurantId, 'tuc_tables', 0);
 
     // Un total client falsifié est refusé avec le total serveur.
     $tampered = $validOrder;
@@ -368,6 +491,12 @@ try {
     update_user_meta((int) $ownerUserId, 'tuc_resto_id', (int) $restaurantId);
     update_user_meta((int) $managerUserId, 'tuc_resto_id', (int) $otherRestaurantId);
     update_user_meta((int) $cashierUserId, 'tuc_resto_id', (int) $restaurantId);
+    $validAssignment = TUC_Espace_Pro::valider_affectation((int) $ownerUserId, 'tuc_gestionnaire', (int) $restaurantId);
+    $assert(!is_wp_error($validAssignment) && $validAssignment['restaurant_id'] === (int) $restaurantId,
+        'l’affectation exige un rôle TUC et un restaurant publié');
+    $assert(is_wp_error(TUC_Espace_Pro::valider_affectation((int) $ownerUserId, 'administrator', (int) $restaurantId))
+        && is_wp_error(TUC_Espace_Pro::valider_affectation((int) $ownerUserId, 'tuc_gestionnaire', 99999999)),
+        'l’interface ne peut pas attribuer un rôle WordPress privilégié ou un restaurant inexistant');
 
     wp_set_current_user((int) $ownerUserId);
     $ownerOrders = TUC_Caisse::commandes(new WP_REST_Request('GET', '/tuc/v1/caisse/commandes'))->get_data()['commandes'] ?? [];
@@ -375,6 +504,72 @@ try {
     $assert(TUC_Caisse::peut_acceder() && TUC_Caisse::mon_resto()->ID === (int) $restaurantId
         && in_array((int) $orderId, $ownerOrderIds, true)
         && !in_array($otherOrderId, $ownerOrderIds, true), 'le restaurateur ne voit que les commandes de son restaurant');
+    $assert(TUC_Espace_Pro::permission_menu(), 'le restaurateur affecté peut gérer le menu de son restaurant');
+    $assert(TUC_Espace_Pro::redirect_apres_connexion('/wp-admin/', '', get_userdata((int) $ownerUserId)) === home_url('/espace-pro/'),
+        'la connexion d’un gestionnaire de menu affecté mène à l’espace mobile');
+    $proPayload = [
+        'title' => 'Plat créé via Espace Pro ' . $suffix,
+        'description' => 'Description de contrôle',
+        'price' => 18.5,
+        'promo_pct' => 15,
+        'available' => true,
+        'options' => $optionDefinition,
+        'status' => 'draft',
+    ];
+    $invalidProRequest = new WP_REST_Request('POST', '/tuc/v1/pro/menu');
+    $invalidProPayload = $proPayload;
+    $invalidProPayload['price'] = -1;
+    $invalidProRequest->set_header('content-type', 'application/json');
+    $invalidProRequest->set_body(wp_json_encode($invalidProPayload));
+    $invalidProResult = TUC_Espace_Pro::creer_plat($invalidProRequest);
+    $assert(is_wp_error($invalidProResult) && (int) ($invalidProResult->get_error_data()['status'] ?? 0) === 422,
+        'l’API Espace Pro rejette un prix négatif avant insertion');
+    $proCreateRequest = new WP_REST_Request('POST', '/tuc/v1/pro/menu');
+    $proCreateRequest->set_header('content-type', 'application/json');
+    $proCreateRequest->set_body(wp_json_encode($proPayload));
+    $proCreateResult = TUC_Espace_Pro::creer_plat($proCreateRequest);
+    $assert($proCreateResult instanceof WP_REST_Response && $proCreateResult->get_status() === 201,
+        'l’API Espace Pro crée un plat après validation serveur');
+    $proItemId = (int) ($proCreateResult->get_data()['id'] ?? 0);
+    $created['items'][] = $proItemId;
+    $assert($proItemId > 0 && get_post_status($proItemId) === 'draft'
+        && (int) get_post_meta($proItemId, 'tuc_resto_id', true) === (int) $restaurantId
+        && (int) get_post_meta($proItemId, 'tuc_promo_pct', true) === 15,
+        'le plat est affecté au bon restaurant et reste brouillon avant publication');
+    $ownerMenuList = TUC_Espace_Pro::liste_menu()->get_data();
+    $ownerMenuIds = array_map(static fn(array $item): int => (int) $item['id'], $ownerMenuList);
+    $assert(in_array($proItemId, $ownerMenuIds, true) && !in_array((int) $otherItemId, $ownerMenuIds, true),
+        'la liste Espace Pro inclut ses brouillons mais reste isolée par restaurant');
+    $proPayload['status'] = 'publish';
+    $proUpdateRequest = new WP_REST_Request('PUT', '/tuc/v1/pro/menu/' . $proItemId);
+    $proUpdateRequest->set_param('id', $proItemId);
+    $proUpdateRequest->set_header('content-type', 'application/json');
+    $proUpdateRequest->set_body(wp_json_encode($proPayload));
+    $proUpdateResult = TUC_Espace_Pro::modifier_plat($proUpdateRequest);
+    $assert($proUpdateResult instanceof WP_REST_Response && get_post_status($proItemId) === 'publish',
+        'le gestionnaire peut publier son plat après aperçu et validation');
+    $photoRequest = new WP_REST_Request('POST', '/tuc/v1/pro/menu/' . $proItemId . '/photo');
+    $photoRequest->set_param('id', $proItemId);
+    $photoResult = TUC_Espace_Pro::televerser_photo($photoRequest);
+    $assert(is_wp_error($photoResult) && (int) ($photoResult->get_error_data()['status'] ?? 0) === 422,
+        'le téléversement média refuse un fichier absent ou invalide');
+    $foreignPhotoRequest = new WP_REST_Request('POST', '/tuc/v1/pro/menu/' . $otherItemId . '/photo');
+    $foreignPhotoRequest->set_param('id', $otherItemId);
+    $foreignPhotoResult = TUC_Espace_Pro::televerser_photo($foreignPhotoRequest);
+    $assert(is_wp_error($foreignPhotoResult) && (int) ($foreignPhotoResult->get_error_data()['status'] ?? 0) === 404,
+        'le téléversement média refuse un plat appartenant à un autre restaurant');
+    $publicMenuRequest = new WP_REST_Request('GET', '/tuc/v1/menu/' . $slug);
+    $publicMenuRequest->set_param('slug', $slug);
+    $publicMenuResult = TUC_Espace_Pro::menu_public($publicMenuRequest);
+    $publicMenuIds = array_map(static fn(array $item): int => (int) $item['id'], $publicMenuResult->get_data()['items'] ?? []);
+    $assert(in_array($proItemId, $publicMenuIds, true) && !in_array((int) $otherItemId, $publicMenuIds, true),
+        'le menu public renvoie les plats publiés sans exposer le menu d’un autre restaurant');
+    $foreignMenuRequest = new WP_REST_Request('PUT', '/tuc/v1/pro/menu/' . $otherItemId);
+    $foreignMenuRequest->set_param('id', $otherItemId);
+    $foreignMenuRequest->set_header('content-type', 'application/json');
+    $foreignMenuRequest->set_body(wp_json_encode($proPayload));
+    $assert(is_wp_error(TUC_Espace_Pro::modifier_plat($foreignMenuRequest)),
+        'le restaurateur ne peut pas modifier un plat appartenant à un autre commerce');
 
     $ownStatusRequest = new WP_REST_Request('POST', '/tuc/v1/commande/' . $orderId . '/statut');
     $ownStatusRequest->set_param('id', (int) $orderId);
@@ -387,6 +582,13 @@ try {
     update_post_meta($orderId, 'tuc_statut', 'nouvelle');
 
     wp_set_current_user((int) $managerUserId);
+    $assert(TUC_Espace_Pro::permission_menu(), 'le gestionnaire affecté peut gérer le menu de son propre restaurant');
+    $managerForeignMenu = new WP_REST_Request('PUT', '/tuc/v1/pro/menu/' . $proItemId);
+    $managerForeignMenu->set_param('id', $proItemId);
+    $managerForeignMenu->set_header('content-type', 'application/json');
+    $managerForeignMenu->set_body(wp_json_encode($proPayload));
+    $assert(is_wp_error(TUC_Espace_Pro::modifier_plat($managerForeignMenu)),
+        'le gestionnaire d’un restaurant voisin ne peut pas modifier le plat d’un autre tenant');
     $managerOrders = TUC_Caisse::commandes(new WP_REST_Request('GET', '/tuc/v1/caisse/commandes'))->get_data()['commandes'] ?? [];
     $managerOrderIds = array_map(static fn(array $order): int => (int) $order['id'], $managerOrders);
     $assert(TUC_Caisse::mon_resto()->ID === (int) $otherRestaurantId
@@ -406,10 +608,12 @@ try {
         && get_post_meta($orderId, 'tuc_statut', true) === 'nouvelle', 'la route de caisse refuse elle aussi une commande hors tenant');
 
     wp_set_current_user((int) $cashierUserId);
+    $assert(!TUC_Espace_Pro::permission_menu(), 'le caissier ne peut pas gérer le menu via les routes Espace Pro');
     $assert(TUC_Caisse::peut_acceder() && TUC_Caisse::peut_modifier_commandes()
         && !TUC_Caisse::peut_gerer_restaurant()
         && call_user_func($openingRoute['permission_callback']) === false, 'le caissier peut traiter les commandes mais ne peut pas modifier les paramètres du commerce');
     wp_set_current_user((int) $unassignedUserId);
+    $assert(!TUC_Espace_Pro::permission_menu(), 'un compte non affecté n’accède pas à la gestion du menu');
     $assert(TUC_Caisse::mon_resto() === null
         && TUC_Caisse::commandes(new WP_REST_Request('GET', '/tuc/v1/caisse/commandes'))->get_status() === 403,
         'un compte métier sans affectation explicite n’obtient aucun restaurant par défaut');

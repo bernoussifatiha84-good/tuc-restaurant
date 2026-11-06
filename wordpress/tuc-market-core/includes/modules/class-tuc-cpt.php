@@ -68,6 +68,9 @@ final class TUC_CPT
             'show_ui'      => true,
             'show_in_rest' => true,
             'supports'     => ['title', 'editor', 'thumbnail', 'page-attributes'],
+            // Gestion via l’API Espace Pro; l’API REST native est réservée aux admins.
+            'capability_type' => ['tuc_menu_item', 'tuc_menu_items'],
+            'map_meta_cap' => true,
             'menu_icon'    => 'dashicons-food',
         ]);
 
@@ -114,7 +117,7 @@ final class TUC_CPT
             ]);
         }
 
-        foreach (['tuc_prix' => 'number', 'tuc_promo' => 'integer', 'tuc_options' => 'array', 'tuc_resto_id' => 'integer', 'tuc_dispo' => 'boolean'] as $key => $type) {
+        foreach (['tuc_prix' => 'number', 'tuc_promo' => 'integer', 'tuc_promo_pct' => 'integer', 'tuc_options' => 'array', 'tuc_resto_id' => 'integer', 'tuc_dispo' => 'boolean'] as $key => $type) {
             register_post_meta(self::ITEM, $key, [
                 'type'          => $type,
                 'single'        => true,
