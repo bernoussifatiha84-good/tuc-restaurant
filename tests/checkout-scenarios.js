@@ -364,7 +364,7 @@ async function main() {
         return { status: response.status, data: await response.json().catch(() => ({})) };
       }, { id: Number(orderIds.suiviEnCours), statut });
       assert.equal(update.status, 200, `le personnel fait avancer le statut vers ${statut}`);
-      await staffPage.evaluate(() => document.dispatchEvent(new Event('visibilitychange')));
+      await staffPage.locator(`.ong[data-statut="${statut}"]`).click();
       await delayedOrderCard.locator('[data-avance]').filter({ hasText: nextAction }).waitFor();
       await fallbackPage.locator('[data-refresh-tracking]').click();
       await fallbackPage.locator('#tuc-tracking-content .tuc-tracking-state').filter({ hasText: label }).waitFor();
