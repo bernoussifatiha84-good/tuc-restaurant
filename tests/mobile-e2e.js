@@ -99,7 +99,8 @@ async function main() {
     checkpoint = 'création du plat, options et photo';
     // Modification rapide de disponibilité depuis le même écran tactile.
     await createdRow.locator('[data-edit]').click();
-    await page.locator('#tuc-item-available').uncheck();
+    await page.locator('label.tuc-toggle').filter({ has: page.locator('#tuc-item-available') }).click();
+    assert.equal(await page.locator('#tuc-item-available').isChecked(), false, 'le plat est marqué indisponible');
     await page.locator('#tuc-menu-editor [data-save-status="publish"]').click();
     await page.locator('#tuc-menu-list .tuc-menu-row').filter({ hasText: 'Nouveau plat mobile E2E' }).getByText(/Indisponible/).waitFor();
 
@@ -107,10 +108,13 @@ async function main() {
     // Réglages de boutique: mise en pause et reprise contrôlées côté serveur.
     await page.getByRole('button', { name: 'Boutique', exact: true }).click();
     await page.locator('#tuc-store-settings').waitFor();
-    await page.locator('#tuc-store-open').uncheck();
+    const storeToggle = page.locator('label.tuc-toggle').filter({ has: page.locator('#tuc-store-open') });
+    await storeToggle.click();
+    assert.equal(await page.locator('#tuc-store-open').isChecked(), false, 'la boutique est mise en pause');
     await page.locator('#tuc-store-settings button[type="submit"]').click();
     await page.locator('#tuc-open-dot.is-closed').waitFor();
-    await page.locator('#tuc-store-open').check();
+    await storeToggle.click();
+    assert.equal(await page.locator('#tuc-store-open').isChecked(), true, 'la boutique est rouverte');
     await page.locator('#tuc-store-settings button[type="submit"]').click();
     await page.locator('#tuc-open-dot:not(.is-closed)').waitFor();
 
