@@ -102,7 +102,11 @@ async function main() {
     assert(n8nReply.reponse.includes(customerPhone.replace('+', '')) || n8nReply.reponse.includes(n8nReply.login), 'n8n répond avec l’identifiant du compte créé');
     await page.locator('#tuc-wa-resume:not([hidden])').waitFor({ timeout: 12000 });
     await page.locator('#tuc-wa-resume').click();
-    await page.waitForFunction(() => location.pathname.includes('tuc-mobile-e2e') && window.TUCClient?.loggedIn === true, { timeout: 20000 });
+    await page.waitForFunction(
+      () => location.pathname.includes('tuc-mobile-e2e') && Boolean(window.TUCClient?.loggedIn),
+      undefined,
+      { timeout: 20000 },
+    );
     await page.locator('#tuc-cart-dialog[open]').waitFor({ timeout: 10000 });
     assert.equal(await page.locator('#tuc-order-mode').inputValue(), 'livraison', 'le panier reprend le mode livraison choisi avant WhatsApp');
     assert((await page.locator('#tuc-cart-lines').innerText()).includes('Plat initial E2E'), 'le panier est restauré après le lien magique');
@@ -190,7 +194,16 @@ async function main() {
     console.log('PASS scénarios 2–5: client connecté → emporter, QR Table 7, livraison enregistrée et position actualisée');
     console.log('PASS scénario 5 côté restaurant: appel, WhatsApp, carte, partage natif du téléphone et de la position au livreur');
   } catch (error) {
-    console.error(JSON.stringify({ checkpoint, error: error.message, errors, orderIds }, null, 2));
+    const diagnostics = await page.evaluate(() => ({
+      path: location.pathname,
+      loggedIn: window.TUCClient?.loggedIn ?? null,
+      accountStatus: document.querySelector('#tuc-account-status')?.textContent || '',
+      resumeHref: document.querySelector('#tuc-wa-resume')?.getAttribute('href') || '',
+    })).catch(() => null);
+    if (diagnostics?.resumeHref) {
+      try { diagnostics.resumeHref = new URL(diagnostics.resumeHref).pathname; } catch (_) { diagnostics.resumeHref = '[invalid]'; }
+    }
+    console.error(JSON.stringify({ checkpoint, error: error.message, errors, orderIds, diagnostics }, null, 2));
     await page.screenshot({ path: '/tmp/tuc-checkout-scenarios-failure.png', fullPage: true }).catch(() => {});
     throw error;
   } finally {
