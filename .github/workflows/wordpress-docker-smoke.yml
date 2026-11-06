@@ -15,7 +15,7 @@ concurrency:
 jobs:
   wordpress-docker:
     name: Installer et vérifier WordPress/TUC
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 15
     steps:
       - name: Récupérer le dépôt
