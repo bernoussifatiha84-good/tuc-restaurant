@@ -177,8 +177,20 @@ final class TUC_Espace_Pro
     public static function routes(): void
     {
         register_rest_route('tuc/v1', '/pro/restaurant', [
-            'methods' => 'GET', 'permission_callback' => [self::class, 'permission_menu'],
+            'methods' => 'GET', 'permission_callback' => [self::class, 'permission_restaurant'],
             'callback' => [self::class, 'restaurant_courant'],
+        ]);
+        register_rest_route('tuc/v1', '/pro/restaurant', [
+            'methods' => ['PUT', 'PATCH'], 'permission_callback' => [self::class, 'permission_restaurant'],
+            'callback' => [self::class, 'modifier_restaurant'],
+        ]);
+        register_rest_route('tuc/v1', '/pro/commandes', [
+            'methods' => 'GET', 'permission_callback' => [self::class, 'permission_commandes'],
+            'callback' => [self::class, 'commandes_pro'],
+        ]);
+        register_rest_route('tuc/v1', '/pro/commandes/(?P<id>\d+)/statut', [
+            'methods' => 'POST', 'permission_callback' => [self::class, 'permission_statut_pro'],
+            'callback' => [self::class, 'changer_statut_pro'],
         ]);
         register_rest_route('tuc/v1', '/pro/menu', [
             'methods' => 'GET', 'permission_callback' => [self::class, 'permission_menu'],
@@ -210,11 +222,25 @@ final class TUC_Espace_Pro
     {
         $restaurant = TUC_Caisse::mon_resto();
         return $restaurant instanceof WP_Post
-            && TUC_Caisse::utilisateur_autorise_restaurant(
-                get_current_user_id(),
-                $restaurant->ID,
-                TUC_Roles::CAP_MANAGE_MENU
-            );
+            && TUC_Acces::peut(TUC_Roles::CAP_MANAGE_MENU, $restaurant->ID);
+    }
+
+    public static function permission_restaurant(): bool
+    {
+        $restaurant = TUC_Caisse::mon_resto();
+        return $restaurant instanceof WP_Post && TUC_Acces::peut(TUC_Roles::CAP_MANAGE_RESTAURANT, $restaurant->ID);
+    }
+
+    public static function permission_commandes(): bool
+    {
+        $restaurant = TUC_Caisse::mon_resto();
+        return $restaurant instanceof WP_Post && TUC_Acces::peut(TUC_Roles::CAP_VIEW_ORDERS, $restaurant->ID);
+    }
+
+    public static function permission_statut_pro(): bool
+    {
+        $restaurant = TUC_Caisse::mon_resto();
+        return $restaurant instanceof WP_Post && TUC_Acces::peut(TUC_Roles::CAP_UPDATE_ORDERS, $restaurant->ID);
     }
 
     public static function restaurant_courant(): WP_REST_Response|WP_Error
@@ -230,7 +256,124 @@ final class TUC_Espace_Pro
             'minimum' => (float) get_post_meta($restaurant->ID, 'tuc_minimum', true),
             'fee' => (float) get_post_meta($restaurant->ID, 'tuc_frais', true),
             'open' => get_post_meta($restaurant->ID, 'tuc_ferme', true) !== '1',
+            'modes' => array_values(array_intersect((array) get_post_meta($restaurant->ID, 'tuc_modes', true), ['livraison', 'emporter', 'table'])),
+            'tables' => max(0, (int) get_post_meta($restaurant->ID, 'tuc_tables', true)),
         ]);
+    }
+
+    public static function modifier_restaurant(WP_REST_Request $request): WP_REST_Response|WP_Error
+    {
+        $restaurant = TUC_Caisse::mon_resto();
+        if (!$restaurant instanceof WP_Post) {
+            return new WP_Error('tuc_resto', 'Aucun restaurant assigné à ce compte.', ['status' => 409]);
+        }
+        $payload = $request->get_json_params();
+        if (!is_array($payload)) {
+            return new WP_Error('tuc_restaurant_fields', 'Paramètres de boutique invalides.', ['status' => 422]);
+        }
+        $storedMinimum = get_post_meta($restaurant->ID, 'tuc_minimum', true);
+        $storedFee = get_post_meta($restaurant->ID, 'tuc_frais', true);
+        $storedTables = get_post_meta($restaurant->ID, 'tuc_tables', true);
+        $minimum = $payload['minimum'] ?? (is_numeric($storedMinimum) ? $storedMinimum : 0);
+        $fee = $payload['fee'] ?? (is_numeric($storedFee) ? $storedFee : 0);
+        $tables = $payload['tables'] ?? (is_numeric($storedTables) ? $storedTables : 0);
+        if (!is_numeric($minimum) || (float) $minimum < 0 || (float) $minimum > 50000
+            || !is_numeric($fee) || (float) $fee < 0 || (float) $fee > 10000
+            || !is_numeric($tables) || (float) $tables !== (float) (int) $tables || (int) $tables < 0 || (int) $tables > 500) {
+            return new WP_Error('tuc_restaurant_fields', 'Minimum, frais ou nombre de tables invalide.', ['status' => 422]);
+        }
+        $modes = (array) get_post_meta($restaurant->ID, 'tuc_modes', true);
+        if (array_key_exists('modes', $payload)) {
+            if (!is_array($payload['modes'])) {
+                return new WP_Error('tuc_restaurant_modes', 'Sélectionnez au moins un mode de service.', ['status' => 422]);
+            }
+            $modes = array_values(array_unique(array_filter(array_map(
+                static fn($mode): string => is_scalar($mode) ? sanitize_key((string) $mode) : '',
+                $payload['modes']
+            ))));
+            if ($modes === [] || array_diff($modes, ['livraison', 'emporter', 'table']) !== []) {
+                return new WP_Error('tuc_restaurant_modes', 'Modes acceptés : livraison, à emporter ou à table.', ['status' => 422]);
+            }
+        }
+        if (in_array('table', $modes, true) && (int) $tables < 1) {
+            return new WP_Error('tuc_restaurant_tables', 'Indiquez au moins une table pour activer le service à table.', ['status' => 422]);
+        }
+        if (array_key_exists('open', $payload) && !is_scalar($payload['open'])) {
+            return new WP_Error('tuc_restaurant_open', 'L’état d’ouverture est invalide.', ['status' => 422]);
+        }
+
+        update_post_meta($restaurant->ID, 'tuc_minimum', round((float) $minimum, 2));
+        update_post_meta($restaurant->ID, 'tuc_frais', round((float) $fee, 2));
+        update_post_meta($restaurant->ID, 'tuc_tables', (int) $tables);
+        if (array_key_exists('modes', $payload)) {
+            update_post_meta($restaurant->ID, 'tuc_modes', $modes);
+        }
+        if (array_key_exists('open', $payload)) {
+            update_post_meta($restaurant->ID, 'tuc_ferme', rest_sanitize_boolean($payload['open']) ? '0' : '1');
+        }
+        return self::restaurant_courant();
+    }
+
+    public static function commandes_pro(WP_REST_Request $request): WP_REST_Response|WP_Error
+    {
+        $restaurant = TUC_Caisse::mon_resto();
+        if (!$restaurant instanceof WP_Post || !TUC_Acces::peut(TUC_Roles::CAP_VIEW_ORDERS, $restaurant->ID)) {
+            return new WP_Error('rest_forbidden', 'Accès aux commandes refusé.', ['status' => 403]);
+        }
+        $rawStatus = $request->get_param('statut');
+        $status = is_scalar($rawStatus) ? sanitize_key((string) $rawStatus) : 'toutes';
+        $allowed = TUC_Commande::STATUTS;
+        if ($status !== '' && $status !== 'toutes' && !in_array($status, $allowed, true)) {
+            return new WP_Error('tuc_order_filter', 'Filtre de statut invalide.', ['status' => 422]);
+        }
+        $meta = [['key' => 'tuc_resto', 'value' => $restaurant->ID, 'compare' => '=', 'type' => 'NUMERIC']];
+        if ($status !== '' && $status !== 'toutes') {
+            $meta[] = ['key' => 'tuc_statut', 'value' => $status];
+        }
+        $orders = get_posts([
+            'post_type' => TUC_Commande::CPT, 'post_status' => 'publish', 'posts_per_page' => 100,
+            'orderby' => 'date', 'order' => 'DESC', 'no_found_rows' => true, 'meta_query' => $meta,
+        ]);
+        $output = [];
+        foreach ($orders as $order) {
+            $items = [];
+            foreach ((array) get_post_meta($order->ID, 'tuc_items', true) as $line) {
+                if (!is_array($line)) {
+                    continue;
+                }
+                $items[] = [
+                    'title' => is_scalar($line['nom'] ?? null) ? sanitize_text_field((string) $line['nom']) : '',
+                    'quantity' => max(1, min(50, (int) ($line['q'] ?? 1))),
+                    'unit_price' => max(0.0, (float) ($line['pu'] ?? 0)),
+                    'options' => array_values(array_map(static fn($option): string => is_scalar($option) ? sanitize_text_field((string) $option) : '', (array) ($line['opts'] ?? []))),
+                ];
+            }
+            $table = (int) get_post_meta($order->ID, 'tuc_table', true);
+            $orderMode = sanitize_key((string) get_post_meta($order->ID, 'tuc_mode', true));
+            if (!in_array($orderMode, ['livraison', 'emporter', 'table'], true)) {
+                $orderMode = $table > 0 ? 'table' : ((float) get_post_meta($order->ID, 'tuc_frais', true) > 0 ? 'livraison' : 'emporter');
+            }
+            $output[] = [
+                'id' => $order->ID,
+                'reference' => (string) $order->ID,
+                'created_at' => get_post_time('c', true, $order),
+                'mode' => $orderMode,
+                'table' => $table,
+                'status' => sanitize_key((string) get_post_meta($order->ID, 'tuc_statut', true)) ?: 'nouvelle',
+                'total' => (float) get_post_meta($order->ID, 'tuc_total', true),
+                'items' => $items,
+            ];
+        }
+        return rest_ensure_response(['orders' => $output, 'count' => count($output)]);
+    }
+
+    public static function changer_statut_pro(WP_REST_Request $request): WP_REST_Response|WP_Error
+    {
+        if (!self::permission_statut_pro()) {
+            return new WP_Error('rest_forbidden', 'Modification de commande refusée.', ['status' => 403]);
+        }
+        $request->set_param('id', absint($request['id']));
+        return TUC_Commande::changer_statut($request);
     }
 
     public static function liste_menu(): WP_REST_Response|WP_Error
@@ -297,6 +440,7 @@ final class TUC_Espace_Pro
                 'tuc_promo_pct' => $fields['promo_pct'],
                 'tuc_dispo' => $fields['available'] ? '1' : '0',
                 'tuc_options' => $fields['options'],
+                'tuc_options_schema_version' => TUC_Options::VERSION,
             ],
         ], true);
         if (is_wp_error($id)) {
@@ -329,6 +473,7 @@ final class TUC_Espace_Pro
         update_post_meta($id, 'tuc_promo_pct', $fields['promo_pct']);
         update_post_meta($id, 'tuc_dispo', $fields['available'] ? '1' : '0');
         update_post_meta($id, 'tuc_options', $fields['options']);
+        update_post_meta($id, 'tuc_options_schema_version', TUC_Options::VERSION);
         return rest_ensure_response(self::serialiser_plat(get_post($id)));
     }
 
@@ -531,6 +676,9 @@ final class TUC_Espace_Pro
                 'rest' => esc_url_raw(rest_url('tuc/v1/pro/')),
                 'nonce' => wp_create_nonce('wp_rest'),
                 'site' => esc_url_raw(home_url('/')),
+                'canViewOrders' => current_user_can(TUC_Roles::CAP_VIEW_ORDERS) || current_user_can('manage_options'),
+                'canUpdateOrders' => current_user_can(TUC_Roles::CAP_UPDATE_ORDERS) || current_user_can('manage_options'),
+                'canManageRestaurant' => current_user_can(TUC_Roles::CAP_MANAGE_RESTAURANT) || current_user_can('manage_options'),
             ]);
         }
         if (is_singular(TUC_CPT::RESTO)) {

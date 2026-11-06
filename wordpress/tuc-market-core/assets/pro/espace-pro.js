@@ -205,11 +205,90 @@
     return { version: 2, groups };
   }
 
+  const statusLabels = { nouvelle: 'À traiter', acceptee: 'Acceptée', preparation: 'En préparation', prete: 'Prête', servie: 'Terminée', refusee: 'Refusée', annulee: 'Annulée' };
+  const modeLabels = { livraison: 'Livraison', emporter: 'À emporter', table: 'À table' };
+
+  function renderOrders(result) {
+    const root = $('#tuc-orders-list');
+    if (!root) return;
+    const orders = Array.isArray(result?.orders) ? result.orders : [];
+    const pending = orders.filter((order) => ['nouvelle', 'acceptee', 'preparation'].includes(order.status)).length;
+    const badge = $('#tuc-orders-count');
+    if (badge) badge.textContent = pending ? String(pending) : '';
+    if (!orders.length) {
+      root.innerHTML = '<div class="tuc-orders-empty"><strong>Aucune commande pour ce filtre</strong><span>Les nouvelles commandes apparaîtront ici.</span></div>';
+      return;
+    }
+    root.innerHTML = orders.map((order) => {
+      const status = statusLabels[order.status] || 'Reçue';
+      const date = order.created_at ? new Date(order.created_at).toLocaleString('fr-MA', { dateStyle: 'medium', timeStyle: 'short' }) : '';
+      const mode = modeLabels[order.mode] || 'Commande';
+      const table = order.mode === 'table' && Number(order.table) > 0 ? ` · Table ${Number(order.table)}` : '';
+      const lines = (order.items || []).map((line) => {
+        const options = Array.isArray(line.options) && line.options.length ? `<small>${line.options.map(escapeHtml).join(' · ')}</small>` : '';
+        return `<div class="tuc-order-line"><span><strong>${Number(line.quantity)} × ${escapeHtml(line.title)}</strong>${options}</span><span>${money(Number(line.unit_price) * Number(line.quantity))}</span></div>`;
+      }).join('');
+      let actions = '';
+      if (TUCPro.canUpdateOrders) {
+        const next = { nouvelle: [['acceptee', 'Accepter'], ['refusee', 'Refuser']], acceptee: [['preparation', 'En préparation'], ['refusee', 'Refuser']], preparation: [['prete', 'Marquer prête']], prete: [['servie', 'Terminer']] }[order.status] || [];
+        actions = next.length ? `<div class="tuc-order-actions">${next.map(([target, label]) => `<button type="button" data-order-status="${escapeHtml(target)}" data-order-id="${Number(order.id)}" data-next="${escapeHtml(target)}">${escapeHtml(label)}</button>`).join('')}</div>` : '';
+      }
+      return `<article class="tuc-order-card"><div class="tuc-order-card-head"><div><div class="tuc-order-ref">Commande #${Number(order.id)}</div><div class="tuc-order-meta">${escapeHtml(date)} · ${escapeHtml(mode)}${escapeHtml(table)}</div></div><span class="tuc-order-status" data-status="${escapeHtml(order.status)}">${escapeHtml(status)}</span></div><div class="tuc-order-lines">${lines || '<span class="tuc-order-meta">Détail indisponible</span>'}</div><div class="tuc-order-total"><span>Total</span><span>${money(order.total)}</span></div>${actions}</article>`;
+    }).join('');
+  }
+
+  async function loadOrders() {
+    const root = $('#tuc-orders-list');
+    if (!root || !TUCPro.canViewOrders) return;
+    root.innerHTML = '<div class="tuc-loading">Chargement des commandes…</div>';
+    try {
+      const filter = $('#tuc-order-filter')?.value || 'toutes';
+      renderOrders(await request(`commandes?statut=${encodeURIComponent(filter)}`));
+    } catch (error) {
+      root.innerHTML = `<div class="tuc-orders-empty"><strong>Commandes indisponibles</strong><span>${escapeHtml(error.message)}</span></div>`;
+    }
+  }
+
+  function fillStoreSettings(restaurant) {
+    const open = $('#tuc-store-open');
+    if (!open) return;
+    $('#tuc-restaurant-name').textContent = restaurant.name;
+    open.checked = Boolean(restaurant.open);
+    $('#tuc-open-dot')?.classList.toggle('is-closed', !restaurant.open);
+    $('#tuc-store-minimum').value = Number(restaurant.minimum || 0);
+    $('#tuc-store-fee').value = Number(restaurant.fee || 0);
+    $('#tuc-store-tables').value = Number(restaurant.tables || 0);
+    $$('input[name="mode"]', $('#tuc-store-settings')).forEach((input) => { input.checked = (restaurant.modes || []).includes(input.value); });
+    $('#tuc-store-tables-wrap').hidden = !$('input[name="mode"][value="table"]', $('#tuc-store-settings')).checked;
+  }
+
+  async function saveStoreSettings(event) {
+    event.preventDefault();
+    const button = $('button[type="submit"]', event.currentTarget);
+    const modes = $$('input[name="mode"]:checked', event.currentTarget).map((input) => input.value);
+    if (!modes.length) { showNotice('Choisissez au moins un mode de service.', true); return; }
+    button.disabled = true;
+    try {
+      const restaurant = await request('restaurant', { method: 'PATCH', body: JSON.stringify({
+        open: $('#tuc-store-open').checked,
+        minimum: Number($('#tuc-store-minimum').value),
+        fee: Number($('#tuc-store-fee').value),
+        modes,
+        tables: Number($('#tuc-store-tables').value)
+      }) });
+      fillStoreSettings(restaurant);
+      showNotice('Paramètres de la boutique enregistrés.');
+      if (!restaurant.open) $('#tuc-open-dot')?.classList.add('is-closed');
+    } catch (error) { showNotice(error.message, true); }
+    finally { button.disabled = false; }
+  }
+
   async function loadMenu() {
     try {
       const [restaurant, list] = await Promise.all([request('restaurant'), request('menu')]);
-      $('#tuc-restaurant-name').textContent = restaurant.name;
+      fillStoreSettings(restaurant);
       renderItems(list);
+      if (TUCPro.canViewOrders) loadOrders();
     } catch (error) {
       $('#tuc-menu-loading').hidden = true;
       showNotice(error.message, true);
@@ -279,6 +358,35 @@
     $('#tuc-photo-preview').src = photoUrl;
     $('#tuc-photo-preview').hidden = false;
     updatePreview();
+  });
+  $('#tuc-pro-tabs')?.addEventListener('click', (event) => {
+    const button = event.target.closest('[data-tab]');
+    if (!button) return;
+    const tab = button.dataset.tab;
+    $$('[data-tab]', $('#tuc-pro-tabs')).forEach((item) => item.setAttribute('aria-selected', String(item === button)));
+    $$('[data-panel]').forEach((panel) => { panel.hidden = panel.dataset.panel !== tab; });
+    $('#tuc-pro-page-title').textContent = { menu: 'Votre menu', orders: 'Commandes', settings: 'Votre boutique' }[tab] || 'Votre espace';
+    $('#tuc-new-item').hidden = tab !== 'menu';
+    if (tab !== 'menu') editor.hidden = true;
+    if (tab === 'orders') loadOrders();
+  });
+  $('#tuc-refresh-orders')?.addEventListener('click', loadOrders);
+  $('#tuc-order-filter')?.addEventListener('change', loadOrders);
+  $('#tuc-orders-list')?.addEventListener('click', async (event) => {
+    const button = event.target.closest('[data-order-status]');
+    if (!button || button.disabled) return;
+    const next = button.dataset.orderStatus;
+    if (next === 'refusee' && !window.confirm('Refuser cette commande ?')) return;
+    button.disabled = true;
+    try {
+      await request(`commandes/${Number(button.dataset.orderId)}/statut`, { method: 'POST', body: JSON.stringify({ statut: next }) });
+      showNotice(`Commande mise à jour : ${statusLabels[next] || next}.`);
+      await loadOrders();
+    } catch (error) { showNotice(error.message, true); button.disabled = false; }
+  });
+  $('#tuc-store-settings')?.addEventListener('submit', saveStoreSettings);
+  $('#tuc-store-settings')?.addEventListener('change', (event) => {
+    if (event.target.matches('input[name="mode"]')) $('#tuc-store-tables-wrap').hidden = !$('input[name="mode"][value="table"]', $('#tuc-store-settings')).checked;
   });
   loadMenu();
 })();

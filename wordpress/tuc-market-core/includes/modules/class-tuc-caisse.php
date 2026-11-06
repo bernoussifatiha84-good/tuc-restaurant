@@ -38,47 +38,28 @@ final class TUC_Caisse
 
     public static function peut_acceder(): bool
     {
-        return current_user_can('manage_options')
-            || (current_user_can(self::CAP) && self::mon_resto() !== null);
+        return current_user_can('manage_options') || TUC_Acces::peut(self::CAP);
     }
 
     public static function peut_voir_commandes(): bool
     {
-        return current_user_can('manage_options')
-            || (current_user_can(TUC_Roles::CAP_VIEW_ORDERS) && self::mon_resto() !== null);
+        return current_user_can('manage_options') || TUC_Acces::peut(TUC_Roles::CAP_VIEW_ORDERS);
     }
 
     public static function peut_modifier_commandes(): bool
     {
-        return current_user_can('manage_options')
-            || (current_user_can(TUC_Roles::CAP_UPDATE_ORDERS) && self::mon_resto() !== null);
+        return current_user_can('manage_options') || TUC_Acces::peut(TUC_Roles::CAP_UPDATE_ORDERS);
     }
 
     public static function peut_gerer_restaurant(): bool
     {
-        return current_user_can('manage_options')
-            || (current_user_can(TUC_Roles::CAP_MANAGE_RESTAURANT) && self::mon_resto() !== null);
+        return current_user_can('manage_options') || TUC_Acces::peut(TUC_Roles::CAP_MANAGE_RESTAURANT);
     }
 
     /** Vérifie la capacité métier et l'affectation explicite au restaurant. */
     public static function utilisateur_autorise_restaurant(int $user_id, int $restaurant_id, string $capability): bool
     {
-        if ($user_id <= 0 || $restaurant_id <= 0) {
-            return false;
-        }
-        if (user_can($user_id, 'manage_options')) {
-            return true;
-        }
-        if (!user_can($user_id, $capability)) {
-            return false;
-        }
-
-        $restaurant = get_post($restaurant_id);
-        if (!$restaurant instanceof WP_Post || $restaurant->post_type !== 'tuc_resto' || $restaurant->post_status !== 'publish') {
-            return false;
-        }
-
-        return (int) get_user_meta($user_id, 'tuc_resto_id', true) === $restaurant_id;
+        return TUC_Acces::peut($capability, $restaurant_id, $user_id);
     }
 
     /** Permission de la route historique, désormais limitée au restaurant assigné. */
@@ -460,6 +441,7 @@ final class TUC_Caisse
         $histo[] = [$vers, current_time('c'), get_current_user_id()];
 
         update_post_meta($id, 'tuc_statut', $vers);
+        update_post_meta($id, 'tuc_statut_updated_at', current_time('mysql', true));
         update_post_meta($id, 'tuc_historique', $histo);
 
         // le client suit l'état sur sa page : rien à pousser côté WhatsApp

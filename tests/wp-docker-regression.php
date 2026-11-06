@@ -56,6 +56,8 @@ $rest = static function (string $route, array $params = []) use ($trace): WP_RES
         $result = TUC_Health::rapport();
     } elseif ($route === '/tuc/v1/commande') {
         $result = TUC_Commande::creer($request);
+    } elseif ($route === '/tuc/v1/commande/suivi') {
+        $result = TUC_Commande::suivre($request);
     } elseif ($route === '/tuc/v1/wa-statut') {
         $result = TUC_Compte::wa_statut($request);
     } elseif ($route === '/tuc/v1/wa-lien') {
@@ -111,6 +113,10 @@ try {
     $registeredRoutes = rest_get_server()->get_routes();
     $cashierRoute = $registeredRoutes['/tuc/v1/caisse/commandes'][0] ?? [];
     $openingRoute = $registeredRoutes['/tuc/v1/caisse/ouverture'][0] ?? [];
+    $trackingRoute = $registeredRoutes['/tuc/v1/commande/suivi'][0] ?? [];
+    $proOrdersRoute = $registeredRoutes['/tuc/v1/pro/commandes'][0] ?? [];
+    $proOrderStatusRoute = $registeredRoutes['/tuc/v1/pro/commandes/(?P<id>\\d+)/statut'][0] ?? [];
+    $proSettingsRoutes = $registeredRoutes['/tuc/v1/pro/restaurant'] ?? [];
     $legacyStatusRoute = $registeredRoutes['/tuc/v1/commande/(?P<id>\d+)/statut'][0] ?? [];
     $proMenuRoutes = $registeredRoutes['/tuc/v1/pro/menu'] ?? [];
     $proItemRoute = $registeredRoutes['/tuc/v1/pro/menu/(?P<id>\d+)'][0] ?? [];
@@ -124,6 +130,12 @@ try {
     $assert(is_callable($cashierRoute['permission_callback'] ?? null)
         && is_callable($openingRoute['permission_callback'] ?? null)
         && is_callable($legacyStatusRoute['permission_callback'] ?? null), 'les endpoints caisse/statut sont effectivement enregistrés avec permission_callback');
+    $assert(is_callable($trackingRoute['callback'] ?? null)
+        && is_callable($proOrdersRoute['permission_callback'] ?? null)
+        && is_callable($proOrderStatusRoute['permission_callback'] ?? null)
+        && count($proSettingsRoutes) >= 2
+        && count(array_filter($proSettingsRoutes, static fn(array $route): bool => is_callable($route['permission_callback'] ?? null))) === count($proSettingsRoutes),
+        'suivi public tokenisé et API mobile commandes/boutique sont enregistrés');
     TUC_Roles::synchroniser();
     $ownerRole = get_role('tuc_restaurateur');
     $managerRole = get_role('tuc_gestionnaire');
@@ -244,9 +256,63 @@ try {
     $created['items'][] = (int) $itemId;
     update_post_meta($itemId, 'tuc_resto_id', (int) $restaurantId);
     update_post_meta($itemId, 'tuc_prix', 10);
-    update_post_meta($itemId, 'tuc_options', [
+    $legacyOptions = [
         ['id' => 'extra-fromage', 'nom' => 'Extra fromage', 'prix' => 3],
-    ]);
+    ];
+    update_post_meta($itemId, 'tuc_options', $legacyOptions);
+    $migrationDryRun = TUC_Options::migrer_item((int) $itemId, false);
+    $assert(!is_wp_error($migrationDryRun) && $migrationDryRun['state'] === 'ready'
+        && get_post_meta($itemId, 'tuc_options', true) === $legacyOptions
+        && !metadata_exists('post', (int) $itemId, 'tuc_options_legacy_backup'),
+        'le dry-run de migration ne modifie pas les options historiques');
+    $migrationApplied = TUC_Options::migrer_item((int) $itemId, true);
+    $migratedOptions = get_post_meta($itemId, 'tuc_options', true);
+    $assert(!is_wp_error($migrationApplied) && $migrationApplied['state'] === 'migrated'
+        && get_post_meta($itemId, 'tuc_options_legacy_backup', true) === $legacyOptions
+        && (int) get_post_meta($itemId, 'tuc_options_schema_version', true) === TUC_Options::VERSION
+        && ($migratedOptions['groups'][0]['id'] ?? '') === 'options',
+        'la migration applique v2 et préserve une copie exacte des données legacy');
+    $migrationAgain = TUC_Options::migrer_item((int) $itemId, true);
+    $assert(!is_wp_error($migrationAgain) && $migrationAgain['state'] === 'current'
+        && get_post_meta($itemId, 'tuc_options_legacy_backup', true) === $legacyOptions,
+        'la migration est idempotente et ne remplace pas la sauvegarde d’origine');
+    $rollbackDryRun = TUC_Options::restaurer_legacy_item((int) $itemId, false);
+    $assert(!is_wp_error($rollbackDryRun) && $rollbackDryRun['state'] === 'ready'
+        && get_post_meta($itemId, 'tuc_options', true) === $migratedOptions,
+        'le dry-run de restauration ne modifie pas les options v2');
+    $rollbackApplied = TUC_Options::restaurer_legacy_item((int) $itemId, true);
+    $assert(!is_wp_error($rollbackApplied) && $rollbackApplied['state'] === 'restored'
+        && get_post_meta($itemId, 'tuc_options', true) === $legacyOptions
+        && metadata_exists('post', (int) $itemId, 'tuc_options_legacy_backup')
+        && !metadata_exists('post', (int) $itemId, 'tuc_options_schema_version'),
+        'la restauration remet exactement l’option legacy et conserve sa sauvegarde');
+    $migrationAfterRollback = TUC_Options::migrer_item((int) $itemId, true);
+    $assert(!is_wp_error($migrationAfterRollback) && $migrationAfterRollback['state'] === 'migrated'
+        && get_post_meta($itemId, 'tuc_options_legacy_backup', true) === $legacyOptions,
+        'la migration reste relançable après une restauration');
+    $emptyOptionsItemId = wp_insert_post([
+        'post_type' => 'tuc_menu_item', 'post_status' => 'draft', 'post_title' => 'Plat sans métadonnée options ' . $suffix,
+    ], true);
+    $assert(!is_wp_error($emptyOptionsItemId), 'fixture article sans anciennes options créée');
+    $created['items'][] = (int) $emptyOptionsItemId;
+    $emptyOptionsMigration = TUC_Options::migrer_item((int) $emptyOptionsItemId, true);
+    $emptyOptionsRollback = TUC_Options::restaurer_legacy_item((int) $emptyOptionsItemId, true);
+    $assert(!is_wp_error($emptyOptionsMigration) && !is_wp_error($emptyOptionsRollback)
+        && !metadata_exists('post', (int) $emptyOptionsItemId, 'tuc_options')
+        && !rest_sanitize_boolean(get_post_meta((int) $emptyOptionsItemId, 'tuc_options_legacy_had_value', true)),
+        'la restauration distingue une métadonnée absente d’une valeur legacy vide');
+    $invalidOptionsItemId = wp_insert_post([
+        'post_type' => 'tuc_menu_item', 'post_status' => 'draft', 'post_title' => 'Plat options invalides ' . $suffix,
+    ], true);
+    $assert(!is_wp_error($invalidOptionsItemId), 'fixture article avec options legacy invalides créée');
+    $created['items'][] = (int) $invalidOptionsItemId;
+    $invalidLegacyOptions = ['invalide' => 'structure'];
+    update_post_meta($invalidOptionsItemId, 'tuc_options', $invalidLegacyOptions);
+    $invalidMigration = TUC_Options::migrer_item((int) $invalidOptionsItemId, true);
+    $assert(is_wp_error($invalidMigration)
+        && get_post_meta($invalidOptionsItemId, 'tuc_options', true) === $invalidLegacyOptions
+        && !metadata_exists('post', (int) $invalidOptionsItemId, 'tuc_options_legacy_backup'),
+        'une définition invalide reste intacte et n’est pas migrée');
 
     $restaurant = get_post($restaurantId);
     $slug = (string) $restaurant->post_name;
@@ -264,6 +330,15 @@ try {
         ]],
     ];
     $ratePhones[] = $validOrder['tel'];
+    $lockedOrder = $validOrder;
+    $lockedOrder['cle'] = 'parallel-submit-' . $suffix;
+    $lockedOrder['tel'] = '+212600000099';
+    $ratePhones[] = $lockedOrder['tel'];
+    $lockOption = 'tuc_order_lock_' . md5((int) $restaurantId . '|' . $lockedOrder['cle']);
+    add_option($lockOption, time(), '', false);
+    $lockedResponse = $rest('/tuc/v1/commande', $lockedOrder);
+    delete_option($lockOption);
+    $assert($lockedResponse->get_status() === 409, 'un double envoi simultané est bloqué par le verrou idempotent atomique');
 
     $invalidPhoneOrder = $validOrder;
     $invalidPhoneOrder['tel'] = '123';
@@ -272,6 +347,9 @@ try {
     $invalidKeyOrder = $validOrder;
     $invalidKeyOrder['cle'] = str_repeat('x', 65);
     $assert($rest('/tuc/v1/commande', $invalidKeyOrder)->get_status() === 422, 'une clé d’idempotence surdimensionnée est refusée');
+    $weakKeyOrder = $validOrder;
+    $weakKeyOrder['cle'] = 'short-key';
+    $assert($rest('/tuc/v1/commande', $weakKeyOrder)->get_status() === 422, 'une clé d’idempotence trop courte est refusée');
 
     // Le total serveur = (10 + 3) × 2 + 5 frais = 31 MAD.
     $orderResponse = $rest('/tuc/v1/commande', $validOrder);
@@ -281,6 +359,24 @@ try {
     $orderId = (int) ($orderData['commande'] ?? 0);
     $assert($orderId > 0, 'la réponse retourne un identifiant de commande');
     $created['orders'][] = $orderId;
+    $trackingToken = (string) ($orderData['suivi'] ?? '');
+    $assert((bool) preg_match('/^[A-Za-z0-9_-]{43}$/', $trackingToken)
+        && hash_equals((string) get_post_meta($orderId, 'tuc_suivi_hash', true), hash('sha256', $trackingToken))
+        && !metadata_exists('post', $orderId, 'tuc_suivi_token'),
+        'le client reçoit un jeton opaque et seul son hash est conservé');
+    $trackingResponse = $rest('/tuc/v1/commande/suivi', ['jeton' => $trackingToken]);
+    $trackingData = $trackingResponse->get_data();
+    $assert($trackingResponse->get_status() === 200 && ($trackingData['status'] ?? '') === 'nouvelle'
+        && ($trackingData['label'] ?? '') === 'Reçue', 'un jeton valide retourne le statut de la commande');
+    $assert(array_intersect(['tel', 'phone', 'items', 'total', 'tuc_tel'], array_keys($trackingData)) === [],
+        'le suivi client ne révèle ni téléphone, ni contenu de commande, ni total');
+    $assert($rest('/tuc/v1/commande/suivi', ['jeton' => str_repeat('x', 43)])->get_status() === 404,
+        'un jeton inconnu ne révèle pas l’existence d’une commande');
+    $oldTrackingExpiry = (int) get_post_meta($orderId, 'tuc_suivi_expire', true);
+    update_post_meta($orderId, 'tuc_suivi_expire', time() - 1);
+    $assert($rest('/tuc/v1/commande/suivi', ['jeton' => $trackingToken])->get_status() === 410,
+        'le lien de suivi expire après sa durée de validité');
+    update_post_meta($orderId, 'tuc_suivi_expire', $oldTrackingExpiry);
 
     $storedItems = (array) get_post_meta($orderId, 'tuc_items', true);
     $assert(($storedItems[0]['opts'][0] ?? '') === 'Extra fromage +3', 'le libellé et le supplément sont stockés lisiblement');
@@ -386,7 +482,11 @@ try {
     $duplicateData = $duplicateResponse->get_data();
     $assert($duplicateResponse->get_status() === 200
         && (int) ($duplicateData['commande'] ?? 0) === $orderId
-        && ($duplicateData['doublon'] ?? false) === true, 'la clé d’idempotence empêche une commande en double');
+        && ($duplicateData['doublon'] ?? false) === true
+        && ($duplicateData['suivi'] ?? '') === $trackingToken,
+        'la clé d’idempotence empêche les doublons et restitue le même lien de suivi sans rotation');
+    $assert($rest('/tuc/v1/commande/suivi', ['jeton' => $trackingToken])->get_status() === 200,
+        'le lien de suivi reste valide après une nouvelle tentative idempotente');
 
     // Les erreurs métier ne doivent pas créer de commande.
     $empty = $validOrder;
@@ -491,6 +591,12 @@ try {
     update_user_meta((int) $ownerUserId, 'tuc_resto_id', (int) $restaurantId);
     update_user_meta((int) $managerUserId, 'tuc_resto_id', (int) $otherRestaurantId);
     update_user_meta((int) $cashierUserId, 'tuc_resto_id', (int) $restaurantId);
+    $assert(TUC_Acces::peut(TUC_Roles::CAP_MANAGE_MENU, (int) $restaurantId, (int) $ownerUserId)
+        && TUC_Acces::peut(TUC_Roles::CAP_MANAGE_MENU, (int) $otherRestaurantId, (int) $managerUserId)
+        && !TUC_Acces::peut(TUC_Roles::CAP_MANAGE_MENU, (int) $restaurantId, (int) $managerUserId)
+        && !TUC_Acces::peut(TUC_Roles::CAP_MANAGE_MENU, (int) $restaurantId, (int) $unassignedUserId)
+        && !TUC_Acces::peut(TUC_Roles::CAP_MANAGE_MENU, 0, (int) $ownerUserId),
+        'TUC_Acces::peut applique la capacité et interdit les accès inter-tenant ou sans affectation');
     $validAssignment = TUC_Espace_Pro::valider_affectation((int) $ownerUserId, 'tuc_gestionnaire', (int) $restaurantId);
     $assert(!is_wp_error($validAssignment) && $validAssignment['restaurant_id'] === (int) $restaurantId,
         'l’affectation exige un rôle TUC et un restaurant publié');
@@ -507,6 +613,37 @@ try {
     $assert(TUC_Espace_Pro::permission_menu(), 'le restaurateur affecté peut gérer le menu de son restaurant');
     $assert(TUC_Espace_Pro::redirect_apres_connexion('/wp-admin/', '', get_userdata((int) $ownerUserId)) === home_url('/espace-pro/'),
         'la connexion d’un gestionnaire de menu affecté mène à l’espace mobile');
+    $proOrderData = TUC_Espace_Pro::commandes_pro(new WP_REST_Request('GET', '/tuc/v1/pro/commandes'))->get_data();
+    $proOrderIds = array_map(static fn(array $order): int => (int) $order['id'], $proOrderData['orders'] ?? []);
+    $assert(in_array($orderId, $proOrderIds, true) && !in_array($otherOrderId, $proOrderIds, true)
+        && !array_key_exists('tel', ($proOrderData['orders'][0] ?? [])),
+        'le tableau mobile liste les commandes du seul tenant sans exposer le téléphone client');
+    $storeBefore = [
+        'minimum' => get_post_meta($restaurantId, 'tuc_minimum', true),
+        'fee' => get_post_meta($restaurantId, 'tuc_frais', true),
+        'modes' => get_post_meta($restaurantId, 'tuc_modes', true),
+        'tables' => get_post_meta($restaurantId, 'tuc_tables', true),
+        'closed' => get_post_meta($restaurantId, 'tuc_ferme', true),
+    ];
+    $invalidSettingsRequest = new WP_REST_Request('PATCH', '/tuc/v1/pro/restaurant');
+    $invalidSettingsRequest->set_header('content-type', 'application/json');
+    $invalidSettingsRequest->set_body(wp_json_encode(['modes' => ['table'], 'tables' => 0]));
+    $assert(is_wp_error(TUC_Espace_Pro::modifier_restaurant($invalidSettingsRequest)),
+        'les réglages refusent le mode à table sans table configurée');
+    $settingsRequest = new WP_REST_Request('PATCH', '/tuc/v1/pro/restaurant');
+    $settingsRequest->set_header('content-type', 'application/json');
+    $settingsRequest->set_body(wp_json_encode(['open' => false, 'minimum' => 25, 'fee' => 7, 'modes' => ['emporter', 'table'], 'tables' => 4]));
+    $settingsResult = TUC_Espace_Pro::modifier_restaurant($settingsRequest);
+    $settingsData = $settingsResult instanceof WP_REST_Response ? $settingsResult->get_data() : [];
+    $assert($settingsResult instanceof WP_REST_Response && $settingsData['open'] === false
+        && (float) $settingsData['minimum'] === 25.0 && (float) $settingsData['fee'] === 7.0
+        && in_array('table', $settingsData['modes'], true) && (int) $settingsData['tables'] === 4,
+        'le mobile peut enregistrer disponibilité, minimum, frais, modes et nombre de tables');
+    update_post_meta($restaurantId, 'tuc_minimum', $storeBefore['minimum']);
+    update_post_meta($restaurantId, 'tuc_frais', $storeBefore['fee']);
+    update_post_meta($restaurantId, 'tuc_modes', $storeBefore['modes']);
+    update_post_meta($restaurantId, 'tuc_tables', $storeBefore['tables']);
+    update_post_meta($restaurantId, 'tuc_ferme', $storeBefore['closed']);
     $proPayload = [
         'title' => 'Plat créé via Espace Pro ' . $suffix,
         'description' => 'Description de contrôle',
@@ -576,9 +713,12 @@ try {
     $ownStatusRequest->set_param('statut', 'preparation');
     $assert(call_user_func($legacyStatusRoute['permission_callback'], $ownStatusRequest) === true,
         'la capacité commande autorise le statut dans le restaurant assigné');
-    $ownRoleStatus = TUC_Commande::changer_statut($ownStatusRequest);
+    $ownRoleStatus = TUC_Espace_Pro::changer_statut_pro($ownStatusRequest);
     $assert($ownRoleStatus instanceof WP_REST_Response && $ownRoleStatus->get_status() === 200,
         'le restaurateur peut mettre à jour une commande de son restaurant');
+    $updatedTracking = $rest('/tuc/v1/commande/suivi', ['jeton' => $trackingToken]);
+    $assert($updatedTracking->get_status() === 200 && ($updatedTracking->get_data()['status'] ?? '') === 'preparation',
+        'le suivi client reflète les changements de statut opérés depuis l’espace restaurateur');
     update_post_meta($orderId, 'tuc_statut', 'nouvelle');
 
     wp_set_current_user((int) $managerUserId);
@@ -594,10 +734,18 @@ try {
     $assert(TUC_Caisse::mon_resto()->ID === (int) $otherRestaurantId
         && in_array($otherOrderId, $managerOrderIds, true)
         && !in_array((int) $orderId, $managerOrderIds, true), 'le gestionnaire ne voit que les commandes de son restaurant');
+    $managerProOrders = TUC_Espace_Pro::commandes_pro(new WP_REST_Request('GET', '/tuc/v1/pro/commandes'))->get_data()['orders'] ?? [];
+    $managerProOrderIds = array_map(static fn(array $order): int => (int) $order['id'], $managerProOrders);
+    $assert(in_array($otherOrderId, $managerProOrderIds, true) && !in_array((int) $orderId, $managerProOrderIds, true),
+        'l’API de l’espace mobile conserve l’isolation tenant du gestionnaire');
     $foreignStatusRequest = new WP_REST_Request('POST', '/tuc/v1/commande/' . $orderId . '/statut');
     $foreignStatusRequest->set_param('id', (int) $orderId);
     $foreignStatusRequest->set_param('statut', 'preparation');
     $foreignStatusResult = TUC_Commande::changer_statut($foreignStatusRequest);
+    $proForeignStatusResult = TUC_Espace_Pro::changer_statut_pro($foreignStatusRequest);
+    $assert(is_wp_error($proForeignStatusResult)
+        && (int) ($proForeignStatusResult->get_error_data()['status'] ?? 0) === 403,
+        'la route de statut mobile refuse une commande appartenant à un autre tenant');
     $assert(is_wp_error($foreignStatusResult)
         && (int) ($foreignStatusResult->get_error_data()['status'] ?? 0) === 403
         && get_post_meta($orderId, 'tuc_statut', true) === 'nouvelle', 'un gestionnaire ne peut pas modifier la commande du restaurant voisin');
@@ -611,7 +759,9 @@ try {
     $assert(!TUC_Espace_Pro::permission_menu(), 'le caissier ne peut pas gérer le menu via les routes Espace Pro');
     $assert(TUC_Caisse::peut_acceder() && TUC_Caisse::peut_modifier_commandes()
         && !TUC_Caisse::peut_gerer_restaurant()
-        && call_user_func($openingRoute['permission_callback']) === false, 'le caissier peut traiter les commandes mais ne peut pas modifier les paramètres du commerce');
+        && call_user_func($openingRoute['permission_callback']) === false
+        && !TUC_Espace_Pro::permission_restaurant()
+        && TUC_Espace_Pro::permission_commandes(), 'le caissier peut traiter les commandes mais ne peut pas modifier les paramètres du commerce');
     wp_set_current_user((int) $unassignedUserId);
     $assert(!TUC_Espace_Pro::permission_menu(), 'un compte non affecté n’accède pas à la gestion du menu');
     $assert(TUC_Caisse::mon_resto() === null

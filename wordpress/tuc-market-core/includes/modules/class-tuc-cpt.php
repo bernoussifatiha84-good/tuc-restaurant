@@ -117,7 +117,7 @@ final class TUC_CPT
             ]);
         }
 
-        foreach (['tuc_prix' => 'number', 'tuc_promo' => 'integer', 'tuc_promo_pct' => 'integer', 'tuc_options' => 'array', 'tuc_resto_id' => 'integer', 'tuc_dispo' => 'boolean'] as $key => $type) {
+        foreach (['tuc_prix' => 'number', 'tuc_promo' => 'integer', 'tuc_promo_pct' => 'integer', 'tuc_options' => 'array', 'tuc_options_schema_version' => 'integer', 'tuc_resto_id' => 'integer', 'tuc_dispo' => 'boolean'] as $key => $type) {
             register_post_meta(self::ITEM, $key, [
                 'type'          => $type,
                 'single'        => true,

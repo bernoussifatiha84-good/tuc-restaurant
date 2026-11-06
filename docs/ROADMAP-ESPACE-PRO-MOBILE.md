@@ -1,6 +1,6 @@
 # Feuille de route — Espace restaurateur mobile TUC
 
-**État :** MVP technique implémenté dans la branche PR, non déployé. Aucun compte métier n’a été affecté et aucun restaurateur réel n’a encore testé l’interface.
+**État :** le code des cinq jalons (rôle/helper et isolation, migration options v2, espace mobile, panier complet, suivi de commande) est en cours d’achèvement sur la branche PR. Non déployé; aucun compte métier réel n’a été affecté et aucun restaurateur réel n’a encore testé l’interface. Le smoke WordPress Docker final doit passer après les changements avant de présenter le MVP comme vérifié.
 
 **Dépend de :** [Roadmap produit & technique](ROADMAP-MARKETPLACE.md), phases 0–4.
 
@@ -16,19 +16,18 @@ Cette décision vise le produit souhaité; elle ne signifie pas que le plugin ac
 
 Le plugin déclare les contenus `tuc_resto`, `tuc_menu_item` et `tuc_commande`; la caisse TUC reste le canal de réception. Le relevé WooCommerce UAT est strictement en lecture seule : WooCommerce demeure installé mais inactif, sans suppression, migration ou nouvelle désactivation.
 
-### MVP implémenté dans la branche PR — pas encore déployé
+### Jalons de réalisation sur la branche PR — non déployés
 
-- Page d’affectation des rôles TUC aux comptes existants, réservée aux administrateurs WordPress; l’affectation exige un restaurant publié et aucun compte n’est assigné automatiquement.
-- Routes dédiées pour créer, lire, modifier, publier et archiver les plats, ainsi que téléverser une photo JPEG/PNG/WebP (5 Mo). Les réponses et mutations sont limitées au restaurant explicitement affecté; les rôles TUC n’ont pas accès à l’API REST native d’édition du CPT.
-- Modèle d’options version 2 avec groupes, choix unique/multiple via min/max, choix requis/facultatifs, suppléments, disponibilité et conditions sur un groupe précédent. Les anciens choix plats restent lus sans migration forcée.
-- Espace Pro mobile pour le menu : brouillons/publication, disponibilité, pourcentage de promotion, groupes d’options, photos et aperçu.
-- Fiche client raccordée au menu public, à un panier persistant localement et à la création de commande. Le serveur revalide restaurant, table/mode, disponibilité, options, prix, minimum et frais; la commande conserve un instantané lisible.
-- Les promotions MVP sont des pourcentages sans programmation de dates; aucun paiement en ligne n’est ajouté (règlement sur place).
+- Les rôles TUC restent admin-affectés uniquement; `TUC_Acces::peut()` centralise capacité + restaurant publié + `tuc_resto_id`. Les tests couvrent l’isolation inter-tenant et les comptes non affectés.
+- Options v2 incluent une migration WP-CLI en dry-run par défaut, idempotente, avec copie de sauvegarde des anciennes métadonnées par article. Aucune base réelle n’a été migrée.
+- L’Espace Pro mobile comprend Menu, Commandes et Boutique : CRUD menu, disponibilités, photos/options, vue et transition des commandes, ouverture/pause, minimum, frais, modes et nombre de tables.
+- Le panier client conserve les articles localement, valide le total côté serveur et crée une commande cash idempotente; le suivi client utilise un jeton opaque de 30 jours et n’expose pas le téléphone, les articles ou le total.
+- Les promotions restent des pourcentages immédiats; catégories/horaires, paiement en ligne, test matériel réel, RTL/arabe et pilote restaurateur restent hors validation.
 
 ### Validation encore nécessaire
 
 - Le code reste dans la branche PR, non déployée; aucun accès de restaurateur n’a été accordé.
-- Smoke test WordPress Docker complet passé sur le commit `2dd07d7` (run [42141785151](https://github.com/bernoussifatiha84-good/tuc-restaurant/actions/runs/42141785151)), incluant syntaxe PHP, régressions WordPress/TUC et E2E n8n. C’est une validation CI, pas un déploiement.
+- La tête précédente `656c672` avait passé le smoke WordPress Docker (run [42142107785](https://github.com/bernoussifatiha84-good/tuc-restaurant/actions/runs/42142107785)); ce résultat ne couvre pas les changements en cours. Le nouveau commit doit repasser le lint PHP, les régressions WordPress/TUC et les E2E n8n avant de déclarer la vérification finale réussie. CI n’est pas un déploiement.
 - Tester l’interface sur de vrais appareils et avec des restaurateurs consentants; aucun test utilisateur réel n’a été effectué.
 - Faire confirmer par le propriétaire l’usage des pages brouillon et réglages PayPal/MaxMind avant toute action WooCommerce. Le rapport d’inventaire [lecture seule](INVENTAIRE-WOOCOMMERCE-UAT-2026-11-05.md) ne contient pas leurs valeurs sensibles.
 
@@ -58,7 +57,7 @@ Le plugin déclare les contenus `tuc_resto`, `tuc_menu_item` et `tuc_commande`; 
 
 ### Phase B — Modèle métier et sécurité multi-restaurant
 
-**État dans cette PR** : l’interface admin d’affectation, les routes REST menu/médias, les contrôles d’appartenance et le verrouillage de l’API native du CPT sont ajoutés. Les tests couvrent les rôles, les accès croisés et les affectations invalides. Aucun compte n’est affecté automatiquement; le changement n’est pas déployé en UAT/production. Le téléversement réel et les parcours sur appareil restent à valider en environnement de test.
+**État dans cette PR** : ajout de `TUC_Acces::peut()` et branchement des autorisations caisse/Espace Pro; l’interface admin d’affectation, routes et verrouillage CPT restent tenant-scoped. Les tests WordPress couvrent rôles, capacités, affectations absentes et accès croisés aux commandes/menus. Aucun compte n’est affecté automatiquement; aucun accès n’est déployé. Les parcours sur appareil restent à valider en environnement de test.
 
 **Travail**
 - Définir les rôles minimaux : propriétaire, responsable, caissier et serveur; préciser les actions autorisées pour chacun.
@@ -75,7 +74,7 @@ Le plugin déclare les contenus `tuc_resto`, `tuc_menu_item` et `tuc_commande`; 
 
 ### Phase C — Prototype UX mobile et tests avec restaurateurs
 
-**État dans cette PR** : prototype responsive du gestionnaire de menu réalisé (cible 320–360 px, tablette et aperçu client). Il n’inclut pas encore le tableau de bord des commandes/boutique. Les tests avec de vrais restaurateurs et appareils n’ont pas eu lieu.
+**État dans cette PR** : l’interface responsive comporte les onglets Menu, Commandes et Boutique, avec réglages métier et transitions de commande tenant-scoped. La conception est mobile-first; vrais restaurateurs, appareils et réseau lent n’ont pas encore été testés.
 
 **Écrans à prototyper**
 1. Connexion/accueil Pro, avec la boutique active clairement nommée.
@@ -91,7 +90,7 @@ Tester les tâches réelles — ajouter un plat, changer son prix, le rendre ind
 
 ### Phase D — Catalogue TUC et règles d’options fiables
 
-**État dans cette PR** : schéma d’options v2 et validation/calcul de prix côté serveur implémentés; les anciennes listes plates sont compatibles. La promotion MVP est un pourcentage immédiat, sans période programmée ni cumul avancé. Les tests couvrent groupes requis, min/max, supplément, disponibilité, condition et ancien format.
+**État dans cette PR** : schéma d’options v2, validation/tarification serveur et compatibilité legacy implémentés. `wp tuc-options migrate` propose dry-run par défaut, application idempotente et sauvegarde des valeurs originales par plat; tests de non-écriture, sauvegarde et relance. La migration n’a été exécutée que sur les fixtures Docker, pas sur des données réelles. Promotion MVP : pourcentage immédiat, sans programmation ni cumul avancé.
 
 **Modèle cible d’un plat**
 - Restaurant propriétaire, catégorie, nom, description, photo, prix de base, disponibilité et statut brouillon/publié.
@@ -112,7 +111,7 @@ Tester les tâches réelles — ajouter un plat, changer son prix, le rendre ind
 
 ### Phase E — Tableau de bord mobile MVP
 
-**État dans cette PR** : la liste, création/modification, brouillon/publication, disponibilité, promotion %, options, photo et aperçu sont disponibles dans le prototype mobile. Catégories, duplication, horaires, accueil, commandes et suivi des modifications ne sont pas inclus dans ce premier périmètre.
+**État dans cette PR** : le menu inclut liste, création/modification, brouillon/publication, disponibilité, promotion %, options, photo et aperçu; l’espace ajoute une vue commandes et réglages boutique. Catégories, duplication, horaires, historique détaillé des modifications et analytique ne sont pas inclus dans ce périmètre.
 
 **Ordre de livraison suggéré**
 1. Liste des plats et changement rapide de disponibilité.
@@ -132,13 +131,12 @@ Prévoir sauvegarde brouillon, duplication de plat, confirmation des changements
 
 ### Phase F — Panier, commande et caisse de bout en bout
 
-**État dans cette PR** : la fiche client propose personnalisation, panier, mode de service, téléphone, total confirmé, idempotence et création d’une commande cash à la caisse. Le smoke test complet est passé au run [42141785151](https://github.com/bernoussifatiha84-good/tuc-restaurant/actions/runs/42141785151); aucun paiement réel ni pilote UAT n’a eu lieu.
+**État dans cette PR** : fiche client, panier persistant, validation de prix côté serveur, idempotence et commande cash; le client reçoit aussi un jeton opaque de suivi et voit l’évolution du statut. La réponse de suivi omet PII, contenu et total. Le smoke final est en attente; aucun paiement réel ni pilote UAT n’a eu lieu.
 
-- Raccorder le panier client TUC au même catalogue et aux mêmes identifiants d’options.
-- Revalider côté serveur : restaurant, disponibilité, options, quantités, promo, frais et total au moment de confirmer.
-- Sauvegarder un instantané de commande; associer la commande à un seul restaurant.
-- Transmettre la commande à la caisse TUC avec le mode de service et le détail des options; prévoir refus, indisponibilité, annulation et réseau interrompu.
-- Préparer le suivi client seulement après fiabilisation de la réception caisse.
+- Les tests Docker vérifient total falsifié, idempotence, options, tenant, statut et suivi tokenisé.
+- La caisse TUC reçoit la commande avec mode et détail des options; le tableau mobile permet le traitement par les rôles autorisés.
+- Suivi client limité à 30 jours, nonce non requis mais jeton secret, débit limité; restauration du lien possible par nouvelle tentative avec la même clé idempotente.
+- Aucun flux de paiement réel ou déploiement n’est inclus.
 
 **Critères de sortie** : parcours automatisé du menu mobile à la commande de test en caisse, sans prix modifiable côté client ni accès à la caisse d’un autre restaurant.
 

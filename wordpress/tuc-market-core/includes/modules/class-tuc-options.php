@@ -139,6 +139,69 @@ final class TUC_Options
         return ['version' => self::VERSION, 'groups' => array_values($normalised)];
     }
 
+    /** Migration idempotente d'un article, avec sauvegarde des métadonnées originales. */
+    public static function migrer_item(int $item_id, bool $apply = false): array|WP_Error
+    {
+        $item = get_post($item_id);
+        if (!$item instanceof WP_Post || $item->post_type !== TUC_CPT::ITEM) {
+            return new WP_Error('tuc_options_migration_item', 'Article menu introuvable.', ['status' => 404]);
+        }
+        $raw = get_post_meta($item_id, 'tuc_options', true);
+        $isV2 = is_array($raw) && (int) ($raw['version'] ?? 0) === self::VERSION && isset($raw['groups']) && is_array($raw['groups']);
+        if ($isV2) {
+            $validated = self::normaliser_definition($raw);
+            if (is_wp_error($validated)) {
+                return $validated;
+            }
+            if ($apply) {
+                update_post_meta($item_id, 'tuc_options_schema_version', self::VERSION);
+            }
+            return ['state' => 'current', 'item_id' => $item_id];
+        }
+
+        $normalised = self::normaliser_definition($raw);
+        if (is_wp_error($normalised)) {
+            return $normalised;
+        }
+        if (!$apply) {
+            return ['state' => 'ready', 'item_id' => $item_id, 'group_count' => count($normalised['groups'])];
+        }
+
+        if (!metadata_exists('post', $item_id, 'tuc_options_legacy_backup')) {
+            add_post_meta($item_id, 'tuc_options_legacy_backup', $raw, true);
+            add_post_meta($item_id, 'tuc_options_legacy_had_value', metadata_exists('post', $item_id, 'tuc_options'), true);
+        }
+        update_post_meta($item_id, 'tuc_options', $normalised);
+        update_post_meta($item_id, 'tuc_options_schema_version', self::VERSION);
+        return ['state' => 'migrated', 'item_id' => $item_id, 'group_count' => count($normalised['groups'])];
+    }
+
+    /** Restaure la définition exacte sauvegardée par la migration (dry-run par défaut côté CLI). */
+    public static function restaurer_legacy_item(int $item_id, bool $apply = false): array|WP_Error
+    {
+        $item = get_post($item_id);
+        if (!$item instanceof WP_Post || $item->post_type !== TUC_CPT::ITEM) {
+            return new WP_Error('tuc_options_rollback_item', 'Article menu introuvable.', ['status' => 404]);
+        }
+        if (!metadata_exists('post', $item_id, 'tuc_options_legacy_backup')) {
+            return ['state' => 'no_backup', 'item_id' => $item_id];
+        }
+        $original = get_post_meta($item_id, 'tuc_options_legacy_backup', true);
+        $hadOriginalValue = metadata_exists('post', $item_id, 'tuc_options_legacy_had_value')
+            ? rest_sanitize_boolean(get_post_meta($item_id, 'tuc_options_legacy_had_value', true))
+            : true;
+        if (!$apply) {
+            return ['state' => 'ready', 'item_id' => $item_id];
+        }
+        if ($hadOriginalValue) {
+            update_post_meta($item_id, 'tuc_options', $original);
+        } else {
+            delete_post_meta($item_id, 'tuc_options');
+        }
+        delete_post_meta($item_id, 'tuc_options_schema_version');
+        return ['state' => 'restored', 'item_id' => $item_id];
+    }
+
     /** Valide des IDs de choix non fiables et recalcule tous les suppléments. */
     public static function valider_selection($definition, array $selection): array|WP_Error
     {

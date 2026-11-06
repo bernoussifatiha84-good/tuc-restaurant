@@ -23,8 +23,15 @@ define('TUC_CORE_URL', plugin_dir_url(__FILE__));
 require_once TUC_CORE_DIR . 'includes/class-tuc-health.php';
 require_once TUC_CORE_DIR . 'includes/class-tuc-activator.php';
 require_once TUC_CORE_DIR . 'includes/class-tuc-roles.php';
+require_once TUC_CORE_DIR . 'includes/class-tuc-acces.php';
 require_once TUC_CORE_DIR . 'includes/modules/class-tuc-options.php';
 require_once TUC_CORE_DIR . 'includes/modules/class-tuc-espace-pro.php';
+
+if (defined('WP_CLI') && WP_CLI) {
+    require_once TUC_CORE_DIR . 'includes/class-tuc-options-cli.php';
+    WP_CLI::add_command('tuc-options migrate', [TUC_Options_CLI::class, 'migrate']);
+    WP_CLI::add_command('tuc-options rollback', [TUC_Options_CLI::class, 'rollback']);
+}
 
 // modules métier — tout dans un seul plugin, pas dix
 require_once TUC_CORE_DIR . 'includes/modules/class-tuc-cpt.php';       // 1. CPT resto + menu

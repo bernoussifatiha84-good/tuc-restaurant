@@ -49,6 +49,11 @@ final class TUC_Commande
             'permission_callback' => '__return_true',
             'callback'            => [self::class, 'creer'],
         ]);
+        register_rest_route('tuc/v1', '/commande/suivi', [
+            'methods'             => 'POST',
+            'permission_callback' => '__return_true',
+            'callback'            => [self::class, 'suivre'],
+        ]);
 
         // Route historique : les rôles métier sont filtrés par capacité et
         // affectation restaurant dans la permission et dans le callback.
@@ -57,6 +62,12 @@ final class TUC_Commande
             'permission_callback' => [TUC_Caisse::class, 'permission_statut_commande'],
             'callback'            => [self::class, 'changer_statut'],
         ]);
+    }
+
+    private static function nouveau_jeton_suivi(int $order_id, string $idempotency_key): string
+    {
+        $digest = hash_hmac('sha256', 'tuc-order-track|' . $order_id . '|' . $idempotency_key, wp_salt('auth'), true);
+        return rtrim(strtr(base64_encode($digest), '+/', '-_'), '=');
     }
 
     /** Prix serveur (promotion + suppléments validés), jamais celui du client. */
@@ -146,7 +157,7 @@ final class TUC_Commande
             return new WP_Error('tuc_cle', 'Clé de commande invalide.', ['status' => 422]);
         }
         $cle = is_scalar($cleParam) ? (string) $cleParam : '';
-        if ($cle !== '' && !preg_match('/^[A-Za-z0-9._-]{1,64}$/', $cle)) {
+        if ($cle !== '' && !preg_match('/^[A-Za-z0-9._-]{24,64}$/', $cle)) {
             return new WP_Error('tuc_cle', 'Clé de commande invalide.', ['status' => 422]);
         }
         if ($cle !== '') {
@@ -158,7 +169,20 @@ final class TUC_Commande
                 'meta_query'     => [['key' => 'tuc_cle', 'value' => $cle]],
             ]);
             if ($deja) {
-                return new WP_REST_Response(['ok' => true, 'commande' => (int) $deja[0], 'doublon' => true], 200);
+                $existingOrderId = (int) $deja[0];
+                if ((int) get_post_meta($existingOrderId, 'tuc_resto', true) !== $resto->ID
+                    || !hash_equals((string) get_post_meta($existingOrderId, 'tuc_tel', true), $tel)) {
+                    return new WP_Error('tuc_cle', 'Clé de commande déjà utilisée.', ['status' => 409]);
+                }
+                $trackingToken = self::nouveau_jeton_suivi($existingOrderId, $cle);
+                update_post_meta($existingOrderId, 'tuc_suivi_hash', hash('sha256', $trackingToken));
+                update_post_meta($existingOrderId, 'tuc_suivi_expire', time() + 30 * DAY_IN_SECONDS);
+                return new WP_REST_Response([
+                    'ok' => true,
+                    'commande' => (int) $deja[0],
+                    'doublon' => true,
+                    'suivi' => $trackingToken,
+                ], 200);
             }
         }
 
@@ -239,6 +263,18 @@ final class TUC_Commande
                 return new WP_Error('tuc_trop', 'Trop de commandes. Réessayez dans quelques minutes.', ['status' => 429]);
             }
         }
+        $lockOption = $cle !== '' ? 'tuc_order_lock_' . md5($resto->ID . '|' . $cle) : '';
+        $lockAcquired = $lockOption === '' || add_option($lockOption, time(), '', false);
+        if (!$lockAcquired) {
+            $lockedSince = (int) get_option($lockOption, 0);
+            if ($lockedSince > 0 && time() - $lockedSince > 30) {
+                delete_option($lockOption);
+                $lockAcquired = add_option($lockOption, time(), '', false);
+            }
+        }
+        if (!$lockAcquired) {
+            return new WP_Error('tuc_commande_en_cours', 'Cette commande est en cours de confirmation. Réessayez.', ['status' => 409]);
+        }
         foreach ($limites as [$cleLimite, $maximum]) {
             set_transient($cleLimite, (int) get_transient($cleLimite) + 1, 10 * MINUTE_IN_SECONDS);
         }
@@ -258,13 +294,23 @@ final class TUC_Commande
                 'tuc_total'  => $du,
                 'tuc_tel'    => $tel,
                 'tuc_statut' => 'nouvelle',
+                'tuc_statut_updated_at' => current_time('mysql', true),
                 'tuc_cle'    => $cle,
                 'tuc_historique' => [['nouvelle', current_time('c')]],
             ],
         ], true);
 
         if (is_wp_error($id)) {
+            if ($lockOption !== '') {
+                delete_option($lockOption);
+            }
             return $id;
+        }
+        $trackingToken = self::nouveau_jeton_suivi((int) $id, $cle);
+        update_post_meta((int) $id, 'tuc_suivi_hash', hash('sha256', $trackingToken));
+        update_post_meta((int) $id, 'tuc_suivi_expire', time() + 30 * DAY_IN_SECONDS);
+        if ($lockOption !== '') {
+            delete_option($lockOption);
         }
 
         /** Module 6 : Web Push vers le téléphone de la caisse. */
@@ -275,7 +321,65 @@ final class TUC_Commande
             'commande' => $id,
             'total'  => $du,
             'frais'  => $frais,
+            'suivi' => $trackingToken,
         ], 201);
+    }
+
+    /** Suivi public par jeton secret, sans exposer téléphone, lignes ou total. */
+    public static function suivre(WP_REST_Request $request): WP_REST_Response|WP_Error
+    {
+        $ip = filter_var((string) ($_SERVER['REMOTE_ADDR'] ?? ''), FILTER_VALIDATE_IP);
+        $rateKey = 'tuc_order_track_rl_' . md5($ip !== false ? $ip : 'unknown');
+        $count = (int) get_transient($rateKey);
+        if ($count >= 600) {
+            return new WP_Error('tuc_suivi_rate', 'Trop de vérifications. Réessayez dans quelques minutes.', ['status' => 429]);
+        }
+        set_transient($rateKey, $count + 1, 10 * MINUTE_IN_SECONDS);
+
+        $token = $request->get_param('jeton');
+        if (!is_string($token) || !preg_match('/^[A-Za-z0-9_-]{43}$/', $token)) {
+            return new WP_Error('tuc_suivi', 'Lien de suivi invalide ou expiré.', ['status' => 404]);
+        }
+        $hash = hash('sha256', $token);
+        $matches = get_posts([
+            'post_type' => self::CPT, 'post_status' => 'publish', 'posts_per_page' => 1,
+            'fields' => 'ids', 'no_found_rows' => true,
+            'meta_query' => [['key' => 'tuc_suivi_hash', 'value' => $hash, 'compare' => '=']],
+        ]);
+        if ($matches === []) {
+            return new WP_Error('tuc_suivi', 'Lien de suivi invalide ou expiré.', ['status' => 404]);
+        }
+        $orderId = (int) $matches[0];
+        if ((int) get_post_meta($orderId, 'tuc_suivi_expire', true) < time()) {
+            return new WP_Error('tuc_suivi', 'Lien de suivi invalide ou expiré.', ['status' => 410]);
+        }
+        $restaurant = get_post((int) get_post_meta($orderId, 'tuc_resto', true));
+        $status = sanitize_key((string) get_post_meta($orderId, 'tuc_statut', true));
+        $statusLabels = [
+            'nouvelle' => 'Reçue', 'acceptee' => 'Acceptée', 'preparation' => 'En préparation',
+            'prete' => 'Prête', 'servie' => 'Servie', 'refusee' => 'Refusée', 'annulee' => 'Annulée',
+        ];
+        $history = [];
+        foreach ((array) get_post_meta($orderId, 'tuc_historique', true) as $entry) {
+            if (!is_array($entry) || !isset($entry[0], $entry[1])) {
+                continue;
+            }
+            $entryStatus = sanitize_key((string) $entry[0]);
+            if (isset($statusLabels[$entryStatus])) {
+                $history[] = ['status' => $entryStatus, 'label' => $statusLabels[$entryStatus], 'at' => sanitize_text_field((string) $entry[1])];
+            }
+        }
+        $response = new WP_REST_Response([
+            'reference' => $orderId,
+            'restaurant' => $restaurant instanceof WP_Post ? sanitize_text_field($restaurant->post_title) : 'Restaurant TUC',
+            'status' => isset($statusLabels[$status]) ? $status : 'nouvelle',
+            'label' => $statusLabels[$status] ?? 'Reçue',
+            'updated_at' => (string) get_post_meta($orderId, 'tuc_statut_updated_at', true),
+            'history' => $history,
+        ], 200);
+        $response->header('Cache-Control', 'no-store, private, max-age=0');
+        $response->header('Pragma', 'no-cache');
+        return $response;
     }
 
     /** Transitions contrôlées : pas de statut libre. */
@@ -304,7 +408,9 @@ final class TUC_Commande
         $histo[] = [$vers, current_time('c')];
 
         update_post_meta($id, 'tuc_statut', $vers);
+        update_post_meta($id, 'tuc_statut_updated_at', current_time('mysql', true));
         update_post_meta($id, 'tuc_historique', $histo);
+        do_action('tuc_commande_statut', $id, $vers);
 
         return new WP_REST_Response(['ok' => true, 'statut' => $vers], 200);
     }

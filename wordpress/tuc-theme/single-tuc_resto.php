@@ -47,6 +47,7 @@ while (have_posts()) : the_post();
     <div class="hd"><h2 id="tuc-menu-heading"><?php esc_html_e('Le menu', 'tuc'); ?></h2><span class="tuc-order-caption"><?php esc_html_e('Choisissez vos plats, puis confirmez votre commande.', 'tuc'); ?></span></div>
     <div id="tuc-client-menu" data-resto="<?php echo esc_attr((string) get_post_field('post_name', $id)); ?>" data-table="<?php echo esc_attr((string) $table); ?>">
       <div id="tuc-client-status" class="tuc-client-status" role="status" aria-live="polite"><?php esc_html_e('Chargement du menu…', 'tuc'); ?></div>
+      <button type="button" id="tuc-open-saved-tracking" class="tuc-track-saved" hidden><?php esc_html_e('Suivre ma commande en cours', 'tuc'); ?></button>
       <div id="tuc-client-items" class="tuc-client-items"></div>
     </div>
   </section>
@@ -84,6 +85,12 @@ while (have_posts()) : the_post();
       </form>
     </div>
     <div id="tuc-order-success" class="tuc-order-success" hidden></div>
+  </dialog>
+
+  <dialog id="tuc-tracking-dialog" class="tuc-client-dialog tuc-tracking-dialog" aria-labelledby="tuc-tracking-title">
+    <div class="tuc-dialog-head"><div><p class="tuc-order-kicker"><?php esc_html_e('SUIVI SÉCURISÉ', 'tuc'); ?></p><h2 id="tuc-tracking-title"><?php esc_html_e('Votre commande', 'tuc'); ?></h2></div><button type="button" class="tuc-dialog-close" data-close-tracking aria-label="Fermer">×</button></div>
+    <div id="tuc-tracking-content" aria-live="polite"><p><?php esc_html_e('Chargement du statut…', 'tuc'); ?></p></div>
+    <div class="tuc-tracking-actions"><button type="button" class="tuc-client-secondary" data-refresh-tracking><?php esc_html_e('Actualiser le statut', 'tuc'); ?></button><button type="button" class="tuc-track-forget" data-forget-tracking><?php esc_html_e('Effacer ce lien sur cet appareil', 'tuc'); ?></button></div>
   </dialog>
 
   <div class="content" style="padding:0 var(--px) 40px">

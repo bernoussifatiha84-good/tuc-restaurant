@@ -11,6 +11,9 @@
   const customDialog = $('#tuc-customize-dialog');
   const cartDialog = $('#tuc-cart-dialog');
   const storeKey = `tuc-cart-v2:${slug}`;
+  const trackingKey = `tuc-order-track-v1:${slug}`;
+  const trackingDialog = $('#tuc-tracking-dialog');
+  let trackingTimer = 0;
   const labels = { livraison: 'Livraison', emporter: 'À emporter', table: 'À table' };
   let restaurant = null;
   let menu = [];
@@ -28,7 +31,52 @@
     try { localStorage.setItem(storeKey, JSON.stringify(cart.map(({ id, q, options }) => ({ id, q, options })))); } catch (_) { /* stockage local facultatif */ }
   };
   const resetIdempotency = () => { pendingKey = ''; acceptedServerTotal = null; };
-  const newKey = () => (window.crypto?.randomUUID ? window.crypto.randomUUID() : `tuc-${Date.now()}-${Math.random().toString(36).slice(2, 12)}`);
+  const newKey = () => {
+    if (window.crypto?.randomUUID) return window.crypto.randomUUID();
+    if (window.crypto?.getRandomValues) return Array.from(window.crypto.getRandomValues(new Uint8Array(24)), (byte) => byte.toString(16).padStart(2, '0')).join('');
+    return `tuc-${Date.now()}-${Math.random().toString(36).slice(2, 12)}`;
+  };
+  function readTracking() {
+    try {
+      const data = JSON.parse(localStorage.getItem(trackingKey) || 'null');
+      return data && Number.isInteger(Number(data.reference)) && /^[A-Za-z0-9_-]{43}$/.test(data.token) ? data : null;
+    } catch (_) { return null; }
+  }
+  function saveTracking(data) {
+    try { localStorage.setItem(trackingKey, JSON.stringify(data)); } catch (_) { /* suivi local facultatif */ }
+    const button = $('#tuc-open-saved-tracking');
+    if (button) { button.hidden = false; button.textContent = `Suivre ma commande #${Number(data.reference)}`; }
+  }
+  async function refreshTracking() {
+    const tracked = readTracking();
+    const content = $('#tuc-tracking-content');
+    if (!tracked || !content) { if (content) content.innerHTML = '<p>Aucun lien de suivi enregistré sur cet appareil.</p>'; return; }
+    content.innerHTML = '<p class="tuc-tracking-loading">Actualisation du statut…</p>';
+    try {
+      const response = await fetch(`${TUCClient.rest}commande/suivi`, {
+        method: 'POST', credentials: 'same-origin', cache: 'no-store',
+        headers: { 'Content-Type': 'application/json', 'X-WP-Nonce': TUCClient.nonce },
+        body: JSON.stringify({ jeton: tracked.token })
+      });
+      const data = await response.json().catch(() => ({}));
+      if (!response.ok) throw new Error(data.message || 'Suivi momentanément indisponible.');
+      const history = Array.isArray(data.history) ? data.history : [];
+      const historyHtml = history.map((entry) => {
+        const date = entry.at ? new Date(entry.at).toLocaleString('fr-MA', { dateStyle: 'medium', timeStyle: 'short' }) : '';
+        return `<li><span class="tuc-tracking-dot"></span><span><strong>${escapeHtml(entry.label)}</strong><small>${escapeHtml(date)}</small></span></li>`;
+      }).join('');
+      content.innerHTML = `<div class="tuc-tracking-current"><span class="tuc-tracking-state">${escapeHtml(data.label)}</span><h3>Commande #${Number(data.reference)}</h3><p>${escapeHtml(data.restaurant)}</p></div><ol class="tuc-tracking-history">${historyHtml || '<li><span>Statut reçu.</span></li>'}</ol><p class="tuc-tracking-note">Ce lien privé fonctionne pendant 30 jours sur cet appareil.</p>`;
+    } catch (error) {
+      content.innerHTML = `<p class="tuc-tracking-error">${escapeHtml(error.message)}</p>`;
+    }
+  }
+  function openTracking() {
+    if (!trackingDialog) return;
+    if (!trackingDialog.open) trackingDialog.showModal();
+    refreshTracking();
+    window.clearInterval(trackingTimer);
+    trackingTimer = window.setInterval(() => { if (trackingDialog.open) refreshTracking(); }, 30000);
+  }
   const getItem = (id) => menu.find((item) => Number(item.id) === Number(id));
   const groupsFor = (item) => Array.isArray(item?.options?.groups) ? item.options.groups : [];
 
@@ -196,7 +244,8 @@
       minimumNotice.hidden = false;
     } else minimumNotice.hidden = true;
     const button = $('#tuc-submit-order');
-    button.disabled = count === 0 || !restaurant?.open || (table === 0 && serviceModes().length === 0) || (minimum > 0 && totals.subtotal < minimum);
+    const validTable = table === 0 || (Number(restaurant?.tables || 0) >= table && table > 0);
+    button.disabled = count === 0 || !restaurant?.open || !validTable || (table === 0 && serviceModes().length === 0) || (minimum > 0 && totals.subtotal < minimum);
     if (!restaurant?.open) button.textContent = 'Restaurant fermé';
     else button.textContent = 'Confirmer la commande';
     cacheCart();
@@ -245,6 +294,8 @@
       renderMenu();
       restoreCart();
       updateCart();
+      const savedTracking = readTracking();
+      if (savedTracking) saveTracking(savedTracking);
       if (table > 0 && (!restaurant.tables || table > restaurant.tables)) $$('.tuc-add-to-cart').forEach((button) => { button.disabled = true; });
     } catch (error) {
       setStatus(error.message || 'Impossible de charger le menu. Réessayez.', true);
@@ -292,7 +343,9 @@
       resetIdempotency();
       $('#tuc-checkout-area').hidden = true;
       $('#tuc-cart-lines').hidden = true;
-      $('#tuc-order-success').innerHTML = `<div class="tuc-success-icon" aria-hidden="true">✓</div><h3>Commande reçue</h3><p>Votre commande <strong>#${Number(body.commande)}</strong> a bien été transmise à ${escapeHtml(restaurant.name)}.</p><p>Le règlement se fera sur place. Le restaurant pourra vous contacter au numéro indiqué.</p><button type="button" class="tuc-client-primary" data-success-close>Continuer</button>`;
+      const trackingToken = typeof body.suivi === 'string' && /^[A-Za-z0-9_-]{43}$/.test(body.suivi) ? body.suivi : '';
+      if (trackingToken) saveTracking({ reference: Number(body.commande), token: trackingToken });
+      $('#tuc-order-success').innerHTML = `<div class="tuc-success-icon" aria-hidden="true">✓</div><h3>Commande reçue</h3><p>Votre commande <strong>#${Number(body.commande)}</strong> a bien été transmise à ${escapeHtml(restaurant.name)}.</p><p>Le règlement se fera sur place. Le restaurant pourra vous contacter au numéro indiqué.</p>${trackingToken ? '<button type="button" class="tuc-client-primary" data-open-tracking>Suivre ma commande</button>' : ''}<button type="button" class="tuc-client-secondary" data-success-close>Continuer</button>`;
       $('#tuc-order-success').hidden = false;
       updateCart();
     } catch (error) {
@@ -338,7 +391,21 @@
   $('#tuc-checkout-form').addEventListener('submit', submitOrder);
   $('#tuc-order-mode').addEventListener('change', () => { resetIdempotency(); updateCart(); });
   $('#tuc-customer-phone').addEventListener('input', () => { resetIdempotency(); updateCart(); });
-  $('#tuc-order-success').addEventListener('click', (event) => { if (event.target.closest('[data-success-close]')) cartDialog.close(); });
-  for (const dialog of [customDialog, cartDialog]) dialog.addEventListener('click', (event) => { if (event.target === dialog) dialog.close(); });
+  $('#tuc-order-success').addEventListener('click', (event) => {
+    if (event.target.closest('[data-success-close]')) cartDialog.close();
+    if (event.target.closest('[data-open-tracking]')) { cartDialog.close(); openTracking(); }
+  });
+  $('#tuc-open-saved-tracking')?.addEventListener('click', openTracking);
+  $('[data-close-tracking]', trackingDialog)?.addEventListener('click', () => trackingDialog.close());
+  $('[data-refresh-tracking]', trackingDialog)?.addEventListener('click', refreshTracking);
+  $('[data-forget-tracking]', trackingDialog)?.addEventListener('click', () => {
+    try { localStorage.removeItem(trackingKey); } catch (_) { /* stockage local facultatif */ }
+    const button = $('#tuc-open-saved-tracking');
+    if (button) button.hidden = true;
+    window.clearInterval(trackingTimer);
+    trackingDialog.close();
+  });
+  trackingDialog?.addEventListener('close', () => window.clearInterval(trackingTimer));
+  for (const dialog of [customDialog, cartDialog, trackingDialog].filter(Boolean)) dialog.addEventListener('click', (event) => { if (event.target === dialog) dialog.close(); });
   load();
 })();
