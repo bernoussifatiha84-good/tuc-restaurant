@@ -129,7 +129,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          if output="$(npm install --prefix "$RUNNER_TEMP/tuc-playwright" --no-audit --no-fund playwright@1.56.1 2>&1)"; then
+          if output="$(npm install --prefix "$RUNNER_TEMP/tuc-playwright" --no-audit --no-fund playwright@1.56.1 axe-core@4.10.3 lighthouse@13.6.0 chrome-launcher@1.2.3 2>&1)"; then
             printf '%s\n' "$output"
           else
             status=$?
@@ -343,6 +343,16 @@ jobs:
             echo "::error title=Ten checkout scenarios failed::$excerpt"
             exit "$status"
           fi
+
+      - name: Audit web professionnel (Lighthouse mobile, SEO, WCAG, responsive, REST)
+        shell: bash
+        env:
+          NODE_PATH: ${{ runner.temp }}/tuc-playwright/node_modules
+          TUC_MOBILE_E2E_URL: http://127.0.0.1:8080
+        run: |
+          set -euo pipefail
+          node --check tests/professional-audit.js
+          node tests/professional-audit.js
 
       - name: Vérifier HTTP, REST et la version PHP
         shell: bash
