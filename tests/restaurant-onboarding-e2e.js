@@ -71,7 +71,7 @@ async function main() {
 
     const code = waMessage.match(/ref:([A-Z0-9]{8})/)?.[1];
     assert(code, 'le message WhatsApp contient la référence temporaire');
-    await applicant.route('https://wa.me/**', (route) => route.fulfill({ status: 200, contentType: 'text/html', body: '<title>WhatsApp simulé</title>' }));
+    await applicantContext.route('https://wa.me/**', (route) => route.fulfill({ status: 200, contentType: 'text/html', body: '<title>WhatsApp simulé</title>' }));
     const popupPromise = applicant.waitForEvent('popup');
     await applicant.locator('#tuc-onboarding-wa-link').click();
     const whatsappTab = await popupPromise;
