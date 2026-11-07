@@ -515,7 +515,8 @@ jobs:
         shell: pwsh
         run: |
           $ErrorActionPreference = 'Stop'
-          Write-Host 'Starting Windows Audio service'
+          try {
+            Write-Host 'Starting Windows Audio service'
           Start-Service -Name Audiosrv -ErrorAction SilentlyContinue
           $archive = Join-Path $env:RUNNER_TEMP 'Scream4.0.zip'
           $extract = Join-Path $env:RUNNER_TEMP 'scream'
@@ -556,7 +557,14 @@ jobs:
           $endpoints = Get-PnpDevice -Class AudioEndpoint -PresentOnly | Select-Object -ExpandProperty FriendlyName
           $endpoints | ForEach-Object { Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value "- Audio endpoint: $_" }
           if (-not ($endpoints -match 'Scream')) { throw 'Scream installed but Windows did not expose an audio endpoint' }
-          Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value '`nScream virtual output is ready; its multicast PCM stream will be captured during the NVDA form walkthrough.'
+            Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value '`nScream virtual output is ready; its multicast PCM stream will be captured during the NVDA form walkthrough.'
+          } catch {
+            $detail = $_.Exception.ToString() + "`n" + $_.ScriptStackTrace
+            Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value "`n### Scream installation error`n````text`n$detail`n````"
+            $annotation = ($detail -replace '%', '%25' -replace '\r', '%0D' -replace '\n', '%0A')
+            Write-Output "::error title=Scream virtual audio setup::$annotation"
+            throw
+          }
 
       - name: Installer le lecteur d’écran NVDA portable
         shell: pwsh
