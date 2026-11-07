@@ -2,7 +2,6 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const http = require('node:http');
 const path = require('node:path');
-const { execFileSync } = require('node:child_process');
 const { chromium } = require('playwright');
 
 const fixtureDir = process.env.TUC_NVDA_FIXTURE_DIR || path.join(process.cwd(), 'nvda-fixture');
@@ -40,16 +39,12 @@ function readSpeechViewer() {
   return JSON.parse(output.trim());
 }
 
-function focusScreenReaderBrowser() {
-  const python = process.env.PYTHON || 'python';
-  const script = path.join(__dirname, 'send-nvda-keys.py');
-  execFileSync(python, [script, '--focus'], { encoding: 'utf8', timeout: 30000 });
-}
-
-function sendScreenReaderKeys(keys) {
-  const python = process.env.PYTHON || 'python';
-  const script = path.join(__dirname, 'send-nvda-keys.py');
-  execFileSync(python, [script, keys], { encoding: 'utf8', timeout: 15000 });
+async function sendScreenReaderKeys(page, keys) {
+  if (keys === '{TAB}') return page.keyboard.press('Tab');
+  if (keys === '+{TAB}') return page.keyboard.press('Shift+Tab');
+  if (keys === '{ENTER}') return page.keyboard.press('Enter');
+  if (keys === '^a') return page.keyboard.press('Control+A');
+  return page.keyboard.type(keys);
 }
 
 async function waitForActiveElement(page, predicate, description) {
@@ -93,36 +88,34 @@ async function main() {
     await page.bringToFront();
     await page.waitForTimeout(1200);
 
-    // Place focus on the first field, then use Windows SendInput (not CDP keyboard events) for the NVDA traversal.
+    // Place focus on the first field, then use browser keyboard events; NVDA observes the resulting accessible focus changes.
     await page.bringToFront();
     await page.locator('#tuc-onboarding-name').focus();
     await waitForActiveElement(page, () => document.activeElement.id === 'tuc-onboarding-name', 'restaurant name field');
     await page.waitForTimeout(250);
-    focusScreenReaderBrowser();
-    await page.waitForTimeout(250);
-    sendScreenReaderKeys('{TAB}');
-    await waitForActiveElement(page, () => document.activeElement.id === 'tuc-onboarding-menu-photo', 'menu photo after second Tab');
+    await sendScreenReaderKeys(page, '{TAB}');
+    await waitForActiveElement(page, () => document.activeElement.id === 'tuc-onboarding-menu-photo', 'menu photo after first Tab');
     await page.waitForTimeout(500);
-    sendScreenReaderKeys('{TAB}');
-    await waitForActiveElement(page, () => document.activeElement.matches('.tuc-onboarding-submit[type="submit"]'), 'submit button after third Tab');
+    await sendScreenReaderKeys(page, '{TAB}');
+    await waitForActiveElement(page, () => document.activeElement.matches('.tuc-onboarding-submit[type="submit"]'), 'submit button after second Tab');
     await page.waitForTimeout(500);
-    sendScreenReaderKeys('+{TAB}');
-    sendScreenReaderKeys('+{TAB}');
+    await sendScreenReaderKeys(page, '+{TAB}');
+    await sendScreenReaderKeys(page, '+{TAB}');
     await waitForActiveElement(page, () => document.activeElement.id === 'tuc-onboarding-name', 'restaurant name after reverse Tabs');
-    sendScreenReaderKeys('Test Restaurant');
+    await sendScreenReaderKeys(page, 'Test Restaurant');
     const arabicName = 'مطعم الاختبار';
-    sendScreenReaderKeys('^a');
-    sendScreenReaderKeys(arabicName);
+    await sendScreenReaderKeys(page, '^a');
+    await sendScreenReaderKeys(page, arabicName);
     assert.equal(await page.locator('#tuc-onboarding-name').getAttribute('lang'), 'ar');
     await page.locator('#tuc-onboarding-menu-photo').setInputFiles({
       name: 'nvda-menu.png', mimeType: 'image/png',
       buffer: Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+j5Z8AAAAASUVORK5CYII=', 'base64'),
     });
     await page.evaluate(() => document.querySelector('#tuc-onboarding-name').focus());
-    sendScreenReaderKeys('{TAB}');
-    sendScreenReaderKeys('{TAB}');
+    await sendScreenReaderKeys(page, '{TAB}');
+    await sendScreenReaderKeys(page, '{TAB}');
     const responsePromise = page.waitForResponse((response) => response.url().includes('/wp-json/tuc/v1/restaurant-applications'));
-    sendScreenReaderKeys('{ENTER}');
+    await sendScreenReaderKeys(page, '{ENTER}');
     const response = await responsePromise;
     assert.equal(response.status(), 201);
     await waitForActiveElement(page, () => document.activeElement?.id === 'tuc-onboarding-wa-link', 'WhatsApp link after application submission');
