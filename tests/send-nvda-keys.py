@@ -12,15 +12,26 @@ def move_mouse_away_from_speech_viewer():
 
 def focus_browser_window():
     target_title = 'Demande restaurateur TUC'
-    for window in Desktop(backend='uia').windows():
+    windows = Desktop(backend='win32').windows()
+    titled_windows = []
+    for window in windows:
         try:
-            if target_title in window.window_text():
-                window.set_focus()
-                move_mouse_away_from_speech_viewer()
-                return
+            title = window.window_text()
         except Exception:
             continue
-    raise RuntimeError(f'Browser window containing {target_title!r} was not found')
+        if title:
+            titled_windows.append((window, title))
+    browser = next((window for window, title in titled_windows if target_title in title), None)
+    if browser is None:
+        browser = next(
+            (window for window, title in titled_windows if 'chrome' in title.lower() or 'chromium' in title.lower()),
+            None,
+        )
+    if browser is None:
+        visible_titles = [title for _, title in titled_windows]
+        raise RuntimeError(f'Browser window not found; visible window titles: {visible_titles!r}')
+    browser.set_focus()
+    move_mouse_away_from_speech_viewer()
 
 
 def main():
@@ -30,7 +41,7 @@ def main():
         focus_browser_window()
         return
 
-    # Focus the browser once per test; avoid repeatedly enumerating UIA windows while typing.
+    # Focus the browser once per test; avoid repeatedly enumerating windows while typing.
     move_mouse_away_from_speech_viewer()
     send_keys(sys.argv[1], pause=0.04)
 
