@@ -58,7 +58,7 @@ if __name__ == '__main__':
     diagnostics = []
     while time.time() < deadline:
         latest, diagnostics = read_speech()
-        if latest:
+        if 'Nom du restaurant' in latest and 'Continuer dans WhatsApp' in latest:
             break
         time.sleep(0.25)
     print(json.dumps({'text': latest, 'diagnostics': diagnostics}, ensure_ascii=False))
