@@ -17,35 +17,35 @@ function tuc_restos(): array
 
     $cache = [
         // ---------------------------------------------------- restaurants
-        ['n' => 'Restaurant Alhayba', 'cu' => 'Marocain · Libanais', 'k' => 'restaurant', 'r' => 4.9, 't' => '20–35', 'd' => 2.1, 'fee' => null, 'img' => 'tagine'],
-        ['n' => 'Bouchaib Grillades', 'cu' => 'Grillades · Brochettes', 'k' => 'restaurant', 'r' => 4.9, 't' => '20–30', 'd' => 1.4, 'fee' => 12, 'img' => 'grillades'],
-        ['n' => 'Dar Zitoun', 'cu' => 'Marocain · Couscous', 'k' => 'restaurant', 'r' => 4.8, 't' => '25–40', 'd' => 3.2, 'fee' => null, 'img' => 'p-couscous'],
-        ['n' => 'La Sqala', 'cu' => 'Marocain · Poisson', 'k' => 'restaurant', 'r' => 4.8, 't' => '25–40', 'd' => 4.0, 'fee' => 20, 'img' => 'p-friture'],
-        ['n' => 'Océan Marina', 'cu' => 'Poisson frais · Friture', 'k' => 'restaurant', 'r' => 4.7, 't' => '20–35', 'd' => 2.8, 'fee' => 18, 'img' => 'fish'],
-        ['n' => 'Sushi Club Anfa', 'cu' => 'Japonais · Sushi', 'k' => 'restaurant', 'r' => 4.7, 't' => '30–45', 'd' => 3.6, 'fee' => 25, 'img' => 'sushi'],
+        ['n' => 'Restaurant Alhayba', 'cu' => 'Marocain · Libanais', 'k' => 'restaurant', 'r' => 4.9, 't' => '20–35', 'fee' => null, 'img' => 'tagine'],
+        ['n' => 'Bouchaib Grillades', 'cu' => 'Grillades · Brochettes', 'k' => 'restaurant', 'r' => 4.9, 't' => '20–30', 'fee' => 12, 'img' => 'grillades'],
+        ['n' => 'Dar Zitoun', 'cu' => 'Marocain · Couscous', 'k' => 'restaurant', 'r' => 4.8, 't' => '25–40', 'fee' => null, 'img' => 'p-couscous'],
+        ['n' => 'La Sqala', 'cu' => 'Marocain · Poisson', 'k' => 'restaurant', 'r' => 4.8, 't' => '25–40', 'fee' => 20, 'img' => 'p-friture'],
+        ['n' => 'Océan Marina', 'cu' => 'Poisson frais · Friture', 'k' => 'restaurant', 'r' => 4.7, 't' => '20–35', 'fee' => 18, 'img' => 'fish'],
+        ['n' => 'Sushi Club Anfa', 'cu' => 'Japonais · Sushi', 'k' => 'restaurant', 'r' => 4.7, 't' => '30–45', 'fee' => 25, 'img' => 'sushi'],
         // ---------------------------------------------------- mahlabas
-        ['n' => 'Mahlaba Al Baraka', 'cu' => 'Jben · Raib · Lait cru', 'k' => 'mahlaba', 'r' => 4.9, 't' => '10–20', 'd' => 0.8, 'fee' => null, 'img' => 'p-jben'],
-        ['n' => 'Mahlaba Sidi Maârouf', 'cu' => 'Fromage frais · Beurre', 'k' => 'mahlaba', 'r' => 4.8, 't' => '15–25', 'd' => 2.4, 'fee' => 10, 'img' => 'p-raib'],
-        ['n' => 'Mahlaba Lalla Zahra', 'cu' => 'Raib · Amlou · Miel', 'k' => 'mahlaba', 'r' => 4.8, 't' => '10–20', 'd' => 1.1, 'fee' => null, 'img' => 'p-amlou'],
-        ['n' => 'Mahlaba Al Amal', 'cu' => 'Jben · Msemen · Briouat', 'k' => 'mahlaba', 'r' => 4.7, 't' => '10–20', 'd' => 2.0, 'fee' => null, 'img' => 'p-briouat'],
-        ['n' => 'Laiterie Chaabi', 'cu' => 'Lait · Œufs · Yaourt', 'k' => 'mahlaba', 'r' => 4.7, 't' => '15–25', 'd' => 1.6, 'fee' => 10, 'img' => 'p-raib'],
+        ['n' => 'Mahlaba Al Baraka', 'cu' => 'Jben · Raib · Lait cru', 'k' => 'mahlaba', 'r' => 4.9, 't' => '10–20', 'fee' => null, 'img' => 'p-jben'],
+        ['n' => 'Mahlaba Sidi Maârouf', 'cu' => 'Fromage frais · Beurre', 'k' => 'mahlaba', 'r' => 4.8, 't' => '15–25', 'fee' => 10, 'img' => 'p-raib'],
+        ['n' => 'Mahlaba Lalla Zahra', 'cu' => 'Raib · Amlou · Miel', 'k' => 'mahlaba', 'r' => 4.8, 't' => '10–20', 'fee' => null, 'img' => 'p-amlou'],
+        ['n' => 'Mahlaba Al Amal', 'cu' => 'Jben · Msemen · Briouat', 'k' => 'mahlaba', 'r' => 4.7, 't' => '10–20', 'fee' => null, 'img' => 'p-briouat'],
+        ['n' => 'Laiterie Chaabi', 'cu' => 'Lait · Œufs · Yaourt', 'k' => 'mahlaba', 'r' => 4.7, 't' => '15–25', 'fee' => 10, 'img' => 'p-raib'],
         // ---------------------------------------------------- snacks
-        ['n' => "O'Tacos Maârif", 'cu' => 'Tacos · Fast food', 'k' => 'snack', 'r' => 4.8, 't' => '15–25', 'd' => 1.2, 'fee' => null, 'img' => 'tacos'],
-        ['n' => 'Snack Benna', 'cu' => 'Tacos · Burger', 'k' => 'snack', 'r' => 4.8, 't' => '15–25', 'd' => 1.8, 'fee' => null, 'img' => 'sandwich'],
-        ['n' => 'Snack Rialto', 'cu' => 'Sandwichs · Panini', 'k' => 'snack', 'r' => 4.7, 't' => '10–20', 'd' => 0.6, 'fee' => 8, 'img' => 'sandwich'],
-        ['n' => 'Cucina Napoli', 'cu' => 'Pizza napolitaine', 'k' => 'snack', 'r' => 4.7, 't' => '20–35', 'd' => 2.6, 'fee' => 15, 'img' => 'pizza'],
-        ['n' => 'Ctr Chicken', 'cu' => 'Poulet frit', 'k' => 'snack', 'r' => 4.7, 't' => '15–30', 'd' => 2.2, 'fee' => 12, 'img' => 'chicken'],
-        ['n' => 'Burger King', 'cu' => 'Burgers', 'k' => 'snack', 'r' => 4.6, 't' => '15–25', 'd' => 2.0, 'fee' => 15, 'img' => 'burger'],
+        ['n' => "O'Tacos Maârif", 'cu' => 'Tacos · Fast food', 'k' => 'snack', 'r' => 4.8, 't' => '15–25', 'fee' => null, 'img' => 'tacos'],
+        ['n' => 'Snack Benna', 'cu' => 'Tacos · Burger', 'k' => 'snack', 'r' => 4.8, 't' => '15–25', 'fee' => null, 'img' => 'sandwich'],
+        ['n' => 'Snack Rialto', 'cu' => 'Sandwichs · Panini', 'k' => 'snack', 'r' => 4.7, 't' => '10–20', 'fee' => 8, 'img' => 'sandwich'],
+        ['n' => 'Cucina Napoli', 'cu' => 'Pizza napolitaine', 'k' => 'snack', 'r' => 4.7, 't' => '20–35', 'fee' => 15, 'img' => 'pizza'],
+        ['n' => 'Ctr Chicken', 'cu' => 'Poulet frit', 'k' => 'snack', 'r' => 4.7, 't' => '15–30', 'fee' => 12, 'img' => 'chicken'],
+        ['n' => 'Burger King', 'cu' => 'Burgers', 'k' => 'snack', 'r' => 4.6, 't' => '15–25', 'fee' => 15, 'img' => 'burger'],
         // ---------------------------------------------------- cafés
-        ['n' => 'Café Al Boustane', 'cu' => 'Café · Thé · Petit-déj', 'k' => 'cafe', 'r' => 4.8, 't' => '10–20', 'd' => 0.9, 'fee' => null, 'img' => 'p-the'],
-        ['n' => 'Café Riche', 'cu' => 'Café · Snacks', 'k' => 'cafe', 'r' => 4.7, 't' => '10–20', 'd' => 1.3, 'fee' => 8, 'img' => 'p-nousnous'],
-        ['n' => 'Café Al Manar', 'cu' => 'Thé à la menthe · Ghriba', 'k' => 'cafe', 'r' => 4.7, 't' => '10–25', 'd' => 2.1, 'fee' => null, 'img' => 'p-the'],
-        ['n' => 'Café Atlas', 'cu' => 'Café · Jus pressés', 'k' => 'cafe', 'r' => 4.6, 't' => '10–20', 'd' => 1.7, 'fee' => 8, 'img' => 'p-nousnous'],
+        ['n' => 'Café Al Boustane', 'cu' => 'Café · Thé · Petit-déj', 'k' => 'cafe', 'r' => 4.8, 't' => '10–20', 'fee' => null, 'img' => 'p-the'],
+        ['n' => 'Café Riche', 'cu' => 'Café · Snacks', 'k' => 'cafe', 'r' => 4.7, 't' => '10–20', 'fee' => 8, 'img' => 'p-nousnous'],
+        ['n' => 'Café Al Manar', 'cu' => 'Thé à la menthe · Ghriba', 'k' => 'cafe', 'r' => 4.7, 't' => '10–25', 'fee' => null, 'img' => 'p-the'],
+        ['n' => 'Café Atlas', 'cu' => 'Café · Jus pressés', 'k' => 'cafe', 'r' => 4.6, 't' => '10–20', 'fee' => 8, 'img' => 'p-nousnous'],
         // ---------------------------------------------------- coffee shops
-        ['n' => 'Patti & Co', 'cu' => 'Pâtisserie · Café', 'k' => 'coffee', 'r' => 4.9, 't' => '20–35', 'd' => 2.4, 'fee' => null, 'img' => 'p-croissant'],
-        ['n' => 'Bloom Coffee', 'cu' => 'Specialty · Brunch', 'k' => 'coffee', 'r' => 4.8, 't' => '20–35', 'd' => 3.0, 'fee' => 15, 'img' => 'p-latte'],
-        ['n' => 'Blacksmith Coffee', 'cu' => 'Torréfaction locale', 'k' => 'coffee', 'r' => 4.8, 't' => '15–30', 'd' => 2.2, 'fee' => 12, 'img' => 'p-latte'],
-        ['n' => "L'Atelier Café", 'cu' => 'Brunch · Matcha', 'k' => 'coffee', 'r' => 4.7, 't' => '20–35', 'd' => 3.4, 'fee' => 15, 'img' => 'p-croissant'],
+        ['n' => 'Patti & Co', 'cu' => 'Pâtisserie · Café', 'k' => 'coffee', 'r' => 4.9, 't' => '20–35', 'fee' => null, 'img' => 'p-croissant'],
+        ['n' => 'Bloom Coffee', 'cu' => 'Specialty · Brunch', 'k' => 'coffee', 'r' => 4.8, 't' => '20–35', 'fee' => 15, 'img' => 'p-latte'],
+        ['n' => 'Blacksmith Coffee', 'cu' => 'Torréfaction locale', 'k' => 'coffee', 'r' => 4.8, 't' => '15–30', 'fee' => 12, 'img' => 'p-latte'],
+        ['n' => "L'Atelier Café", 'cu' => 'Brunch · Matcha', 'k' => 'coffee', 'r' => 4.7, 't' => '20–35', 'fee' => 15, 'img' => 'p-croissant'],
     ];
 
     return $cache;
@@ -77,7 +77,6 @@ function tuc_sections(): array
         ['id' => 'coffee', 'fr' => 'Coffee shops les mieux notés', 'ar' => 'الكافي شوب الأعلى تقييماً', 'type' => 'k', 'k' => 'coffee'],
         ['id' => 'free',   'fr' => 'Livraison offerte', 'ar' => 'التوصيل مجاني', 'type' => 'free'],
         ['id' => 'fast',   'fr' => 'Les plus rapides', 'ar' => 'الأسرع', 'type' => 'fast'],
-        ['id' => 'near',   'fr' => 'À moins de 2 km', 'ar' => 'أقل من 2 كم', 'type' => 'near'],
     ];
 }
 
@@ -96,10 +95,6 @@ function tuc_pick(array $all, array $sec): array
         case 'fast':
             $out = $all;
             usort($out, fn($a, $b) => (int)$a['t'] <=> (int)$b['t']);
-            return array_slice($out, 0, 8);
-        case 'near':
-            $out = array_values(array_filter($all, fn($x) => $x['d'] <= 2));
-            usort($out, fn($a, $b) => $a['d'] <=> $b['d']);
             return array_slice($out, 0, 8);
         default:
             return array_slice($all, 0, 8);

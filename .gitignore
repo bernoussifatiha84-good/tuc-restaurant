@@ -1,0 +1,20 @@
+# Secrets and local credentials
+.env
+.env.*
+!.env.example
+*.pem
+*.p12
+*.pfx
+*_deploy
+08-secrets/
+secrets/
+
+# Local archives and downloaded handoff material
+*.zip
+google_drive/
+
+# Editor and OS files
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
