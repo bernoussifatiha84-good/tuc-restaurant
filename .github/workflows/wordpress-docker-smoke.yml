@@ -511,30 +511,47 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw 'pywinauto installation failed' }
 
       - name: Installer la sortie audio virtuelle Scream
+        timeout-minutes: 5
         shell: pwsh
         run: |
           $ErrorActionPreference = 'Stop'
+          Write-Host 'Starting Windows Audio service'
           Start-Service -Name Audiosrv -ErrorAction SilentlyContinue
           $archive = Join-Path $env:RUNNER_TEMP 'Scream4.0.zip'
           $extract = Join-Path $env:RUNNER_TEMP 'scream'
-          Invoke-WebRequest -Uri 'https://github.com/duncanthrax/scream/releases/download/4.0/Scream4.0.zip' -OutFile $archive
+          Write-Host 'Downloading the signed Scream 4.0 release from its official GitHub repository'
+          Invoke-WebRequest -Uri 'https://github.com/duncanthrax/scream/releases/download/4.0/Scream4.0.zip' -OutFile $archive -TimeoutSec 90
+          Write-Host "Downloaded archive: $((Get-Item $archive).Length) bytes"
           Expand-Archive -Path $archive -DestinationPath $extract -Force
           $driverDir = Join-Path $extract 'Install/driver/x64'
           $driver = Join-Path $driverDir 'Scream.sys'
+          Write-Host 'Checking the signed driver package'
           $signature = Get-AuthenticodeSignature -FilePath $driver
-          if (-not $signature.SignerCertificate) { throw 'The Scream driver has no signing certificate' }
+          if (-not $signature.SignerCertificate) { throw "The Scream driver has no signing certificate (status: $($signature.Status))" }
           $store = [System.Security.Cryptography.X509Certificates.X509Store]::new('TrustedPublisher', 'LocalMachine')
           $store.Open([System.Security.Cryptography.X509Certificates.OpenFlags]::ReadWrite)
           $store.Add($signature.SignerCertificate)
           $store.Close()
           $devcon = Join-Path $extract 'Install/helpers/devcon-x64.exe'
+          $devconOut = Join-Path $env:RUNNER_TEMP 'scream-devcon.stdout.log'
+          $devconErr = Join-Path $env:RUNNER_TEMP 'scream-devcon.stderr.log'
+          Write-Host 'Installing the Scream audio endpoint with devcon (90 second limit)'
           Push-Location $driverDir
           try {
-            & $devcon install Scream.inf '*Scream'
-            if ($LASTEXITCODE -ne 0) { throw "Scream virtual audio driver installation failed: $LASTEXITCODE" }
+            $install = Start-Process -FilePath $devcon -ArgumentList @('install', 'Scream.inf', '*Scream') -PassThru -WindowStyle Hidden -RedirectStandardOutput $devconOut -RedirectStandardError $devconErr
+            if (-not $install.WaitForExit(90000)) {
+              Stop-Process -Id $install.Id -Force
+              throw 'Scream devcon installation timed out after 90 seconds'
+            }
+            if ($install.ExitCode -ne 0) {
+              $devconLog = if (Test-Path $devconOut) { Get-Content $devconOut -Raw } else { '' }
+              $devconLog += if (Test-Path $devconErr) { Get-Content $devconErr -Raw } else { '' }
+              throw "Scream virtual audio driver installation failed ($($install.ExitCode)): $devconLog"
+            }
           } finally {
             Pop-Location
           }
+          Write-Host 'Checking Windows audio endpoints'
           Start-Sleep -Seconds 8
           $endpoints = Get-PnpDevice -Class AudioEndpoint -PresentOnly | Select-Object -ExpandProperty FriendlyName
           $endpoints | ForEach-Object { Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value "- Audio endpoint: $_" }
@@ -667,6 +684,8 @@ jobs:
             ${{ runner.temp }}/nvda-espeak-capture.wav
             ${{ runner.temp }}/scream-capture.stdout.log
             ${{ runner.temp }}/scream-capture.stderr.log
+            ${{ runner.temp }}/scream-devcon.stdout.log
+            ${{ runner.temp }}/scream-devcon.stderr.log
           if-no-files-found: warn
           retention-days: 7
 
