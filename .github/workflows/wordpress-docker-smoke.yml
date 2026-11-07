@@ -548,10 +548,17 @@ jobs:
           NODE_PATH: ${{ runner.temp }}/tuc-playwright/node_modules
           TUC_NVDA_FIXTURE_DIR: ${{ runner.temp }}/tuc-onboarding-nvda-fixture
           TUC_NVDA_TRANSCRIPT: ${{ runner.temp }}/nvda-speech-viewer.txt
+          TUC_NVDA_FAILURE: ${{ runner.temp }}/nvda-failure.txt
         run: |
           node --check tests/nvda-smoke.js
           node tests/nvda-smoke.js
-          if ($LASTEXITCODE -ne 0) { throw 'NVDA screen-reader smoke test failed' }
+          if ($LASTEXITCODE -ne 0) {
+            $detail = if (Test-Path $env:TUC_NVDA_FAILURE) { Get-Content $env:TUC_NVDA_FAILURE -Raw } else { 'No diagnostic file was produced' }
+            $oneLine = ($detail -replace '\r?\n', ' ' -replace '%', '%25' -replace ':', '%3A' -replace ',', '%2C')
+            Write-Output "::error title=NVDA Speech Viewer diagnostic::$oneLine"
+            Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value "`n### NVDA test failure`n````text`n$detail`n````"
+            throw 'NVDA screen-reader smoke test failed'
+          }
           if (Test-Path $env:TUC_NVDA_TRANSCRIPT) {
             Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value "`n### NVDA Speech Viewer output`n````text`n$(Get-Content $env:TUC_NVDA_TRANSCRIPT -Raw)`n````"
           }
@@ -563,6 +570,7 @@ jobs:
           name: nvda-speech-viewer-${{ github.run_id }}
           path: |
             ${{ runner.temp }}/nvda-speech-viewer.txt
+            ${{ runner.temp }}/nvda-failure.txt
             ${{ runner.temp }}/nvda.log
           if-no-files-found: warn
           retention-days: 7

@@ -38,7 +38,7 @@ function readSpeechViewer() {
   const script = path.join(__dirname, 'read-nvda-speech-viewer.py');
   const output = execFileSync(python, [script, '25'], { encoding: 'utf8', timeout: 30000 });
   const parsed = JSON.parse(output.trim());
-  return parsed.text || '';
+  return parsed;
 }
 
 function assertSpoken(transcript, text, context) {
@@ -99,8 +99,9 @@ async function main() {
     await page.waitForFunction(() => document.activeElement?.id === 'tuc-onboarding-wa-link');
     await page.waitForTimeout(1200);
 
-    const transcript = readSpeechViewer();
-    fs.writeFileSync(transcriptPath, transcript, 'utf8');
+    const speechViewer = readSpeechViewer();
+    const transcript = speechViewer.text || '';
+    fs.writeFileSync(transcriptPath, transcript || JSON.stringify(speechViewer, null, 2), 'utf8');
     for (const phrase of [
       'Nom du restaurant',
       'En français ou en arabe',
@@ -111,7 +112,7 @@ async function main() {
       'Continuer dans WhatsApp',
       'nouvel onglet',
     ]) {
-      assertSpoken(transcript, phrase, 'NVDA reading the live onboarding form');
+      assertSpoken(transcript, phrase, `NVDA reading the live onboarding form; UIA diagnostics: ${JSON.stringify(speechViewer.diagnostics)}`);
     }
     console.log(`PASS NVDA Speech Viewer: focus sequence, form labels/help, live status and WhatsApp link announcement. Transcript saved to ${transcriptPath}`);
     await context.close();
@@ -122,6 +123,8 @@ async function main() {
 }
 
 main().catch((error) => {
-  console.error(error.stack || error.message);
+  const detail = error.stack || error.message || String(error);
+  if (process.env.TUC_NVDA_FAILURE) fs.writeFileSync(process.env.TUC_NVDA_FAILURE, detail, 'utf8');
+  console.error(detail);
   process.exitCode = 1;
 });

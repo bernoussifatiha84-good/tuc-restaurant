@@ -6,14 +6,22 @@ from pywinauto import Desktop
 
 def read_speech():
     fragments = []
+    diagnostics = []
     for backend in ('uia', 'win32'):
         try:
             window = Desktop(backend=backend).window(title='NVDA Speech Viewer')
             window.wait('exists visible', timeout=1)
-        except Exception:
+        except Exception as error:
+            diagnostics.append(f'{backend}: speech viewer not found ({error})')
             continue
 
+        diagnostics.append(f'{backend}: speech viewer found')
         for control in [window, *window.descendants()]:
+            try:
+                info = control.element_info
+                diagnostics.append(f'{backend}: {info.control_type} {info.class_name} {info.name}')
+            except Exception:
+                pass
             try:
                 value = control.get_value()
                 if value:
@@ -32,18 +40,17 @@ def read_speech():
                 fragments.append(str(text_range))
         except Exception:
             pass
-    return '\n'.join(dict.fromkeys(fragments))
+    return '\n'.join(dict.fromkeys(fragments)), diagnostics
 
 
 if __name__ == '__main__':
     timeout = float(sys.argv[1]) if len(sys.argv) > 1 else 20
     deadline = time.time() + timeout
     latest = ''
+    diagnostics = []
     while time.time() < deadline:
-        latest = read_speech()
+        latest, diagnostics = read_speech()
         if latest:
-            print(json.dumps({'text': latest}, ensure_ascii=False))
-            sys.exit(0)
+            break
         time.sleep(0.25)
-    print(json.dumps({'text': latest}, ensure_ascii=False))
-    sys.exit(2 if not latest else 0)
+    print(json.dumps({'text': latest, 'diagnostics': diagnostics}, ensure_ascii=False))
