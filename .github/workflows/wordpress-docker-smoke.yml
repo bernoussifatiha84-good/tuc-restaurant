@@ -486,7 +486,7 @@ jobs:
 
   nvda-windows:
     name: Vérifier les annonces avec NVDA sous Windows
-    runs-on: windows-2025
+    runs-on: windows-2022
     needs: wordpress-docker
     timeout-minutes: 15
     steps:
@@ -509,6 +509,37 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw 'Chromium installation failed' }
           python -m pip install --disable-pip-version-check pywinauto
           if ($LASTEXITCODE -ne 0) { throw 'pywinauto installation failed' }
+
+      - name: Installer la sortie audio virtuelle Scream
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          Start-Service -Name Audiosrv -ErrorAction SilentlyContinue
+          $archive = Join-Path $env:RUNNER_TEMP 'Scream4.0.zip'
+          $extract = Join-Path $env:RUNNER_TEMP 'scream'
+          Invoke-WebRequest -Uri 'https://github.com/duncanthrax/scream/releases/download/4.0/Scream4.0.zip' -OutFile $archive
+          Expand-Archive -Path $archive -DestinationPath $extract -Force
+          $driverDir = Join-Path $extract 'Install/driver/x64'
+          $driver = Join-Path $driverDir 'Scream.sys'
+          $signature = Get-AuthenticodeSignature -FilePath $driver
+          if (-not $signature.SignerCertificate) { throw 'The Scream driver has no signing certificate' }
+          $store = [System.Security.Cryptography.X509Certificates.X509Store]::new('TrustedPublisher', 'LocalMachine')
+          $store.Open([System.Security.Cryptography.X509Certificates.OpenFlags]::ReadWrite)
+          $store.Add($signature.SignerCertificate)
+          $store.Close()
+          $devcon = Join-Path $extract 'Install/helpers/devcon-x64.exe'
+          Push-Location $driverDir
+          try {
+            & $devcon install Scream.inf '*Scream'
+            if ($LASTEXITCODE -ne 0) { throw "Scream virtual audio driver installation failed: $LASTEXITCODE" }
+          } finally {
+            Pop-Location
+          }
+          Start-Sleep -Seconds 8
+          $endpoints = Get-PnpDevice -Class AudioEndpoint -PresentOnly | Select-Object -ExpandProperty FriendlyName
+          $endpoints | ForEach-Object { Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value "- Audio endpoint: $_" }
+          if (-not ($endpoints -match 'Scream')) { throw 'Scream installed but Windows did not expose an audio endpoint' }
+          Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value '`nScream virtual output is ready; its multicast PCM stream will be captured during the NVDA form walkthrough.'
 
       - name: Installer le lecteur d’écran NVDA portable
         shell: pwsh
@@ -560,6 +591,11 @@ jobs:
             $diagnostics = (($synthLines -join ' | ') + ' | eSpeak failure context: ' + $synthFailure + ' | audio diagnostics: ' + ($audioWarnings -join ' | ') + ' | ' + $logTail)
             $diagnosticsOneLine = ($diagnostics -replace '%', '%25' -replace '\r', '%0D' -replace '\n', '%0A')
             Write-Output "::notice title=NVDA synthesizer diagnostics::$diagnosticsOneLine"
+            if (($synthLines -join "`n") -notmatch 'Loaded synthDriver espeak') {
+              Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value '`n**NVDA eSpeak integration failed:** the expected loaded-driver log entry was not found.'
+              throw 'NVDA did not load eSpeak; refusing to treat the Speech Viewer transcript as a voice test.'
+            }
+            Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value '`nNVDA log confirms `Loaded synthDriver espeak`.'
           } else {
             Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value '`nNVDA startup log was not created.'
           }
@@ -572,9 +608,38 @@ jobs:
           TUC_NVDA_TRANSCRIPT: ${{ runner.temp }}/nvda-speech-viewer.txt
           TUC_NVDA_FAILURE: ${{ runner.temp }}/nvda-failure.txt
         run: |
-          node --check tests/nvda-smoke.js
-          node tests/nvda-smoke.js
-          if ($LASTEXITCODE -ne 0) {
+          $audioPath = Join-Path $env:RUNNER_TEMP 'nvda-espeak-capture.wav'
+          $stopFile = Join-Path $env:RUNNER_TEMP 'stop-scream-capture'
+          $captureOut = Join-Path $env:RUNNER_TEMP 'scream-capture.stdout.log'
+          $captureErr = Join-Path $env:RUNNER_TEMP 'scream-capture.stderr.log'
+          Remove-Item $stopFile, $audioPath -Force -ErrorAction SilentlyContinue
+          $capture = Start-Process -FilePath python -ArgumentList @('tests/capture-scream-audio.py', '--output', $audioPath, '--stop-file', $stopFile, '--timeout', '90') -PassThru -WindowStyle Hidden -RedirectStandardOutput $captureOut -RedirectStandardError $captureErr
+          Start-Sleep -Seconds 2
+          $nodeExit = 0
+          try {
+            node --check tests/nvda-smoke.js
+            if ($LASTEXITCODE -ne 0) { $nodeExit = $LASTEXITCODE }
+            if ($nodeExit -eq 0) {
+              node tests/nvda-smoke.js
+              $nodeExit = $LASTEXITCODE
+            }
+          } finally {
+            New-Item -ItemType File -Path $stopFile -Force | Out-Null
+            $capture.Refresh()
+            if (-not $capture.HasExited) { $capture.WaitForExit(30000) }
+            $capture.Refresh()
+            if (-not $capture.HasExited) { Stop-Process -Id $capture.Id -Force; $capture.WaitForExit() }
+          }
+          $capture.Refresh()
+          if ($capture.ExitCode -ne 0) {
+            $captureDetail = if (Test-Path $captureErr) { Get-Content $captureErr -Raw } else { 'No Scream capture error log was produced' }
+            if (Test-Path $captureOut) { $captureDetail += "`n" + (Get-Content $captureOut -Raw) }
+            Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value "`n### Scream audio capture failure`n````text`n$captureDetail`n````"
+            throw 'The NVDA audio stream was not captured as usable non-silent PCM'
+          }
+          $captureResult = Get-Content $captureOut -Raw
+          Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value "`n### Captured NVDA eSpeak audio`n````json`n$captureResult`n````"
+          if ($nodeExit -ne 0) {
             $detail = if (Test-Path $env:TUC_NVDA_FAILURE) { Get-Content $env:TUC_NVDA_FAILURE -Raw } else { 'No diagnostic file was produced' }
             $nvdaLog = Join-Path $env:RUNNER_TEMP 'nvda.log'
             if (Test-Path $nvdaLog) { $detail += "`nNVDA log tail:`n" + (Get-Content $nvdaLog -Tail 30 | Out-String) }
@@ -599,6 +664,9 @@ jobs:
             ${{ runner.temp }}/nvda-speech-viewer.txt
             ${{ runner.temp }}/nvda-failure.txt
             ${{ runner.temp }}/nvda.log
+            ${{ runner.temp }}/nvda-espeak-capture.wav
+            ${{ runner.temp }}/scream-capture.stdout.log
+            ${{ runner.temp }}/scream-capture.stderr.log
           if-no-files-found: warn
           retention-days: 7
 
