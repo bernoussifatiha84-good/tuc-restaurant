@@ -34,6 +34,12 @@ def read_speech():
                     fragments.append(str(text))
             except Exception:
                 pass
+            try:
+                text_range = control.iface_text.DocumentRange.GetText(-1)
+                if text_range:
+                    fragments.append(str(text_range))
+            except Exception:
+                pass
         try:
             text_range = window.iface_text.DocumentRange.GetText(-1)
             if text_range:

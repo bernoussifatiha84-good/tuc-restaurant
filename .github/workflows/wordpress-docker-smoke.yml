@@ -614,7 +614,8 @@ jobs:
             if (Test-Path $nodeLog) { $detail += "`nNode output:`n" + (Get-Content $nodeLog -Raw) }
             $speechDir = Join-Path $env:RUNNER_TEMP 'nvda-espeak-segments'
             $segments = Get-ChildItem $speechDir -Filter '*.wav' -ErrorAction SilentlyContinue | Select-Object -ExpandProperty Name
-            $detail += "`nNVDA eSpeak WAV segment count: $($segments.Count)`n$($segments -join "`n")"
+            $speechText = Get-ChildItem $speechDir -Filter '*.txt' -ErrorAction SilentlyContinue | ForEach-Object { "[$($_.BaseName)] $(Get-Content $_.FullName -Raw)" }
+            $detail += "`nNVDA eSpeak WAV segment count: $($segments.Count)`n$($segments -join "`n")`nNVDA speech segment text:`n$($speechText -join "`n")"
             $nvdaLog = Join-Path $env:RUNNER_TEMP 'nvda.log'
             if (Test-Path $nvdaLog) {
               $logDiagnostics = Get-Content $nvdaLog | Select-String -Pattern 'espeakWav|Traceback|ERROR|Exception|SynthDriver' -Context 1,3 | Out-String
