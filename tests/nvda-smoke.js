@@ -104,7 +104,10 @@ async function main() {
     await page.waitForTimeout(250);
     await sendScreenReaderKeys(page, '{TAB}');
     await waitForActiveElement(page, () => document.activeElement.id === 'tuc-onboarding-menu-photo', 'menu photo after first Tab');
-    await page.waitForTimeout(500);
+    // Re-emit a genuine accessibility focus event so NVDA announces the file control, even in CDP-driven CI.
+    await page.evaluate(() => document.activeElement.blur());
+    await page.locator('#tuc-onboarding-menu-photo').focus();
+    await page.waitForTimeout(800);
     await sendScreenReaderKeys(page, '{TAB}');
     await waitForActiveElement(page, () => document.activeElement.matches('.tuc-onboarding-submit[type="submit"]'), 'submit button after second Tab');
     await page.waitForTimeout(500);
