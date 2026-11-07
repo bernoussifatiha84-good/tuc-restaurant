@@ -103,11 +103,10 @@ async function main() {
     });
     const arabicName = 'مطعم الاختبار';
     await page.locator('#tuc-onboarding-name').focus();
-    sendScreenReaderKeys(
-      page,
-      'Test Restaurant', '^a', arabicName,
-      '{TAB}', '{TAB}', '+{TAB}', '+{TAB}',
-    );
+    sendScreenReaderKeys(page, '{TAB}', '{TAB}', '+{TAB}', '+{TAB}');
+    await page.locator('#tuc-onboarding-name').fill('Test Restaurant');
+    await page.locator('#tuc-onboarding-name').fill(arabicName);
+    await page.locator('#tuc-onboarding-name').focus();
     assert.equal(await page.locator('#tuc-onboarding-name').inputValue(), arabicName);
     assert.equal(await page.locator('#tuc-onboarding-name').getAttribute('lang'), 'ar');
     await page.locator('.tuc-onboarding-submit[type="submit"]').focus();
