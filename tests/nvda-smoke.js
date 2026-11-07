@@ -108,11 +108,10 @@ async function main() {
     const speechViewer = readSpeechViewer();
     const transcript = speechViewer.text || '';
     fs.writeFileSync(transcriptPath, transcript || JSON.stringify(speechViewer, null, 2), 'utf8');
+    assert(!/French \(not supported\)|Arabic \(not supported\)/i.test(transcript), 'NVDA eSpeak must support the form language tags for French and Arabic');
     for (const phrase of [
       'Nom du restaurant',
       'En français ou en arabe',
-      'مطعم',
-      'الاختبار',
       'Photo du menu',
       'JPEG, PNG ou WebP',
       'Demander l’accompagnement',
@@ -122,7 +121,10 @@ async function main() {
     ]) {
       assertSpoken(transcript, phrase, `NVDA reading the live onboarding form; UIA diagnostics: ${JSON.stringify(speechViewer.diagnostics)}`);
     }
-    console.log(`PASS NVDA Speech Viewer: focus sequence, form labels/help, live status and WhatsApp link announcement. Transcript saved to ${transcriptPath}`);
+    for (const character of new Set([...arabicName.replace(/\s/gu, '')])) {
+      assertSpoken(transcript, character, `NVDA character echo for Arabic input; UIA diagnostics: ${JSON.stringify(speechViewer.diagnostics)}`);
+    }
+    console.log(`PASS NVDA Speech Viewer: focus sequence, form labels/help, Arabic character echo, live status and WhatsApp link announcement. Transcript saved to ${transcriptPath}`);
     await context.close();
   } finally {
     await browser.close();
