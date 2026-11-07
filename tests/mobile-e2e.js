@@ -122,7 +122,7 @@ async function main() {
 
     checkpoint = 'réglages boutique ouvert/fermé';
     // Commande réelle de test créée côté serveur, puis traitée dans l’Espace Pro.
-    await page.getByRole('button', { name: /Commandes/ }).click();
+    await page.getByRole('tab', { name: /Commandes/ }).click();
     const orderCard = page.locator('#tuc-orders-list .tuc-order-card').first();
     await orderCard.waitFor();
     assert(!(await page.locator('#tuc-orders-list').innerText()).includes('+212600000099'), 'l’interface Pro ne montre pas le téléphone du client');
