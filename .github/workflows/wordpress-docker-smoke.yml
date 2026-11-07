@@ -542,11 +542,16 @@ jobs:
           Start-Process -FilePath $nvda.FullName -ArgumentList @("--config-path=$config", '--debug-logging', "--log-file=$log")
           Start-Sleep -Seconds 8
           "NVDA=$($nvda.FullName)" | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Append
+          $configText = Get-Content (Join-Path $config 'nvda.ini') -Raw
+          Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value "`n### NVDA effective config file`n````ini`n$configText`n````"
           if (Test-Path $log) {
-            $logTail = Get-Content $log -Tail 50 | Out-String
-            Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value "`n### NVDA startup log (eSpeak diagnostic)`n````text`n$logTail`n````"
-            $logOneLine = ($logTail -replace '%', '%25' -replace '\r', '%0D' -replace '\n', '%0A')
-            Write-Output "::notice title=NVDA startup log::$logOneLine"
+            $synthLines = Get-Content $log | Select-String -Pattern 'synth|Synth|eSpeak|espeak|OneCore' | ForEach-Object { $_.Line }
+            $logTail = (Get-Content $log -Tail 50 | Out-String)
+            Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value "`n### NVDA synthesizer log lines`n````text`n$($synthLines -join "`n")`n````"
+            Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value "`n### NVDA startup log tail`n````text`n$logTail`n````"
+            $diagnostics = (($synthLines -join ' | ') + ' | ' + $logTail)
+            $diagnosticsOneLine = ($diagnostics -replace '%', '%25' -replace '\r', '%0D' -replace '\n', '%0A')
+            Write-Output "::notice title=NVDA synthesizer diagnostics::$diagnosticsOneLine"
           } else {
             Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value '`nNVDA startup log was not created.'
           }
