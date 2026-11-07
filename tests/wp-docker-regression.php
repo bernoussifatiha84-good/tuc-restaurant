@@ -749,14 +749,22 @@ try {
     $assert(is_wp_error(TUC_Espace_Pro::enregistrer_localisation_restaurant($unconfirmedMapRequest))
         && (float) get_post_meta($restaurantId, 'tuc_lat', true) === 33.59,
         'l’API refuse un repère Maps tant que le restaurateur ne le confirme pas');
+    $outsideAreaRequest = new WP_REST_Request('POST', '/tuc/v1/pro/restaurant/location');
+    $outsideAreaRequest->set_header('content-type', 'application/json');
+    $outsideAreaRequest->set_body(wp_json_encode(['lat' => 0, 'lng' => 0, 'source' => 'google_maps_link', 'confirmed' => true]));
+    $outsideAreaResult = TUC_Espace_Pro::enregistrer_localisation_restaurant($outsideAreaRequest);
+    $assert(is_wp_error($outsideAreaResult) && (int) ($outsideAreaResult->get_error_data()['status'] ?? 0) === 422
+        && (float) get_post_meta($restaurantId, 'tuc_lat', true) === 33.59,
+        'l’API refuse les coordonnées hors zone sans écraser la position enregistrée');
     $mapLocationRequest = new WP_REST_Request('POST', '/tuc/v1/pro/restaurant/location');
     $mapLocationRequest->set_header('content-type', 'application/json');
     $mapLocationRequest->set_body(wp_json_encode(['lat' => 33.59123, 'lng' => -7.62789, 'source' => 'google_maps_link', 'confirmed' => true]));
     $mapLocationResult = TUC_Espace_Pro::enregistrer_localisation_restaurant($mapLocationRequest);
     $mapLocation = $mapLocationResult instanceof WP_REST_Response ? $mapLocationResult->get_data()['location'] : null;
     $assert(is_array($mapLocation) && $mapLocation['source'] === 'google_maps_link' && $mapLocation['accuracy'] === null
+        && !array_key_exists('url', $mapLocation) && get_post_meta($restaurantId, 'tuc_coord_link', true) === ''
         && (float) get_post_meta($restaurantId, 'tuc_lng', true) === -7.62789,
-        'l’API enregistre les coordonnées confirmées du lien Maps sans leur attribuer une précision GPS');
+        'l’API enregistre les coordonnées confirmées du lien Maps sans conserver le lien ni inventer une précision GPS');
     foreach ($locationBefore as $metaKey => $metaValue) {
         if ($metaValue === '') {
             delete_post_meta($restaurantId, $metaKey);
@@ -848,6 +856,28 @@ try {
 
     wp_set_current_user((int) $managerUserId);
     $assert(TUC_Espace_Pro::permission_menu(), 'le gestionnaire affecté peut gérer le menu de son propre restaurant');
+    $otherLocationBefore = [];
+    foreach ($locationMetaKeys as $metaKey) {
+        $otherLocationBefore[$metaKey] = get_post_meta($otherRestaurantId, $metaKey, true);
+    }
+    $ownerLatitudeBeforeManagerSave = get_post_meta($restaurantId, 'tuc_lat', true);
+    $managerLocationRequest = new WP_REST_Request('POST', '/tuc/v1/pro/restaurant/location');
+    $managerLocationRequest->set_header('content-type', 'application/json');
+    $managerLocationRequest->set_body(wp_json_encode(['lat' => 33.5900, 'lng' => -7.6280, 'source' => 'gps', 'accuracy' => 30, 'capturedAt' => time()]));
+    $managerLocationResult = TUC_Espace_Pro::enregistrer_localisation_restaurant($managerLocationRequest);
+    $managerLocationData = $managerLocationResult instanceof WP_REST_Response ? $managerLocationResult->get_data() : [];
+    $assert(call_user_func($proLocationRoute['permission_callback']) === true
+        && (int) ($managerLocationData['id'] ?? 0) === (int) $otherRestaurantId
+        && (float) get_post_meta($otherRestaurantId, 'tuc_lat', true) === 33.59
+        && get_post_meta($restaurantId, 'tuc_lat', true) === $ownerLatitudeBeforeManagerSave,
+        'la route de localisation n’écrit que sur le restaurant assigné au gestionnaire connecté');
+    foreach ($otherLocationBefore as $metaKey => $metaValue) {
+        if ($metaValue === '') {
+            delete_post_meta($otherRestaurantId, $metaKey);
+        } else {
+            update_post_meta($otherRestaurantId, $metaKey, $metaValue);
+        }
+    }
     $managerForeignMenu = new WP_REST_Request('PUT', '/tuc/v1/pro/menu/' . $proItemId);
     $managerForeignMenu->set_param('id', $proItemId);
     $managerForeignMenu->set_header('content-type', 'application/json');
@@ -907,9 +937,12 @@ try {
         && !TUC_Caisse::peut_gerer_restaurant()
         && call_user_func($openingRoute['permission_callback']) === false
         && !TUC_Espace_Pro::permission_restaurant()
-        && TUC_Espace_Pro::permission_commandes(), 'le caissier peut traiter les commandes mais ne peut pas modifier les paramètres du commerce');
+        && call_user_func($proLocationRoute['permission_callback']) === false
+        && TUC_Espace_Pro::permission_commandes(), 'le caissier peut traiter les commandes mais ne peut pas modifier les paramètres du commerce ni les coordonnées');
     wp_set_current_user((int) $unassignedUserId);
-    $assert(!TUC_Espace_Pro::permission_menu(), 'un compte non affecté n’accède pas à la gestion du menu');
+    $assert(!TUC_Espace_Pro::permission_menu() && !TUC_Espace_Pro::permission_restaurant()
+        && call_user_func($proLocationRoute['permission_callback']) === false,
+        'un compte non affecté ne peut ni gérer le menu ni enregistrer une localisation');
     $assert(TUC_Caisse::mon_resto() === null
         && TUC_Caisse::commandes(new WP_REST_Request('GET', '/tuc/v1/caisse/commandes'))->get_status() === 403,
         'un compte métier sans affectation explicite n’obtient aucun restaurant par défaut');

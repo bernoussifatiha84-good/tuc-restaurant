@@ -312,8 +312,9 @@
     let decoded;
     try { decoded = decodeURIComponent(url.href.replace(/\+/g, '%20')); } catch { decoded = url.href; }
     const patterns = [
-      /@(-?\d{1,2}(?:\.\d+)?),\s*(-?\d{1,3}(?:\.\d+)?)/,
-      /!3d(-?\d{1,2}(?:\.\d+)?)!4d(-?\d{1,3}(?:\.\d+)?)/
+      // !3d/!4d are the selected place pin; @lat,lng can be only the map viewport center.
+      /!3d(-?\d{1,2}(?:\.\d+)?)!4d(-?\d{1,3}(?:\.\d+)?)/,
+      /@(-?\d{1,2}(?:\.\d+)?),\s*(-?\d{1,3}(?:\.\d+)?)/
     ];
     let match = patterns.map((pattern) => decoded.match(pattern)).find(Boolean);
     if (!match) {

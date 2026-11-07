@@ -83,8 +83,13 @@ async function inspectPage(page, target) {
   const unauthenticatedApiProbe = [];
   for (const route of ['/wp-json/tuc/v1/pro/restaurant', '/wp-json/tuc/v1/caisse/commandes?statut=toutes']) {
     const response = await page.context().request.get(`${baseUrl}${route}`);
-    unauthenticatedApiProbe.push({ route, status: response.status(), protected: [401, 403].includes(response.status()) });
+    unauthenticatedApiProbe.push({ method: 'GET', route, status: response.status(), protected: [401, 403].includes(response.status()) });
   }
+  const locationRoute = '/wp-json/tuc/v1/pro/restaurant/location';
+  const locationResponse = await page.context().request.post(`${baseUrl}${locationRoute}`, {
+    data: { lat: 33.5900, lng: -7.6280, source: 'google_maps_link', confirmed: true },
+  });
+  unauthenticatedApiProbe.push({ method: 'POST', route: locationRoute, status: locationResponse.status(), protected: [401, 403].includes(locationResponse.status()) });
 
   return {
     name: target.name,
@@ -96,6 +101,78 @@ async function inspectPage(page, target) {
     unauthenticatedApiProbe,
     browserErrors: [...new Set(pageErrors)].slice(0, 20),
   };
+}
+
+async function auditProDashboard(browser) {
+  const username = process.env.TUC_MOBILE_E2E_USER;
+  const password = process.env.TUC_MOBILE_E2E_PASSWORD;
+  if (!username || !password) return { skipped: true, reason: 'Identifiants E2E non fournis.' };
+
+  const context = await browser.newContext({ viewport: { width: 390, height: 844 }, isMobile: true, hasTouch: true });
+  const page = await context.newPage();
+  const browserErrors = [];
+  page.on('pageerror', (error) => browserErrors.push(error.stack || error.message));
+  try {
+    await page.goto(`${baseUrl}/wp-login.php`, { waitUntil: 'domcontentloaded' });
+    await page.locator('#user_login').fill(username);
+    await page.locator('#user_pass').fill(password);
+    await page.locator('#wp-submit').click();
+    await page.waitForLoadState('domcontentloaded');
+    const proResponse = await page.goto(`${baseUrl}/espace-pro/`, { waitUntil: 'networkidle' });
+    if (!proResponse || proResponse.status() >= 400) throw new Error(`Espace Pro répond HTTP ${proResponse?.status() ?? 'inconnu'}.`);
+    if (!await page.evaluate(() => Boolean(window.TUCPro?.canManageRestaurant))) {
+      throw new Error('Le compte synthétique n’a pas accès au panneau boutique de l’Espace Pro.');
+    }
+    await page.locator('[data-tab="settings"]').click();
+    await page.locator('#tuc-store-location').waitFor({ state: 'visible' });
+
+    const widthsChecked = [];
+    for (const width of widths) {
+      await page.setViewportSize({ width, height: 844 });
+      const sample = await page.evaluate((requestedWidth) => ({
+        width: requestedWidth,
+        documentWidth: document.documentElement.scrollWidth,
+        horizontalOverflow: document.documentElement.scrollWidth > (window.visualViewport?.width || innerWidth) + 1,
+        locationPanelVisible: Boolean(document.querySelector('#tuc-store-location')?.getClientRects().length),
+      }), width);
+      widthsChecked.push(sample);
+    }
+
+    // Keyboard-only path through URL parsing, confirmation, and save control.
+    await page.setViewportSize({ width: 390, height: 844 });
+    await page.locator('#tuc-store-google-link').fill('https://www.google.com/maps/place/Test/@33.59000,-7.62800,17z/data=!3m1!4b1!3d33.59123!4d-7.62789');
+    await page.locator('#tuc-capture-location').focus();
+    await page.keyboard.press('Tab');
+    const focusAfterGps = await page.evaluate(() => document.activeElement?.id);
+    await page.keyboard.press('Tab');
+    const focusAfterUrl = await page.evaluate(() => document.activeElement?.id);
+    await page.keyboard.press('Enter');
+    await page.locator('#tuc-location-confirm').waitFor({ state: 'visible' });
+    await page.keyboard.press('Tab');
+    const focusAfterParse = await page.evaluate(() => document.activeElement?.id);
+    await page.keyboard.press('Space');
+    await page.keyboard.press('Tab');
+    const focusAfterConfirmation = await page.evaluate(() => document.activeElement?.id);
+
+    await page.addScriptTag({ content: axe.source });
+    const accessibility = await page.evaluate(async () => {
+      const result = await window.axe.run(document, {
+        runOnly: { type: 'tag', values: ['wcag2a', 'wcag2aa', 'wcag21a', 'wcag21aa', 'best-practice'] },
+      });
+      return {
+        passes: result.passes.length,
+        incomplete: result.incomplete.length,
+        violations: result.violations.map((violation) => ({
+          id: violation.id, impact: violation.impact, help: violation.help,
+          count: violation.nodes.length,
+          examples: violation.nodes.slice(0, 3).map((node) => ({ target: node.target, summary: node.failureSummary })),
+        })),
+      };
+    });
+    return { skipped: false, httpStatus: proResponse.status(), widths: widthsChecked, keyboardFocus: { focusAfterGps, focusAfterUrl, focusAfterParse, focusAfterConfirmation }, accessibility, browserErrors };
+  } finally {
+    await context.close();
+  }
 }
 
 async function lighthouseAudit(target, chromePath) {
@@ -133,12 +210,14 @@ async function lighthouseAudit(target, chromePath) {
 async function main() {
   const browser = await chromium.launch({ headless: true });
   const manual = [];
+  let proDashboard;
   try {
     for (const target of pagesToAudit) {
       const page = await browser.newPage({ viewport: { width: 390, height: 844 }, isMobile: true, hasTouch: true });
       manual.push(await inspectPage(page, target));
       await page.close();
     }
+    proDashboard = await auditProDashboard(browser);
   } finally {
     await browser.close();
   }
@@ -166,8 +245,23 @@ async function main() {
       if (at390?.securityHeaders[header] === 'not set') issues.push({ page: page.name, severity: 'high', finding: `en-tête de sécurité ${header} absent` });
     }
     for (const probe of page.unauthenticatedApiProbe) {
-      if (!probe.protected) issues.push({ page: page.name, severity: 'blocker', finding: `${probe.route} répond ${probe.status} sans session` });
+      if (!probe.protected) issues.push({ page: page.name, severity: 'blocker', finding: `${probe.method} ${probe.route} répond ${probe.status} sans session` });
     }
+  }
+  if (proDashboard && !proDashboard.skipped) {
+    if (proDashboard.httpStatus >= 400) issues.push({ page: 'espace-pro', severity: 'blocker', finding: `HTTP ${proDashboard.httpStatus}` });
+    if (proDashboard.widths.some((sample) => sample.horizontalOverflow || !sample.locationPanelVisible)) {
+      issues.push({ page: 'espace-pro', severity: 'high', finding: 'localisation masquée ou débordement horizontal sur un viewport mobile' });
+    }
+    const expectedFocus = ['tuc-store-google-link', 'tuc-parse-google-link', 'tuc-location-confirm', 'tuc-save-location'];
+    const observedFocus = Object.values(proDashboard.keyboardFocus);
+    if (observedFocus.some((id, index) => id !== expectedFocus[index])) {
+      issues.push({ page: 'espace-pro', severity: 'high', finding: `parcours clavier inattendu: ${observedFocus.join(' → ')}` });
+    }
+    if (proDashboard.accessibility.violations.some((violation) => ['critical', 'serious'].includes(violation.impact))) {
+      issues.push({ page: 'espace-pro', severity: 'high', finding: 'violations Axe de sévérité serious/critical' });
+    }
+    if (proDashboard.browserErrors.length) issues.push({ page: 'espace-pro', severity: 'medium', finding: `${proDashboard.browserErrors.length} erreur(s) JavaScript navigateur` });
   }
   for (const page of lighthouse) {
     const cls = Number.parseFloat(page.vitals['cumulative-layout-shift'] || '');
@@ -187,10 +281,17 @@ async function main() {
     verdict: issues.length ? 'À CORRIGER AVANT DE REVENDIQUER UNE QUALITÉ PROFESSIONNELLE' : 'SEUILS AUTOMATISÉS ATTEINTS',
     issues,
     manual,
+    proDashboard,
     lighthouse,
   };
   const brief = {
     verdict: result.verdict,
+    proDashboard: proDashboard && (proDashboard.skipped ? proDashboard : {
+      httpStatus: proDashboard.httpStatus,
+      widths: proDashboard.widths,
+      keyboardFocus: proDashboard.keyboardFocus,
+      axeViolations: proDashboard.accessibility.violations.map(({ id, impact, count }) => ({ id, impact, count })),
+    }),
     lighthouse: lighthouse.map(({ name, scores, vitals }) => ({ name, scores, vitals })),
     pages: manual.map((page) => {
       const sample = page.viewportChecks.find((entry) => entry.width === 390);
@@ -215,6 +316,8 @@ async function main() {
     '| Page | Performance | Accessibilité | Bonnes pratiques | SEO |',
     '|---|---:|---:|---:|---:|',
     ...lighthouse.map((page) => `| ${page.name} | ${page.scores.performance ?? '—'} | ${page.scores.accessibility ?? '—'} | ${page.scores['best-practices'] ?? '—'} | ${page.scores.seo ?? '—'} |`),
+    '',
+    `Espace Pro : ${proDashboard?.skipped ? 'audit ignoré (' + proDashboard.reason + ')' : 'HTTP ' + proDashboard?.httpStatus + ', contrôles clavier, Axe et responsive à 320/360/390/768 px.'}`,
     '',
     '### Principaux constats',
     ...(issues.length ? issues.slice(0, 30).map((issue) => `- **${issue.severity} · ${issue.page}** — ${issue.finding}`) : ['- Aucun écart aux seuils automatisés configurés.']),

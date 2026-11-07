@@ -487,12 +487,57 @@ async function main() {
     await managerPage.locator('#tuc-save-location').click();
     await managerPage.locator('#tuc-store-location-notice').filter({ hasText: 'localisation du restaurant a été enregistrée' }).waitFor();
     assert((await managerPage.locator('#tuc-store-location-current').innerText()).includes('GPS sur place · précision déclarée ±25 m'), 'les coordonnées GPS et la précision sont sauvegardées');
-    await managerPage.locator('#tuc-store-google-link').fill('https://www.google.com/maps/place/TUC/@33.59123,-7.62789,17z/data=!3m1!4b1');
+    await managerContext.setGeolocation({ latitude: 33.5900, longitude: -7.6280, accuracy: 120 });
+    await managerPage.locator('#tuc-capture-location').click();
+    await managerPage.locator('#tuc-store-location-notice').filter({ hasText: 'précision GPS' }).waitFor();
+    assert.equal(await managerPage.locator('#tuc-save-location').isDisabled(), true, 'une position GPS imprécise ne peut pas être enregistrée');
+    await managerContext.setGeolocation({ latitude: 33.5900, longitude: -7.6280, accuracy: 25 });
+    for (const [code, message] of [[1, 'Autorisation refusée'], [2, 'Position indisponible'], [3, 'La recherche GPS a expiré']]) {
+      await managerPage.evaluate((errorCode) => {
+        Object.defineProperty(navigator, 'geolocation', { configurable: true, value: { getCurrentPosition(_success, failure) { failure({ code: errorCode }); } } });
+      }, code);
+      await managerPage.locator('#tuc-capture-location').click();
+      await managerPage.locator('#tuc-store-location-notice').filter({ hasText: message }).waitFor();
+      assert.equal(await managerPage.locator('#tuc-capture-location').isDisabled(), false, 'le bouton GPS est réutilisable après une erreur');
+      await managerPage.evaluate(() => { delete navigator.geolocation; });
+    }
+    await managerPage.evaluate(() => { Object.defineProperty(navigator, 'geolocation', { configurable: true, value: undefined }); });
+    await managerPage.locator('#tuc-capture-location').click();
+    await managerPage.locator('#tuc-store-location-notice').filter({ hasText: 'pas disponible sur cet appareil' }).waitFor();
+    await managerPage.evaluate(() => { delete navigator.geolocation; });
+    await managerPage.evaluate(() => {
+      Object.defineProperty(navigator, 'geolocation', { configurable: true, value: { getCurrentPosition(success) { success({ coords: { latitude: 33.5900, longitude: -7.6280, accuracy: 25 }, timestamp: Date.now() - 11 * 60 * 1000 }); } } });
+    });
+    await managerPage.locator('#tuc-capture-location').click();
+    await managerPage.locator('#tuc-store-location-preview').filter({ hasText: 'Position GPS capturée' }).waitFor();
+    await managerPage.locator('#tuc-save-location').click();
+    await managerPage.locator('#tuc-store-location-notice').filter({ hasText: 'trop imprécise ou trop ancienne' }).waitFor();
+    await managerPage.evaluate(() => { delete navigator.geolocation; });
+    await managerPage.locator('#tuc-store-google-link').fill('https://www.google.com/maps/place/TUC/@33.59000,-7.62800,17z/data=!4m2!3m1!1s0x0:0x0!4m5!3m4!1s0x0:0x0!8m2!3d33.59123!4d-7.62789');
     await managerPage.locator('#tuc-parse-google-link').click();
+    const parsedPin = await managerPage.locator('#tuc-store-location-preview').innerText();
+    assert(parsedPin.includes('33.591230, -7.627890') && !parsedPin.includes('33.590000, -7.628000'), 'le parseur préfère le repère !3d/!4d au centre de carte @');
     await managerPage.locator('#tuc-location-confirm').check();
     await managerPage.locator('#tuc-save-location').click();
     await managerPage.locator('#tuc-store-location-notice').filter({ hasText: 'localisation du restaurant a été enregistrée' }).waitFor();
-    assert((await managerPage.locator('#tuc-store-location-current').innerText()).includes('33.591230, -7.627890 · lien Google Maps'), 'les coordonnées d’un lien Google Maps complet sont extraites et enregistrées');
+    assert((await managerPage.locator('#tuc-store-location-current').innerText()).includes('33.591230, -7.627890 · lien Google Maps'), 'les coordonnées du repère Google Maps sont enregistrées');
+    const consumerPage = await managerContext.newPage();
+    await consumerPage.addInitScript(() => {
+      sessionStorage.setItem('tuc-search-position-v1', JSON.stringify({ lat: 33.59000, lng: -7.62800, accuracy: 25, capturedAt: Math.floor(Date.now() / 1000) }));
+      sessionStorage.setItem('tuc-search-neighborhood-v1', 'gauthier');
+    });
+    await consumerPage.goto(`${baseUrl}/?ville=casablanca`, { waitUntil: 'networkidle' });
+    const ownRestaurantCard = consumerPage.locator('.quartier-card').filter({ hasText: 'Restaurant E2E fictif' });
+    await ownRestaurantCard.waitFor();
+    assert.equal(await ownRestaurantCard.getAttribute('data-lat'), '33.59123', 'la fiche publique reçoit la latitude enregistrée par Espace Pro');
+    assert(Number(await ownRestaurantCard.getAttribute('data-distance')) > 0 && Number(await ownRestaurantCard.getAttribute('data-distance')) < 200, 'la page client recalcule la distance depuis les nouvelles coordonnées du restaurant');
+    assert((await ownRestaurantCard.locator('.quartier-distance').innerText()).includes('km à vol d’oiseau'), 'la distance calculée est présentée au client');
+    const cardOrder = await consumerPage.locator('.quartier-card h3').allTextContents();
+    assert(cardOrder.indexOf('Restaurant E2E fictif') < cardOrder.indexOf('Restaurant E2E éloigné (fictif)'), 'le restaurant géographiquement proche précède le restaurant éloigné');
+    await consumerPage.close();
+    await managerPage.locator('#tuc-store-google-link').fill('https://www.google.com/maps/place/TUC/@33.59200,-7.62600,17z');
+    await managerPage.locator('#tuc-parse-google-link').click();
+    assert((await managerPage.locator('#tuc-store-location-preview').innerText()).includes('33.592000, -7.626000'), 'le parseur conserve @lat,lng comme solution de repli');
     await managerPage.locator('#tuc-store-google-link').fill('https://maps.app.goo.gl/exemple');
     await managerPage.locator('#tuc-parse-google-link').click();
     await managerPage.locator('#tuc-store-location-notice').filter({ hasText: 'Les liens courts ne sont pas résolus' }).waitFor();
