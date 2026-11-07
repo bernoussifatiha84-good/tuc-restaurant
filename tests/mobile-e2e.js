@@ -69,7 +69,7 @@ async function main() {
     const proResponse = await page.goto(`${baseUrl}/espace-pro/`, { waitUntil: 'networkidle' });
     assert(proResponse && proResponse.status() === 200, 'page Espace Pro servie par WordPress Docker');
     await page.locator('#tuc-menu-list .tuc-menu-row').first().waitFor();
-    await page.getByRole('button', { name: 'Menu', exact: true }).waitFor();
+    await page.getByRole('tab', { name: 'Menu', exact: true }).waitFor();
     const proOverflow = await page.evaluate(() => document.documentElement.scrollWidth > window.innerWidth + 1);
     assert.equal(proOverflow, false, 'Espace Pro mobile ne déborde pas horizontalement à 390 px');
     await screenshot(page, 'espace-pro-menu-mobile.png');
@@ -108,7 +108,7 @@ async function main() {
 
     checkpoint = 'modification de disponibilité';
     // Réglages de boutique: mise en pause et reprise contrôlées côté serveur.
-    await page.getByRole('button', { name: 'Boutique', exact: true }).click();
+    await page.getByRole('tab', { name: 'Boutique', exact: true }).click();
     await page.locator('#tuc-store-settings').waitFor();
     const storeToggle = page.locator('label.tuc-toggle').filter({ has: page.locator('#tuc-store-open') });
     await storeToggle.click();
