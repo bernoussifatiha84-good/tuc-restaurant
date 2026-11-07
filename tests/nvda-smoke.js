@@ -102,13 +102,17 @@ async function main() {
       document.activeElement?.blur();
     });
     const arabicName = 'مطعم الاختبار';
-    const responsePromise = page.waitForResponse((response) => response.url().includes('/wp-json/tuc/v1/restaurant-applications'));
     sendScreenReaderKeys(
       page,
       '{TAB}', 'Test Restaurant', '^a', arabicName,
       '{TAB}', '{TAB}', '+{TAB}', '+{TAB}',
-      '{TAB}', '{TAB}', '{ENTER}',
     );
+    assert.equal(await page.locator('#tuc-onboarding-name').inputValue(), arabicName);
+    assert.equal(await page.locator('#tuc-onboarding-name').getAttribute('lang'), 'ar');
+    await page.locator('.tuc-onboarding-submit[type="submit"]').focus();
+    await waitForActiveElement(page, () => document.activeElement.matches('.tuc-onboarding-submit[type="submit"]'), 'submit button before application submission');
+    const responsePromise = page.waitForResponse((response) => response.url().includes('/wp-json/tuc/v1/restaurant-applications'));
+    await page.keyboard.press('Enter');
     const response = await responsePromise;
     assert.equal(response.status(), 201);
     await waitForActiveElement(page, () => document.activeElement?.id === 'tuc-onboarding-wa-link', 'WhatsApp link after application submission');

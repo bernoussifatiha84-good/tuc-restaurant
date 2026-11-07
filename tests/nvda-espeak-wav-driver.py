@@ -66,6 +66,29 @@ class SynthDriver(synthDriverHandler.SynthDriver):
             return "en-gb"
         return fallback
 
+    @staticmethod
+    def _segmentsForText(voice, utterance):
+        segments = []
+        activeVoice = voice
+        text = []
+        for character in utterance:
+            codepoint = ord(character)
+            isArabic = (
+                0x0600 <= codepoint <= 0x06FF
+                or 0x0750 <= codepoint <= 0x077F
+                or 0x08A0 <= codepoint <= 0x08FF
+            )
+            isWordCharacter = character.isalnum()
+            targetVoice = "ar" if isArabic else (voice if isWordCharacter else activeVoice)
+            if targetVoice != activeVoice and text:
+                segments.append((activeVoice, "".join(text).strip()))
+                text.clear()
+            activeVoice = targetVoice
+            text.append(character)
+        if text:
+            segments.append((activeVoice, "".join(text).strip()))
+        return [(segmentVoice, text) for segmentVoice, text in segments if text]
+
     def speak(self, speechSequence):
         currentVoice = self._voice
         segments = []
@@ -75,7 +98,7 @@ class SynthDriver(synthDriverHandler.SynthDriver):
         def flushText():
             joined = "".join(text).strip()
             if joined:
-                segments.append((currentVoice, joined))
+                segments.extend(self._segmentsForText(currentVoice, joined))
             text.clear()
 
         for item in speechSequence:
