@@ -40,12 +40,16 @@ function readSpeechViewer() {
   return JSON.parse(output.trim());
 }
 
-async function sendScreenReaderKeys(page, keys) {
-  if (keys === '{TAB}') return page.keyboard.press('Tab');
-  if (keys === '+{TAB}') return page.keyboard.press('Shift+Tab');
-  if (keys === '{ENTER}') return page.keyboard.press('Enter');
-  if (keys === '^a') return page.keyboard.press('Control+A');
-  return page.keyboard.type(keys);
+function focusScreenReaderBrowser() {
+  const python = process.env.PYTHON || 'python';
+  const script = path.join(__dirname, 'send-nvda-keys.py');
+  execFileSync(python, [script, '--focus'], { encoding: 'utf8', timeout: 15000 });
+}
+
+function sendScreenReaderKeys(_page, keys) {
+  const python = process.env.PYTHON || 'python';
+  const script = path.join(__dirname, 'send-nvda-keys.py');
+  execFileSync(python, [script, keys], { encoding: 'utf8', timeout: 15000 });
 }
 
 async function waitForActiveElement(page, predicate, description) {
@@ -61,12 +65,6 @@ async function waitForActiveElement(page, predicate, description) {
     }));
     throw new Error(`Timed out waiting for focus on ${description}: ${error.message}; state: ${JSON.stringify(focusState)}`);
   }
-}
-
-function movePointerAwayFromSpeechViewer() {
-  const python = process.env.PYTHON || 'python';
-  const code = 'import ctypes; u=ctypes.windll.user32; u.SetCursorPos(max(0,u.GetSystemMetrics(0)-12),max(0,u.GetSystemMetrics(1)-12))';
-  execFileSync(python, ['-c', code], { encoding: 'utf8', timeout: 10000 });
 }
 
 function assertSpoken(transcript, text, context) {
@@ -95,9 +93,8 @@ async function main() {
     await page.bringToFront();
     await page.waitForTimeout(1200);
 
-    // Keep the pointer clear of NVDA Speech Viewer (which pauses its transcript while hovered).
-    movePointerAwayFromSpeechViewer();
-    // Place focus on the first field, then use browser keyboard events; NVDA observes the resulting accessible focus changes.
+    // Keep the pointer clear of NVDA Speech Viewer and focus Chromium before real Windows keyboard input.
+    focusScreenReaderBrowser();
     await page.bringToFront();
     await page.locator('#tuc-onboarding-name').focus();
     await waitForActiveElement(page, () => document.activeElement.id === 'tuc-onboarding-name', 'restaurant name field');
