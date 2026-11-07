@@ -159,6 +159,7 @@ async function main() {
     await applicant.goto(magicUrl, { waitUntil: 'domcontentloaded' });
     await applicant.waitForURL(/\/espace-pro\/?$/);
     await applicant.waitForFunction(() => Boolean(window.TUCPro));
+    await applicant.waitForFunction((expected) => document.querySelector('#tuc-restaurant-name')?.innerText.includes(expected), restaurantName);
     assert((await applicant.locator('#tuc-restaurant-name').innerText()).includes(restaurantName), 'le lien magique connecte le restaurateur à son propre espace depuis mobile');
     const draftVisibility = await applicant.evaluate(async () => {
       const response = await fetch(`${TUCPro.rest}restaurant`, { headers: { 'X-WP-Nonce': TUCPro.nonce } });
