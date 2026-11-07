@@ -588,25 +588,41 @@ jobs:
           }
 
       - name: Générer et vérifier des échantillons audio eSpeak français et arabe
+        timeout-minutes: 3
         shell: pwsh
         run: |
           $ErrorActionPreference = 'Stop'
           try {
             $msi = Join-Path $env:RUNNER_TEMP 'espeak-ng-1.52.0.msi'
-          Invoke-WebRequest -Uri 'https://github.com/espeak-ng/espeak-ng/releases/download/1.52.0/espeak-ng.msi' -OutFile $msi -TimeoutSec 90
-          $install = Start-Process -FilePath msiexec.exe -ArgumentList @('/i', $msi, '/qn', '/norestart') -Wait -PassThru
-          if ($install.ExitCode -notin @(0, 3010)) { throw "eSpeak NG installation failed: $($install.ExitCode)" }
-          $exe = Get-ChildItem -Path @($env:ProgramFiles, ${env:ProgramFiles(x86)}) -Filter 'espeak-ng.exe' -Recurse -ErrorAction SilentlyContinue | Select-Object -First 1
-          if (-not $exe) { throw 'eSpeak NG executable was not found after installation' }
-          $french = Join-Path $env:RUNNER_TEMP 'espeak-fr.wav'
-          $arabic = Join-Path $env:RUNNER_TEMP 'espeak-ar.wav'
-          & $exe.FullName -v fr-fr -s 150 -w $french 'Bonjour. Votre demande a bien été enregistrée. Continuez dans WhatsApp.'
-          if ($LASTEXITCODE -ne 0) { throw "eSpeak French synthesis failed: $LASTEXITCODE" }
-          & $exe.FullName -v ar -s 150 -w $arabic 'تم تسجيل طلبك بنجاح. أرسل رسالة واتساب الجاهزة لفريقنا.'
-          if ($LASTEXITCODE -ne 0) { throw "eSpeak Arabic synthesis failed: $LASTEXITCODE" }
-          $result = python tests/validate-espeak-audio.py --french $french --arabic $arabic
-          if ($LASTEXITCODE -ne 0) { throw 'eSpeak French/Arabic WAV validation failed' }
-          Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value "`n### Offline eSpeak NG audio samples`n````json`n$result`n````"
+            Write-Host 'Downloading the official eSpeak NG 1.52.0 MSI'
+            Invoke-WebRequest -Uri 'https://github.com/espeak-ng/espeak-ng/releases/download/1.52.0/espeak-ng.msi' -OutFile $msi -TimeoutSec 90
+            Write-Host "Downloaded MSI: $((Get-Item $msi).Length) bytes; installing quietly"
+            $install = Start-Process -FilePath msiexec.exe -ArgumentList @('/i', $msi, '/qn', '/norestart') -PassThru
+            if (-not $install.WaitForExit(60000)) {
+              Stop-Process -Id $install.Id -Force
+              throw 'eSpeak NG MSI installation timed out after 60 seconds'
+            }
+            if ($install.ExitCode -notin @(0, 3010)) { throw "eSpeak NG installation failed: $($install.ExitCode)" }
+            $candidates = @(
+              (Join-Path $env:ProgramFiles 'eSpeak NG/espeak-ng.exe'),
+              (Join-Path ${env:ProgramFiles(x86)} 'eSpeak NG/espeak-ng.exe')
+            )
+            $exe = $candidates | Where-Object { Test-Path $_ } | Select-Object -First 1
+            if (-not $exe) { throw "eSpeak NG executable not found at expected install paths: $($candidates -join '; ')" }
+            Write-Host "Using eSpeak NG: $exe"
+            $french = Join-Path $env:RUNNER_TEMP 'espeak-fr.wav'
+            $arabic = Join-Path $env:RUNNER_TEMP 'espeak-ar.wav'
+            Write-Host 'Synthesizing French sample'
+            & $exe -v fr-fr -s 150 -w $french 'Bonjour. Votre demande a bien été enregistrée. Continuez dans WhatsApp.'
+            if ($LASTEXITCODE -ne 0) { throw "eSpeak French synthesis failed: $LASTEXITCODE" }
+            Write-Host "French WAV size: $((Get-Item $french).Length) bytes"
+            Write-Host 'Synthesizing Arabic sample'
+            & $exe -v ar -s 150 -w $arabic 'تم تسجيل طلبك بنجاح. أرسل رسالة واتساب الجاهزة لفريقنا.'
+            if ($LASTEXITCODE -ne 0) { throw "eSpeak Arabic synthesis failed: $LASTEXITCODE" }
+            Write-Host "Arabic WAV size: $((Get-Item $arabic).Length) bytes"
+            $result = python tests/validate-espeak-audio.py --french $french --arabic $arabic
+            if ($LASTEXITCODE -ne 0) { throw 'eSpeak French/Arabic WAV validation failed' }
+            Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value "`n### Offline eSpeak NG audio samples`n````json`n$result`n````"
             Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value '`nThese WAVs are generated directly by eSpeak NG (not NVDA); they verify usable French/Arabic synthesis and are available for human listening.'
           } catch {
             $detail = $_.Exception.ToString() + "`n" + $_.ScriptStackTrace
