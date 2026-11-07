@@ -102,9 +102,10 @@ async function main() {
       document.activeElement?.blur();
     });
     const arabicName = 'مطعم الاختبار';
+    await page.locator('#tuc-onboarding-name').focus();
     sendScreenReaderKeys(
       page,
-      '{TAB}', 'Test Restaurant', '^a', arabicName,
+      'Test Restaurant', '^a', arabicName,
       '{TAB}', '{TAB}', '+{TAB}', '+{TAB}',
     );
     assert.equal(await page.locator('#tuc-onboarding-name').inputValue(), arabicName);

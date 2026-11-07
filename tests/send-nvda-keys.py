@@ -14,7 +14,6 @@ def focus_browser_window():
         try:
             if target_title in window.window_text():
                 window.set_focus()
-                window.click_input(coords=(80, 120))
                 width = ctypes.windll.user32.GetSystemMetrics(0)
                 height = ctypes.windll.user32.GetSystemMetrics(1)
                 mouse.move(coords=(max(0, width - 12), max(0, height - 12)))
