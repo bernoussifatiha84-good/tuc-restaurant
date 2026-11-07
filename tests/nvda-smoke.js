@@ -40,16 +40,10 @@ function readSpeechViewer() {
   return JSON.parse(output.trim());
 }
 
-function focusScreenReaderBrowser() {
+function sendScreenReaderKeys(_page, ...keys) {
   const python = process.env.PYTHON || 'python';
   const script = path.join(__dirname, 'send-nvda-keys.py');
-  execFileSync(python, [script, '--focus'], { encoding: 'utf8', timeout: 15000 });
-}
-
-function sendScreenReaderKeys(_page, keys) {
-  const python = process.env.PYTHON || 'python';
-  const script = path.join(__dirname, 'send-nvda-keys.py');
-  execFileSync(python, [script, keys], { encoding: 'utf8', timeout: 15000 });
+  execFileSync(python, [script, JSON.stringify(keys)], { encoding: 'utf8', timeout: 30000 });
 }
 
 async function waitForActiveElement(page, predicate, description) {
@@ -93,8 +87,7 @@ async function main() {
     await page.bringToFront();
     await page.waitForTimeout(1200);
 
-    // Keep the pointer clear of NVDA Speech Viewer and focus Chromium before real Windows keyboard input.
-    focusScreenReaderBrowser();
+    // Focus Chromium and clear the Speech Viewer pointer pause before real Windows keyboard input.
     await page.bringToFront();
     await page.locator('#tuc-onboarding-name').focus();
     await waitForActiveElement(page, () => document.activeElement.id === 'tuc-onboarding-name', 'restaurant name field');
@@ -108,21 +101,17 @@ async function main() {
     await sendScreenReaderKeys(page, '{TAB}');
     await waitForActiveElement(page, () => document.activeElement.matches('.tuc-onboarding-submit[type="submit"]'), 'submit button after second Tab');
     await page.waitForTimeout(500);
-    await sendScreenReaderKeys(page, '+{TAB}');
-    await sendScreenReaderKeys(page, '+{TAB}');
+    await sendScreenReaderKeys(page, '+{TAB}', '+{TAB}');
     await waitForActiveElement(page, () => document.activeElement.id === 'tuc-onboarding-name', 'restaurant name after reverse Tabs');
-    await sendScreenReaderKeys(page, 'Test Restaurant');
     const arabicName = 'مطعم الاختبار';
-    await sendScreenReaderKeys(page, '^a');
-    await sendScreenReaderKeys(page, arabicName);
+    await sendScreenReaderKeys(page, 'Test Restaurant', '^a', arabicName);
     assert.equal(await page.locator('#tuc-onboarding-name').getAttribute('lang'), 'ar');
     await page.locator('#tuc-onboarding-menu-photo').setInputFiles({
       name: 'nvda-menu.png', mimeType: 'image/png',
       buffer: Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+j5Z8AAAAASUVORK5CYII=', 'base64'),
     });
     await page.evaluate(() => document.querySelector('#tuc-onboarding-name').focus());
-    await sendScreenReaderKeys(page, '{TAB}');
-    await sendScreenReaderKeys(page, '{TAB}');
+    await sendScreenReaderKeys(page, '{TAB}', '{TAB}');
     const responsePromise = page.waitForResponse((response) => response.url().includes('/wp-json/tuc/v1/restaurant-applications'));
     await sendScreenReaderKeys(page, '{ENTER}');
     const response = await responsePromise;
