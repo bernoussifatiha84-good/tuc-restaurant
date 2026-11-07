@@ -724,6 +724,9 @@ final class TUC_Espace_Pro
         if ((int) get_query_var('tuc_espace_pro') !== 1) {
             return;
         }
+        // L’interface métier est autonome; le back-office WordPress ajouté en surimpression
+        // n’y est pas utile et introduit ses propres liens/repères clavier hors du parcours Pro.
+        show_admin_bar(false);
         nocache_headers();
         if (!is_user_logged_in()) {
             wp_safe_redirect(wp_login_url(home_url('/espace-pro/')));

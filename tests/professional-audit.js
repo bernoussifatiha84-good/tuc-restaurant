@@ -169,7 +169,8 @@ async function auditProDashboard(browser) {
         })),
       };
     });
-    return { skipped: false, httpStatus: proResponse.status(), widths: widthsChecked, keyboardFocus: { focusAfterGps, focusAfterUrl, focusAfterParse, focusAfterConfirmation }, accessibility, browserErrors };
+    const adminBarPresent = await page.evaluate(() => Boolean(document.querySelector('#wpadminbar, .screen-reader-shortcut')));
+    return { skipped: false, httpStatus: proResponse.status(), widths: widthsChecked, keyboardFocus: { focusAfterGps, focusAfterUrl, focusAfterParse, focusAfterConfirmation }, adminBarPresent, accessibility, browserErrors };
   } finally {
     await context.close();
   }
@@ -253,6 +254,7 @@ async function main() {
     if (proDashboard.widths.some((sample) => sample.horizontalOverflow || !sample.locationPanelVisible)) {
       issues.push({ page: 'espace-pro', severity: 'high', finding: 'localisation masquée ou débordement horizontal sur un viewport mobile' });
     }
+    if (proDashboard.adminBarPresent) issues.push({ page: 'espace-pro', severity: 'medium', finding: 'la barre d’administration WordPress est encore injectée dans le parcours restaurateur' });
     const expectedFocus = ['tuc-store-google-link', 'tuc-parse-google-link', 'tuc-location-confirm', 'tuc-save-location'];
     const observedFocus = Object.values(proDashboard.keyboardFocus);
     if (observedFocus.some((id, index) => id !== expectedFocus[index])) {
@@ -290,6 +292,7 @@ async function main() {
       httpStatus: proDashboard.httpStatus,
       widths: proDashboard.widths,
       keyboardFocus: proDashboard.keyboardFocus,
+      adminBarPresent: proDashboard.adminBarPresent,
       axeViolations: proDashboard.accessibility.violations.map(({ id, impact, count, examples }) => ({ id, impact, count, targets: examples.slice(0, 2).map((example) => example.target) })),
     }),
     lighthouse: lighthouse.map(({ name, scores, vitals }) => ({ name, scores, vitals })),
