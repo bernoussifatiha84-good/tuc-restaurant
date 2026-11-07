@@ -533,21 +533,20 @@ jobs:
           $store.Open([System.Security.Cryptography.X509Certificates.OpenFlags]::ReadWrite)
           $store.Add($signature.SignerCertificate)
           $store.Close()
-          $devcon = Join-Path $extract 'Install/helpers/devcon-x64.exe'
-          $devconOut = Join-Path $env:RUNNER_TEMP 'scream-devcon.stdout.log'
-          $devconErr = Join-Path $env:RUNNER_TEMP 'scream-devcon.stderr.log'
-          Write-Host 'Installing the Scream audio endpoint with devcon (90 second limit)'
+          $pnputilOut = Join-Path $env:RUNNER_TEMP 'scream-pnputil.stdout.log'
+          $pnputilErr = Join-Path $env:RUNNER_TEMP 'scream-pnputil.stderr.log'
+          Write-Host 'Installing the Scream audio endpoint with the current Windows pnputil utility (90 second limit)'
           Push-Location $driverDir
           try {
-            $install = Start-Process -FilePath $devcon -ArgumentList @('install', 'Scream.inf', '*Scream') -PassThru -WindowStyle Hidden -RedirectStandardOutput $devconOut -RedirectStandardError $devconErr
+            $install = Start-Process -FilePath (Join-Path $env:SystemRoot 'System32/pnputil.exe') -ArgumentList @('/add-driver', 'Scream.inf', '/install') -PassThru -WindowStyle Hidden -RedirectStandardOutput $pnputilOut -RedirectStandardError $pnputilErr
             if (-not $install.WaitForExit(90000)) {
               Stop-Process -Id $install.Id -Force
-              throw 'Scream devcon installation timed out after 90 seconds'
+              throw 'Scream pnputil installation timed out after 90 seconds'
             }
             if ($install.ExitCode -ne 0) {
-              $devconLog = if (Test-Path $devconOut) { Get-Content $devconOut -Raw } else { '' }
-              $devconLog += if (Test-Path $devconErr) { Get-Content $devconErr -Raw } else { '' }
-              throw "Scream virtual audio driver installation failed ($($install.ExitCode)): $devconLog"
+              $pnputilLog = if (Test-Path $pnputilOut) { Get-Content $pnputilOut -Raw } else { '' }
+              $pnputilLog += if (Test-Path $pnputilErr) { Get-Content $pnputilErr -Raw } else { '' }
+              throw "Scream virtual audio driver installation failed ($($install.ExitCode)): $pnputilLog"
             }
           } finally {
             Pop-Location
@@ -692,8 +691,8 @@ jobs:
             ${{ runner.temp }}/nvda-espeak-capture.wav
             ${{ runner.temp }}/scream-capture.stdout.log
             ${{ runner.temp }}/scream-capture.stderr.log
-            ${{ runner.temp }}/scream-devcon.stdout.log
-            ${{ runner.temp }}/scream-devcon.stderr.log
+            ${{ runner.temp }}/scream-pnputil.stdout.log
+            ${{ runner.temp }}/scream-pnputil.stderr.log
           if-no-files-found: warn
           retention-days: 7
 
