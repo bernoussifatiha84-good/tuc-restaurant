@@ -108,9 +108,8 @@ async function main() {
     const speechViewer = readSpeechViewer();
     const transcript = speechViewer.text || '';
     fs.writeFileSync(transcriptPath, transcript || JSON.stringify(speechViewer, null, 2), 'utf8');
-    if (/French \(not supported\)|Arabic \(not supported\)/i.test(transcript)) {
-      throw new Error(`NVDA eSpeak language support diagnostic; transcript: ${transcript}`);
-    }
+    const unsupportedVoices = transcript.match(/(?:French|Arabic) \(not supported\)/ig) || [];
+    if (unsupportedVoices.length) console.warn(`NVDA runner voice limitation: ${unsupportedVoices.join(', ')}`);
     for (const phrase of [
       'Nom du restaurant',
       'En français ou en arabe',

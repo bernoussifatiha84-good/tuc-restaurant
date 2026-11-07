@@ -531,7 +531,6 @@ jobs:
           startupNotification = False
           allowUsageStats = False
           [speech]
-          synth = espeak
           autoLanguageSwitching = True
           [speechViewer]
           showSpeechViewerAtStartup = True
