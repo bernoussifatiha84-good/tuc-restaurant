@@ -63,6 +63,12 @@ async function waitForActiveElement(page, predicate, description) {
   }
 }
 
+function movePointerAwayFromSpeechViewer() {
+  const python = process.env.PYTHON || 'python';
+  const code = 'import ctypes; u=ctypes.windll.user32; u.SetCursorPos(max(0,u.GetSystemMetrics(0)-12),max(0,u.GetSystemMetrics(1)-12))';
+  execFileSync(python, ['-c', code], { encoding: 'utf8', timeout: 10000 });
+}
+
 function assertSpoken(transcript, text, context) {
   assert(transcript.toLocaleLowerCase().includes(text.toLocaleLowerCase()), `NVDA Speech Viewer did not contain ${JSON.stringify(text)} (${context}). Transcript:\n${transcript}`);
 }
@@ -89,6 +95,8 @@ async function main() {
     await page.bringToFront();
     await page.waitForTimeout(1200);
 
+    // Keep the pointer clear of NVDA Speech Viewer (which pauses its transcript while hovered).
+    movePointerAwayFromSpeechViewer();
     // Place focus on the first field, then use browser keyboard events; NVDA observes the resulting accessible focus changes.
     await page.bringToFront();
     await page.locator('#tuc-onboarding-name').focus();
