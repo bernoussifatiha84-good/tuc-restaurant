@@ -600,12 +600,26 @@ jobs:
           TUC_NVDA_TRANSCRIPT: ${{ runner.temp }}/nvda-speech-viewer.txt
           TUC_NVDA_FAILURE: ${{ runner.temp }}/nvda-failure.txt
         run: |
-          node --check tests/nvda-smoke.js
-          node tests/nvda-smoke.js
-          if ($LASTEXITCODE -ne 0) {
+          $nodeLog = Join-Path $env:RUNNER_TEMP 'nvda-smoke-node.log'
+          node --check tests/nvda-smoke.js *> $nodeLog
+          $checkExit = $LASTEXITCODE
+          if ($checkExit -eq 0) {
+            node tests/nvda-smoke.js *> $nodeLog
+            $nodeExit = $LASTEXITCODE
+          } else {
+            $nodeExit = $checkExit
+          }
+          if ($nodeExit -ne 0) {
             $detail = if (Test-Path $env:TUC_NVDA_FAILURE) { Get-Content $env:TUC_NVDA_FAILURE -Raw } else { 'No diagnostic file was produced' }
+            if (Test-Path $nodeLog) { $detail += "`nNode output:`n" + (Get-Content $nodeLog -Raw) }
+            $speechDir = Join-Path $env:RUNNER_TEMP 'nvda-espeak-segments'
+            $segments = Get-ChildItem $speechDir -Filter '*.wav' -ErrorAction SilentlyContinue | Select-Object -ExpandProperty Name
+            $detail += "`nNVDA eSpeak WAV segment count: $($segments.Count)`n$($segments -join "`n")"
             $nvdaLog = Join-Path $env:RUNNER_TEMP 'nvda.log'
-            if (Test-Path $nvdaLog) { $detail += "`nNVDA log tail:`n" + (Get-Content $nvdaLog -Tail 30 | Out-String) }
+            if (Test-Path $nvdaLog) {
+              $logDiagnostics = Get-Content $nvdaLog | Select-String -Pattern 'espeakWav|Traceback|ERROR|Exception|SynthDriver' -Context 1,3 | Out-String
+              $detail += "`nNVDA driver/error log entries:`n$logDiagnostics"
+            }
             $oneLine = ($detail -replace '\r?\n', ' ' -replace '%', '%25' -replace ':', '%3A' -replace ',', '%2C')
             Write-Output "::error title=NVDA Speech Viewer diagnostic::$oneLine"
             Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value "`n### NVDA test failure`n````text`n$detail`n````"
