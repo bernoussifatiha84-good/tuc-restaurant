@@ -510,6 +510,28 @@ jobs:
           python -m pip install --disable-pip-version-check pywinauto
           if ($LASTEXITCODE -ne 0) { throw 'pywinauto installation failed' }
 
+      - name: Installer eSpeak NG et préparer la capture WAV sans périphérique audio
+        timeout-minutes: 3
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $msi = Join-Path $env:RUNNER_TEMP 'espeak-ng-1.52.0.msi'
+          Invoke-WebRequest -Uri 'https://github.com/espeak-ng/espeak-ng/releases/download/1.52.0/espeak-ng.msi' -OutFile $msi -TimeoutSec 90
+          $install = Start-Process -FilePath msiexec.exe -ArgumentList @('/i', $msi, '/qn', '/norestart') -PassThru
+          if (-not $install.WaitForExit(60000)) { Stop-Process -Id $install.Id -Force; throw 'eSpeak NG MSI installation timed out' }
+          if ($install.ExitCode -notin @(0, 3010)) { throw "eSpeak NG installation failed: $($install.ExitCode)" }
+          $candidates = @(
+            (Join-Path $env:ProgramFiles 'eSpeak NG/espeak-ng.exe'),
+            (Join-Path ${env:ProgramFiles(x86)} 'eSpeak NG/espeak-ng.exe')
+          )
+          $exe = $candidates | Where-Object { Test-Path $_ } | Select-Object -First 1
+          if (-not $exe) { throw "eSpeak NG executable not found: $($candidates -join '; ')" }
+          $speechDir = Join-Path $env:RUNNER_TEMP 'nvda-espeak-segments'
+          Remove-Item $speechDir -Recurse -Force -ErrorAction SilentlyContinue
+          New-Item -ItemType Directory -Force -Path $speechDir | Out-Null
+          [System.IO.File]::AppendAllText($env:GITHUB_ENV, "TUC_ESPEAK_EXE=$exe`nTUC_NVDA_SPEECH_DIR=$speechDir`n", [System.Text.UTF8Encoding]::new($false))
+          Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value "eSpeak NG installed at $exe; NVDA speech segments will be rendered to WAV files without a kernel audio driver."
+
       - name: Installer le lecteur d’écran NVDA portable
         shell: pwsh
         run: |
@@ -517,6 +539,9 @@ jobs:
           $portable = Join-Path $env:RUNNER_TEMP 'nvda-portable'
           $config = Join-Path $env:RUNNER_TEMP 'nvda-config'
           New-Item -ItemType Directory -Force -Path $config | Out-Null
+          $scratchSynthDir = Join-Path $config 'scratchpad/synthDrivers'
+          New-Item -ItemType Directory -Force -Path $scratchSynthDir | Out-Null
+          Copy-Item tests/nvda-espeak-wav-driver.py (Join-Path $scratchSynthDir 'espeakWav.py') -Force
           Invoke-WebRequest -Uri 'https://github.com/nvaccess/nvda/releases/download/release-2026.3/nvda_2026.3.exe' -OutFile $installer
           $process = Start-Process -FilePath $installer -ArgumentList @('--create-portable-silent', "--portable-path=$portable") -Wait -PassThru -WindowStyle Hidden
           if ($process.ExitCode -ne 0) { throw "NVDA portable creation failed: $($process.ExitCode)" }
@@ -530,8 +555,10 @@ jobs:
           autoCheck = False
           startupNotification = False
           allowUsageStats = False
+          [development]
+          enableScratchpadDir = True
           [speech]
-          synth = oneCore
+          synth = espeakWav
           autoLanguageSwitching = True
           [speechViewer]
           showSpeechViewerAtStartup = True
@@ -555,7 +582,11 @@ jobs:
             $diagnostics = (($synthLines -join ' | ') + ' | audio diagnostics: ' + ($audioWarnings -join ' | ') + ' | ' + $logTail)
             $diagnosticsOneLine = ($diagnostics -replace '%', '%25' -replace '\r', '%0D' -replace '\n', '%0A')
             Write-Output "::notice title=NVDA synthesizer diagnostics::$diagnosticsOneLine"
-            Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value '`nNVDA Speech Viewer checks the announced text. Separate eSpeak WAV artifacts test speech generation but are not audio output from NVDA.'
+            if (($synthLines -join "`n") -notmatch 'Loaded synthDriver espeakWav') {
+              Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value '`n**NVDA eSpeak WAV synthesizer failed to load; the test is not allowed to silently fall back.**'
+              throw 'NVDA did not load the CI eSpeakWav scratchpad synthesizer'
+            }
+            Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value '`nNVDA loaded the CI eSpeakWav synthesizer. It captures NVDA speech sequences to files without opening an audio device.'
 
           } else {
             Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value '`nNVDA startup log was not created.'
@@ -587,58 +618,23 @@ jobs:
             Write-Output "::notice title=NVDA Speech Viewer transcript::$annotation"
           }
 
-      - name: Générer et vérifier des échantillons audio eSpeak français et arabe
-        timeout-minutes: 3
+      - name: Fusionner et vérifier l’audio eSpeak émis par les séquences NVDA
         shell: pwsh
+        env:
+          TUC_NVDA_SPEECH_DIR: ${{ runner.temp }}/nvda-espeak-segments
         run: |
-          $ErrorActionPreference = 'Stop'
-          try {
-            $msi = Join-Path $env:RUNNER_TEMP 'espeak-ng-1.52.0.msi'
-            Write-Host 'Downloading the official eSpeak NG 1.52.0 MSI'
-            Invoke-WebRequest -Uri 'https://github.com/espeak-ng/espeak-ng/releases/download/1.52.0/espeak-ng.msi' -OutFile $msi -TimeoutSec 90
-            Write-Host "Downloaded MSI: $((Get-Item $msi).Length) bytes; installing quietly"
-            $install = Start-Process -FilePath msiexec.exe -ArgumentList @('/i', $msi, '/qn', '/norestart') -PassThru
-            if (-not $install.WaitForExit(60000)) {
-              Stop-Process -Id $install.Id -Force
-              throw 'eSpeak NG MSI installation timed out after 60 seconds'
-            }
-            if ($install.ExitCode -notin @(0, 3010)) { throw "eSpeak NG installation failed: $($install.ExitCode)" }
-            $candidates = @(
-              (Join-Path $env:ProgramFiles 'eSpeak NG/espeak-ng.exe'),
-              (Join-Path ${env:ProgramFiles(x86)} 'eSpeak NG/espeak-ng.exe')
-            )
-            $exe = $candidates | Where-Object { Test-Path $_ } | Select-Object -First 1
-            if (-not $exe) { throw "eSpeak NG executable not found at expected install paths: $($candidates -join '; ')" }
-            Write-Host "Using eSpeak NG: $exe"
-            $voices = (& $exe --voices 2>&1 | Out-String)
-            Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value "`n### eSpeak NG voices available`n````text`n$voices`n````"
-            $french = Join-Path $env:RUNNER_TEMP 'espeak-fr.wav'
-            $arabic = Join-Path $env:RUNNER_TEMP 'espeak-ar.wav'
-            Write-Host 'Synthesizing French sample'
-            & $exe -v fr-fr -s 150 -w $french 'Bonjour. Votre demande a bien été enregistrée. Continuez dans WhatsApp.'
-            if ($LASTEXITCODE -ne 0) { throw "eSpeak French synthesis failed: $LASTEXITCODE" }
-            Write-Host "French WAV size: $((Get-Item $french).Length) bytes"
-            Write-Host 'Synthesizing Arabic sample from explicit UTF-8 input file'
-            $arabicText = Join-Path $env:RUNNER_TEMP 'espeak-ar.txt'
-            [System.IO.File]::WriteAllText($arabicText, 'تم تسجيل طلبك بنجاح. أرسل رسالة واتساب الجاهزة لفريقنا.', [System.Text.UTF8Encoding]::new($false))
-            $arabicOutput = (& $exe -v ar -s 150 -f $arabicText -w $arabic 2>&1 | Out-String)
-            if ($LASTEXITCODE -ne 0) { throw "eSpeak Arabic synthesis failed ($LASTEXITCODE): $arabicOutput" }
-            Write-Host "Arabic WAV size: $((Get-Item $arabic).Length) bytes"
-            $result = python tests/validate-espeak-audio.py --french $french --arabic $arabic 2>&1 | Out-String
-            if ($LASTEXITCODE -ne 0) { throw "eSpeak French/Arabic WAV validation failed: $result" }
-            Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value "`n### Offline eSpeak NG audio samples`n````json`n$result`n````"
-            Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value '`nThese WAVs are generated directly by eSpeak NG (not NVDA); they verify usable French/Arabic synthesis and are available for human listening.'
-          } catch {
-            $detail = $_.Exception.ToString() + "`n" + $_.ScriptStackTrace
-            $files = Get-ChildItem -Path $env:RUNNER_TEMP -Filter 'espeak-*.wav' -ErrorAction SilentlyContinue | Select-Object Name, Length | Format-Table | Out-String
-            $detail += "`nGenerated sample files:`n$files"
-            Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value "`n### eSpeak sample generation error`n````text`n$detail`n````"
-            $annotation = ($detail -replace '%', '%25' -replace '\r', '%0D' -replace '\n', '%0A')
-            Write-Output "::error title=eSpeak offline voice test::$annotation"
-            throw
+          $outputDir = Join-Path $env:RUNNER_TEMP 'nvda-espeak-audio'
+          $result = python tests/merge-nvda-espeak-audio.py --chunks $env:TUC_NVDA_SPEECH_DIR --output $outputDir 2>&1 | Out-String
+          if ($LASTEXITCODE -ne 0) {
+            Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value "`n### NVDA eSpeak audio capture failed`n````text`n$result`n````"
+            $annotation = ($result -replace '%', '%25' -replace '\r', '%0D' -replace '\n', '%0A')
+            Write-Output "::error title=NVDA eSpeak WAV validation::$annotation"
+            throw 'NVDA did not produce usable French and Arabic eSpeak audio'
           }
+          Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value "`n### WAV generated from NVDA speech sequences`n````json`n$result`n````"
+          Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value '`nThe WAVs come from NVDA speech sequences passed to the CI eSpeakWav synthesizer. They are not playback captured from NVDA’s built-in eSpeak driver.'
 
-      - name: Publier la transcription, les journaux NVDA et les WAV eSpeak
+      - name: Publier transcription NVDA, audio eSpeak et journaux
         if: always()
         uses: actions/upload-artifact@v4
         with:
@@ -647,8 +643,10 @@ jobs:
             ${{ runner.temp }}/nvda-speech-viewer.txt
             ${{ runner.temp }}/nvda-failure.txt
             ${{ runner.temp }}/nvda.log
-            ${{ runner.temp }}/espeak-fr.wav
-            ${{ runner.temp }}/espeak-ar.wav
+            ${{ runner.temp }}/nvda-espeak-audio/nvda-espeak-fr.wav
+            ${{ runner.temp }}/nvda-espeak-audio/nvda-espeak-ar.wav
+            ${{ runner.temp }}/nvda-espeak-audio/nvda-espeak-all.wav
+            ${{ runner.temp }}/nvda-espeak-audio/nvda-espeak-manifest.json
           if-no-files-found: warn
           retention-days: 7
 
