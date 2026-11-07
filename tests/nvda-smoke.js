@@ -2,6 +2,7 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const http = require('node:http');
 const path = require('node:path');
+const { execFileSync } = require('node:child_process');
 const { chromium } = require('playwright');
 
 const fixtureDir = process.env.TUC_NVDA_FIXTURE_DIR || path.join(process.cwd(), 'nvda-fixture');
