@@ -547,15 +547,17 @@ jobs:
           if (Test-Path $log) {
             $logLines = Get-Content $log
             $synthLines = $logLines | Select-String -Pattern 'synth|Synth|eSpeak|espeak|OneCore' | ForEach-Object { $_.Line }
-            $synthFailure = $logLines | Select-String -Pattern 'setSynth failed for espeak' -Context 0,8 | Out-String
+            $synthFailure = $logLines | Select-String -Pattern 'setSynth failed for espeak' -Context 0,12 | Out-String
+            $audioWarnings = $logLines | Select-String -Pattern "Couldn't open specified or default audio device|WinError -2147023728" | ForEach-Object { $_.Line }
             $logTail = (Get-Content $log -Tail 50 | Out-String)
             Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value "`n### NVDA synthesizer log lines`n````text`n$($synthLines -join "`n")`n````"
             Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value "`n### eSpeak initialization failure context`n````text`n$synthFailure`n````"
+            Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value "`n### NVDA audio-device diagnostics`n````text`n$($audioWarnings -join "`n")`n````"
             Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value "`n### NVDA startup log tail`n````text`n$logTail`n````"
-            if ($synthFailure -match 'audio device|WavePlayer') {
-              Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value '`n**Voice support limitation:** eSpeak initialization failed while opening an audio device. NVDA can fall back to another synthesizer; this run does not validate eSpeak or pronunciation.'
+            if ($synthFailure -match 'nvwave.pyc' -and ($audioWarnings -join ' ') -match 'audio device|WinError') {
+              Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value '`n**Voice support limitation:** eSpeak initialization failed while opening audio output. NVDA fell back to another synthesizer; this run does not validate eSpeak or pronunciation.'
             }
-            $diagnostics = (($synthLines -join ' | ') + ' | eSpeak failure context: ' + $synthFailure + ' | ' + $logTail)
+            $diagnostics = (($synthLines -join ' | ') + ' | eSpeak failure context: ' + $synthFailure + ' | audio diagnostics: ' + ($audioWarnings -join ' | ') + ' | ' + $logTail)
             $diagnosticsOneLine = ($diagnostics -replace '%', '%25' -replace '\r', '%0D' -replace '\n', '%0A')
             Write-Output "::notice title=NVDA synthesizer diagnostics::$diagnosticsOneLine"
           } else {
