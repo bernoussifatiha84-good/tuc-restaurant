@@ -23,12 +23,27 @@ class KEYBDINPUT(ctypes.Structure):
     ]
 
 
+class MOUSEINPUT(ctypes.Structure):
+    _fields_ = [
+        ('dx', wintypes.LONG),
+        ('dy', wintypes.LONG),
+        ('mouseData', wintypes.DWORD),
+        ('dwFlags', wintypes.DWORD),
+        ('time', wintypes.DWORD),
+        ('dwExtraInfo', ctypes.c_size_t),
+    ]
+
+
 class INPUT_UNION(ctypes.Union):
-    _fields_ = [('ki', KEYBDINPUT)]
+    _fields_ = [('ki', KEYBDINPUT), ('mi', MOUSEINPUT)]
 
 
 class INPUT(ctypes.Structure):
     _fields_ = [('type', wintypes.DWORD), ('union', INPUT_UNION)]
+
+
+class RECT(ctypes.Structure):
+    _fields_ = [('left', wintypes.LONG), ('top', wintypes.LONG), ('right', wintypes.LONG), ('bottom', wintypes.LONG)]
 
 
 def find_browser_window():
@@ -82,7 +97,13 @@ def focus_browser(hwnd):
         user32.GetWindowThreadProcessId(foreground, ctypes.byref(foreground_pid))
     user32.GetWindowThreadProcessId(hwnd, ctypes.byref(target_pid))
     if foreground_pid.value != target_pid.value:
-        raise RuntimeError(f'Browser did not become foreground (target pid {target_pid.value}, foreground pid {foreground_pid.value})')
+        activate_browser_with_click(hwnd)
+        foreground = user32.GetForegroundWindow()
+        foreground_pid.value = 0
+        if foreground:
+            user32.GetWindowThreadProcessId(foreground, ctypes.byref(foreground_pid))
+    if foreground_pid.value != target_pid.value:
+        raise RuntimeError(f'Browser did not become foreground after activation click (target pid {target_pid.value}, foreground pid {foreground_pid.value})')
 
 
 def send_inputs(events):
@@ -93,6 +114,23 @@ def send_inputs(events):
     sent = user32.SendInput(len(inputs), inputs, ctypes.sizeof(INPUT))
     if sent != len(inputs):
         raise ctypes.WinError()
+
+
+def activate_browser_with_click(hwnd):
+    rect = RECT()
+    if not user32.GetWindowRect(hwnd, ctypes.byref(rect)):
+        raise ctypes.WinError()
+    x = rect.left + min(140, max(40, (rect.right - rect.left) // 5))
+    y = rect.top + 140
+    user32.SetCursorPos(x, y)
+    events = (INPUT * 2)()
+    for index, flags in enumerate((0x0002, 0x0004)):
+        events[index].type = 0  # INPUT_MOUSE
+        events[index].union.mi = MOUSEINPUT(0, 0, 0, flags, 0, 0)
+    sent = user32.SendInput(len(events), events, ctypes.sizeof(INPUT))
+    if sent != len(events):
+        raise ctypes.WinError()
+    time.sleep(0.2)
 
 
 def send_key(vk, modifiers=()):
