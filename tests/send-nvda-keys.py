@@ -1,5 +1,6 @@
 import sys
-from pywinauto import Desktop
+import ctypes
+from pywinauto import Desktop, mouse
 from pywinauto.keyboard import send_keys
 
 
@@ -20,6 +21,10 @@ def main():
     if browser_window is None:
         raise RuntimeError(f'Browser window containing {target_title!r} was not found')
     browser_window.set_focus()
+    # NVDA Speech Viewer intentionally pauses its transcript when the mouse is over its text area.
+    width = ctypes.windll.user32.GetSystemMetrics(0)
+    height = ctypes.windll.user32.GetSystemMetrics(1)
+    mouse.move(coords=(max(0, width - 12), max(0, height - 12)))
     send_keys(sys.argv[1], pause=0.04)
 
 
