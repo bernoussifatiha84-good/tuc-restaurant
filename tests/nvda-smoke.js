@@ -40,6 +40,12 @@ function readSpeechViewer() {
   return JSON.parse(output.trim());
 }
 
+function focusScreenReaderBrowser() {
+  const python = process.env.PYTHON || 'python';
+  const script = path.join(__dirname, 'send-nvda-keys.py');
+  execFileSync(python, [script, '--focus'], { encoding: 'utf8', timeout: 30000 });
+}
+
 function sendScreenReaderKeys(keys) {
   const python = process.env.PYTHON || 'python';
   const script = path.join(__dirname, 'send-nvda-keys.py');
@@ -77,6 +83,7 @@ async function main() {
     // Put keyboard focus in the document rather than browser chrome before the OS-level Tab sequence.
     await page.locator('body').click({ position: { x: 8, y: 8 } });
     await page.waitForTimeout(250);
+    focusScreenReaderBrowser();
     sendScreenReaderKeys('{TAB}');
     try {
       await page.waitForFunction(() => document.activeElement.id === 'tuc-onboarding-name', undefined, { timeout: 10000 });
