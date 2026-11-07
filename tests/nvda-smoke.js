@@ -74,8 +74,20 @@ async function main() {
 
     // Use Windows SendInput via pywinauto, not CDP keyboard events, so NVDA receives the same OS focus/input events as a human.
     await page.bringToFront();
+    // Put keyboard focus in the document rather than browser chrome before the OS-level Tab sequence.
+    await page.locator('body').click({ position: { x: 8, y: 8 } });
+    await page.waitForTimeout(250);
     sendScreenReaderKeys('{TAB}');
-    await page.waitForFunction(() => document.activeElement.id === 'tuc-onboarding-name');
+    try {
+      await page.waitForFunction(() => document.activeElement.id === 'tuc-onboarding-name', undefined, { timeout: 10000 });
+    } catch (error) {
+      const focusState = await page.evaluate(() => ({
+        activeElement: document.activeElement?.outerHTML?.slice(0, 500) || null,
+        hasFocus: document.hasFocus(),
+        title: document.title,
+      }));
+      throw new Error(`${error.message}; first-tab focus state: ${JSON.stringify(focusState)}`);
+    }
     await page.waitForTimeout(500);
     sendScreenReaderKeys('{TAB}');
     await page.waitForFunction(() => document.activeElement.id === 'tuc-onboarding-menu-photo');
