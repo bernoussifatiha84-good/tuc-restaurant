@@ -6,7 +6,7 @@ Le workflow WordPress Docker exécute axe-core sur le composant avant envoi et a
 
 Un second job Windows lance maintenant le formulaire rendu par WordPress dans Chromium avec **NVDA réellement actif**. Le script parcourt le formulaire par Tab/Shift+Tab/Entrée et lit la transcription de NVDA Speech Viewer pour vérifier que les libellés, aides, statut et nom du lien sont prononcés par le lecteur. La transcription est publiée comme artefact du workflow.
 
-Cela teste les annonces textuelles produites par NVDA, mais ne permet pas à un humain d’écouter et d’évaluer la qualité de la voix ou la prononciation arabe. Cela ne remplace pas non plus VoiceOver sur iOS/macOS.
+Le run Windows a bien capturé les annonces du lecteur, y compris l’écho caractère par caractère du nom arabe et le statut après envoi. Le runner a aussi annoncé `French (not supported)` : sa voix installée ne permet donc pas de valider la prononciation française (ni de déduire la qualité de prononciation arabe depuis le seul texte du Speech Viewer). Le test confirme les séquences d’annonces/accessibilité de NVDA, mais pas la qualité audio écoutée par une personne. Il ne remplace pas non plus VoiceOver sur iOS/macOS.
 
 ## Test manuel à exécuter avant mise en production
 
