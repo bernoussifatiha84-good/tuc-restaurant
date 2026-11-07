@@ -87,8 +87,9 @@ async function main() {
     await page.bringToFront();
     await page.waitForTimeout(1200);
 
-    // Focus Chromium and clear the Speech Viewer pointer pause before real Windows keyboard input.
+    // Activate Chromium with a native click, then begin the real Windows keyboard traversal.
     await page.bringToFront();
+    sendScreenReaderKeys(page);
     await page.locator('#tuc-onboarding-name').focus();
     await waitForActiveElement(page, () => document.activeElement.id === 'tuc-onboarding-name', 'restaurant name field');
     await page.waitForTimeout(250);
