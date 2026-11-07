@@ -125,6 +125,7 @@ try {
     $proOrdersRoute = $registeredRoutes['/tuc/v1/pro/commandes'][0] ?? [];
     $proOrderStatusRoute = $registeredRoutes['/tuc/v1/pro/commandes/(?P<id>\\d+)/statut'][0] ?? [];
     $proSettingsRoutes = $registeredRoutes['/tuc/v1/pro/restaurant'] ?? [];
+    $proLocationRoute = $registeredRoutes['/tuc/v1/pro/restaurant/location'][0] ?? [];
     $legacyStatusRoute = $registeredRoutes['/tuc/v1/commande/(?P<id>\d+)/statut'][0] ?? [];
     $proMenuRoutes = $registeredRoutes['/tuc/v1/pro/menu'] ?? [];
     $proItemRoute = $registeredRoutes['/tuc/v1/pro/menu/(?P<id>\d+)'][0] ?? [];
@@ -142,7 +143,9 @@ try {
         && is_callable($proOrdersRoute['permission_callback'] ?? null)
         && is_callable($proOrderStatusRoute['permission_callback'] ?? null)
         && count($proSettingsRoutes) >= 2
-        && count(array_filter($proSettingsRoutes, static fn(array $route): bool => is_callable($route['permission_callback'] ?? null))) === count($proSettingsRoutes),
+        && count(array_filter($proSettingsRoutes, static fn(array $route): bool => is_callable($route['permission_callback'] ?? null))) === count($proSettingsRoutes)
+        && is_callable($proLocationRoute['permission_callback'] ?? null)
+        && is_callable($proLocationRoute['callback'] ?? null),
         'suivi public tokenisé et API mobile commandes/boutique sont enregistrés');
     TUC_Roles::synchroniser();
     $ownerRole = get_role('tuc_restaurateur');
@@ -722,6 +725,45 @@ try {
         && (float) $settingsData['minimum'] === 25.0 && (float) $settingsData['fee'] === 7.0
         && in_array('table', $settingsData['modes'], true) && (int) $settingsData['tables'] === 4,
         'le mobile peut enregistrer disponibilité, minimum, frais, modes et nombre de tables');
+    $locationMetaKeys = ['tuc_lat', 'tuc_lng', 'tuc_coord_source', 'tuc_coord_accuracy', 'tuc_coord_updated_at'];
+    $locationBefore = [];
+    foreach ($locationMetaKeys as $metaKey) {
+        $locationBefore[$metaKey] = get_post_meta($restaurantId, $metaKey, true);
+    }
+    $invalidLocationRequest = new WP_REST_Request('POST', '/tuc/v1/pro/restaurant/location');
+    $invalidLocationRequest->set_header('content-type', 'application/json');
+    $invalidLocationRequest->set_body(wp_json_encode(['lat' => 33.5900, 'lng' => -7.6280, 'source' => 'gps', 'accuracy' => 101, 'capturedAt' => time()]));
+    $assert(is_wp_error(TUC_Espace_Pro::enregistrer_localisation_restaurant($invalidLocationRequest)),
+        'l’API refuse une position GPS dont la précision dépasse 100 mètres');
+    $gpsLocationRequest = new WP_REST_Request('POST', '/tuc/v1/pro/restaurant/location');
+    $gpsLocationRequest->set_header('content-type', 'application/json');
+    $gpsLocationRequest->set_body(wp_json_encode(['lat' => 33.5900, 'lng' => -7.6280, 'source' => 'gps', 'accuracy' => 25, 'capturedAt' => time()]));
+    $gpsLocationResult = TUC_Espace_Pro::enregistrer_localisation_restaurant($gpsLocationRequest);
+    $gpsLocation = $gpsLocationResult instanceof WP_REST_Response ? $gpsLocationResult->get_data()['location'] : null;
+    $assert(is_array($gpsLocation) && $gpsLocation['source'] === 'gps' && (float) $gpsLocation['accuracy'] === 25.0
+        && (float) get_post_meta($restaurantId, 'tuc_lat', true) === 33.59,
+        'l’API du tableau de bord enregistre et retourne les coordonnées GPS valides');
+    $unconfirmedMapRequest = new WP_REST_Request('POST', '/tuc/v1/pro/restaurant/location');
+    $unconfirmedMapRequest->set_header('content-type', 'application/json');
+    $unconfirmedMapRequest->set_body(wp_json_encode(['lat' => 33.59123, 'lng' => -7.62789, 'source' => 'google_maps_link']));
+    $assert(is_wp_error(TUC_Espace_Pro::enregistrer_localisation_restaurant($unconfirmedMapRequest))
+        && (float) get_post_meta($restaurantId, 'tuc_lat', true) === 33.59,
+        'l’API refuse un repère Maps tant que le restaurateur ne le confirme pas');
+    $mapLocationRequest = new WP_REST_Request('POST', '/tuc/v1/pro/restaurant/location');
+    $mapLocationRequest->set_header('content-type', 'application/json');
+    $mapLocationRequest->set_body(wp_json_encode(['lat' => 33.59123, 'lng' => -7.62789, 'source' => 'google_maps_link', 'confirmed' => true]));
+    $mapLocationResult = TUC_Espace_Pro::enregistrer_localisation_restaurant($mapLocationRequest);
+    $mapLocation = $mapLocationResult instanceof WP_REST_Response ? $mapLocationResult->get_data()['location'] : null;
+    $assert(is_array($mapLocation) && $mapLocation['source'] === 'google_maps_link' && $mapLocation['accuracy'] === null
+        && (float) get_post_meta($restaurantId, 'tuc_lng', true) === -7.62789,
+        'l’API enregistre les coordonnées confirmées du lien Maps sans leur attribuer une précision GPS');
+    foreach ($locationBefore as $metaKey => $metaValue) {
+        if ($metaValue === '') {
+            delete_post_meta($restaurantId, $metaKey);
+        } else {
+            update_post_meta($restaurantId, $metaKey, $metaValue);
+        }
+    }
     update_post_meta($restaurantId, 'tuc_minimum', $storeBefore['minimum']);
     update_post_meta($restaurantId, 'tuc_frais', $storeBefore['fee']);
     update_post_meta($restaurantId, 'tuc_modes', $storeBefore['modes']);

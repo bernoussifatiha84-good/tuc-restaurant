@@ -472,12 +472,36 @@ async function main() {
     await choisirMode(fallbackPage, 'emporter');
     const itemId = Number(await fallbackPage.locator('.tuc-client-card').filter({ hasText: 'Plat initial E2E' }).locator('[data-add]').getAttribute('data-add'));
     const managerContext = await browser.newContext({ viewport: { width: 1280, height: 900 } });
+    await managerContext.grantPermissions(['geolocation'], { origin: baseUrl });
+    await managerContext.setGeolocation({ latitude: 33.5900, longitude: -7.6280, accuracy: 25 });
     const managerPage = await managerContext.newPage();
     activePage = managerPage;
     managerPage.on('pageerror', (error) => errors.push(error.stack || error.message));
     await connecterWordPress(managerPage, 'tuc-mobile-e2e');
     await managerPage.goto(`${baseUrl}/espace-pro/`, { waitUntil: 'networkidle' });
     await managerPage.waitForFunction(() => Boolean(window.TUCPro));
+    await managerPage.locator('[data-tab="settings"]').click();
+    await managerPage.locator('#tuc-store-location').waitFor({ state: 'visible' });
+    await managerPage.locator('#tuc-capture-location').click();
+    await managerPage.locator('#tuc-store-location-preview').filter({ hasText: 'Position GPS capturée' }).waitFor();
+    await managerPage.locator('#tuc-save-location').click();
+    await managerPage.locator('#tuc-store-location-notice').filter({ hasText: 'localisation du restaurant a été enregistrée' }).waitFor();
+    assert((await managerPage.locator('#tuc-store-location-current').innerText()).includes('GPS sur place · précision déclarée ±25 m'), 'les coordonnées GPS et la précision sont sauvegardées');
+    await managerPage.locator('#tuc-store-google-link').fill('https://www.google.com/maps/place/TUC/@33.59123,-7.62789,17z/data=!3m1!4b1');
+    await managerPage.locator('#tuc-parse-google-link').click();
+    await managerPage.locator('#tuc-location-confirm').check();
+    await managerPage.locator('#tuc-save-location').click();
+    await managerPage.locator('#tuc-store-location-notice').filter({ hasText: 'localisation du restaurant a été enregistrée' }).waitFor();
+    assert((await managerPage.locator('#tuc-store-location-current').innerText()).includes('33.591230, -7.627890 · lien Google Maps'), 'les coordonnées d’un lien Google Maps complet sont extraites et enregistrées');
+    await managerPage.locator('#tuc-store-google-link').fill('https://maps.app.goo.gl/exemple');
+    await managerPage.locator('#tuc-parse-google-link').click();
+    await managerPage.locator('#tuc-store-location-notice').filter({ hasText: 'Les liens courts ne sont pas résolus' }).waitFor();
+    const storedLocation = await managerPage.evaluate(async () => {
+      const response = await fetch(`${TUCPro.rest}restaurant`, { headers: { 'X-WP-Nonce': TUCPro.nonce } });
+      return (await response.json()).location;
+    });
+    assert.equal(storedLocation.source, 'google_maps_link', 'l’API pro retourne la source sauvegardée sans enregistrer le lien partagé');
+    assert.equal(storedLocation.lat, 33.59123);
     await modifierPlat(managerPage, itemId, { price: 25 });
     activePage = fallbackPage;
     await fallbackPage.locator('#tuc-submit-order').click();
@@ -533,6 +557,7 @@ async function main() {
     console.log('PASS scénarios 6–7: compte client retrouvé, GPS refusé et repli vers le retrait');
     console.log('PASS scénario 8: perte de réponse réseau, rechargement et reprise idempotente sans doublon');
     console.log('PASS scénario 9: prix actualisé avec reconfirmation et plat épuisé retiré du panier');
+    console.log('PASS espace pro: position GPS, extraction de lien Maps direct, refus des liens courts et persistance REST');
     console.log('PASS scénario 10: caisse fait progresser la commande, suivi client actualisé sans données privées');
   } catch (error) {
     const diagnostics = await activePage.evaluate(() => ({

@@ -184,6 +184,10 @@ final class TUC_Espace_Pro
             'methods' => ['PUT', 'PATCH'], 'permission_callback' => [self::class, 'permission_restaurant'],
             'callback' => [self::class, 'modifier_restaurant'],
         ]);
+        register_rest_route('tuc/v1', '/pro/restaurant/location', [
+            'methods' => 'POST', 'permission_callback' => [self::class, 'permission_restaurant'],
+            'callback' => [self::class, 'enregistrer_localisation_restaurant'],
+        ]);
         register_rest_route('tuc/v1', '/pro/commandes', [
             'methods' => 'GET', 'permission_callback' => [self::class, 'permission_commandes'],
             'callback' => [self::class, 'commandes_pro'],
@@ -258,7 +262,87 @@ final class TUC_Espace_Pro
             'open' => get_post_meta($restaurant->ID, 'tuc_ferme', true) !== '1',
             'modes' => array_values(array_intersect((array) get_post_meta($restaurant->ID, 'tuc_modes', true), ['livraison', 'emporter', 'table'])),
             'tables' => max(0, (int) get_post_meta($restaurant->ID, 'tuc_tables', true)),
+            'location' => self::localisation_restaurant($restaurant->ID),
         ]);
+    }
+
+    /** Coordonnées privées du tableau de bord, servies uniquement au responsable autorisé. */
+    private static function localisation_restaurant(int $restaurantId): ?array
+    {
+        $lat = get_post_meta($restaurantId, 'tuc_lat', true);
+        $lng = get_post_meta($restaurantId, 'tuc_lng', true);
+        if (!is_numeric($lat) || !is_numeric($lng)
+            || (float) $lat < -90 || (float) $lat > 90
+            || (float) $lng < -180 || (float) $lng > 180) {
+            return null;
+        }
+        $accuracy = get_post_meta($restaurantId, 'tuc_coord_accuracy', true);
+        return [
+            'lat' => (float) $lat,
+            'lng' => (float) $lng,
+            'source' => sanitize_key((string) get_post_meta($restaurantId, 'tuc_coord_source', true)),
+            'accuracy' => is_numeric($accuracy) && (float) $accuracy > 0 ? (float) $accuracy : null,
+            'updatedAt' => max(0, (int) get_post_meta($restaurantId, 'tuc_coord_updated_at', true)),
+        ];
+    }
+
+    public static function enregistrer_localisation_restaurant(WP_REST_Request $request): WP_REST_Response|WP_Error
+    {
+        $restaurant = TUC_Caisse::mon_resto();
+        if (!$restaurant instanceof WP_Post) {
+            return new WP_Error('tuc_resto', 'Aucun restaurant assigné à ce compte.', ['status' => 409]);
+        }
+        $payload = $request->get_json_params();
+        if (!is_array($payload) || !is_numeric($payload['lat'] ?? null) || !is_numeric($payload['lng'] ?? null)) {
+            return new WP_Error('tuc_location_fields', 'Coordonnées manquantes ou invalides.', ['status' => 422]);
+        }
+        $lat = (float) $payload['lat'];
+        $lng = (float) $payload['lng'];
+        if (!is_finite($lat) || !is_finite($lng) || $lat < -90 || $lat > 90 || $lng < -180 || $lng > 180) {
+            return new WP_Error('tuc_location_bounds', 'Les coordonnées doivent être valides (latitude −90 à 90, longitude −180 à 180).', ['status' => 422]);
+        }
+        $source = is_string($payload['source'] ?? null) ? sanitize_key($payload['source']) : '';
+        if (!in_array($source, ['gps', 'google_maps_link'], true)) {
+            return new WP_Error('tuc_location_source', 'Utilisez le GPS sur place ou un lien Google Maps contenant les coordonnées.', ['status' => 422]);
+        }
+        if ($source === 'gps') {
+            $accuracy = $payload['accuracy'] ?? null;
+            $capturedAt = $payload['capturedAt'] ?? null;
+            $now = time();
+            if (!is_numeric($accuracy) || !is_finite((float) $accuracy) || (float) $accuracy <= 0 || (float) $accuracy > 100
+                || !is_numeric($capturedAt) || (int) $capturedAt > $now + 60 || (int) $capturedAt < $now - 600) {
+                return new WP_Error('tuc_location_accuracy', 'La position GPS est trop imprécise ou trop ancienne. Réessayez sur place ou utilisez un lien Google Maps.', ['status' => 422]);
+            }
+        } elseif (($payload['confirmed'] ?? false) !== true) {
+            return new WP_Error('tuc_location_confirmation', 'Confirmez que le repère Google Maps correspond bien à votre établissement.', ['status' => 422]);
+        }
+
+        // Le site ne propose actuellement que les quartiers de Casablanca. Évite de
+        // classer silencieusement des établissements hors de la zone desservie.
+        if (class_exists(TUC_Geo::class)) {
+            $withinServiceArea = false;
+            foreach (TUC_Geo::quartiers() as $quartier) {
+                if (TUC_Geo::distance2($lat, $lng, (float) $quartier['lat'], (float) $quartier['lng']) <= 25_000 * 25_000) {
+                    $withinServiceArea = true;
+                    break;
+                }
+            }
+            if (!$withinServiceArea) {
+                return new WP_Error('tuc_location_area', 'Cette position est hors de la zone actuellement desservie à Casablanca.', ['status' => 422]);
+            }
+        }
+
+        update_post_meta($restaurant->ID, 'tuc_lat', round($lat, 6));
+        update_post_meta($restaurant->ID, 'tuc_lng', round($lng, 6));
+        update_post_meta($restaurant->ID, 'tuc_coord_source', $source);
+        update_post_meta($restaurant->ID, 'tuc_coord_updated_at', time());
+        if ($source === 'gps') {
+            update_post_meta($restaurant->ID, 'tuc_coord_accuracy', round((float) $payload['accuracy'], 1));
+        } else {
+            delete_post_meta($restaurant->ID, 'tuc_coord_accuracy');
+        }
+
+        return self::restaurant_courant();
     }
 
     public static function modifier_restaurant(WP_REST_Request $request): WP_REST_Response|WP_Error

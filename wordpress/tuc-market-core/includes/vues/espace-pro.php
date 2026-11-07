@@ -87,6 +87,26 @@ $peutGererBoutique = current_user_can(TUC_Roles::CAP_MANAGE_RESTAURANT) || curre
         <label class="tuc-field" id="tuc-store-tables-wrap"><span><?php esc_html_e('Nombre de tables', 'tuc-core'); ?></span><input id="tuc-store-tables" type="number" min="0" max="500" step="1" inputmode="numeric"></label>
         <button class="tuc-button tuc-button-primary" type="submit"><?php esc_html_e('Enregistrer la boutique', 'tuc-core'); ?></button>
       </form>
+      <section id="tuc-store-location" class="tuc-location-settings" aria-labelledby="tuc-store-location-title">
+        <div class="tuc-panel-heading"><div><p class="tuc-eyebrow"><?php esc_html_e('DISTANCES CLIENTS', 'tuc-core'); ?></p><h3 id="tuc-store-location-title"><?php esc_html_e('Localisation de votre établissement', 'tuc-core'); ?></h3></div></div>
+        <p class="tuc-location-intro"><?php esc_html_e('Enregistrez le point réel du restaurant pour que les distances affichées aux clients soient calculées correctement. Placez-vous sur place pour utiliser le GPS. La zone actuellement desservie est Casablanca.', 'tuc-core'); ?></p>
+        <p id="tuc-store-location-current" class="tuc-location-current" role="status" aria-live="polite"><?php esc_html_e('Aucune localisation enregistrée.', 'tuc-core'); ?></p>
+        <div class="tuc-location-method">
+          <h4><?php esc_html_e('Option 1 — GPS sur place', 'tuc-core'); ?></h4>
+          <p><?php esc_html_e('Votre navigateur demandera l’autorisation après ce clic. Une précision GPS supérieure à 100 mètres devra être réessayée.', 'tuc-core'); ?></p>
+          <button id="tuc-capture-location" class="tuc-button tuc-button-soft" type="button"><?php esc_html_e('Capturer ma position actuelle', 'tuc-core'); ?></button>
+        </div>
+        <div class="tuc-location-method">
+          <h4><?php esc_html_e('Option 2 — Lien Google Maps ou Business', 'tuc-core'); ?></h4>
+          <label class="tuc-field" for="tuc-store-google-link"><span><?php esc_html_e('Lien Google Maps', 'tuc-core'); ?></span><input id="tuc-store-google-link" type="url" inputmode="url" autocomplete="url" placeholder="https://www.google.com/maps/..." aria-describedby="tuc-store-google-help"></label>
+          <p id="tuc-store-google-help" class="tuc-location-help"><?php esc_html_e('Les coordonnées peuvent être extraites si elles figurent dans le lien. Les liens courts (par exemple maps.app.goo.gl) ne les contiennent généralement pas : ils ne sont pas résolus par un service externe. Dans ce cas, utilisez le GPS sur place ou ouvrez le lieu dans Google Maps et copiez le lien complet avec le repère.', 'tuc-core'); ?></p>
+          <button id="tuc-parse-google-link" class="tuc-button tuc-button-soft" type="button"><?php esc_html_e('Extraire les coordonnées du lien', 'tuc-core'); ?></button>
+          <label id="tuc-location-confirm-wrap" class="tuc-location-confirm" hidden><input id="tuc-location-confirm" type="checkbox"> <span><?php esc_html_e('J’ai vérifié que le repère correspond bien à l’adresse de mon établissement.', 'tuc-core'); ?></span></label>
+        </div>
+        <p id="tuc-store-location-preview" class="tuc-location-preview" aria-live="polite"></p>
+        <p id="tuc-store-location-notice" class="tuc-location-notice" role="status" aria-live="polite"></p>
+        <button id="tuc-save-location" class="tuc-button tuc-button-primary" type="button" disabled><?php esc_html_e('Enregistrer cette localisation', 'tuc-core'); ?></button>
+      </section>
     </section>
     <?php endif; ?>
   </main>

@@ -249,6 +249,44 @@
     }
   }
 
+  let pendingLocation = null;
+
+  function setLocationNotice(message, kind = '') {
+    const node = $('#tuc-store-location-notice');
+    if (!node) return;
+    node.textContent = message;
+    node.classList.toggle('is-error', kind === 'error');
+    node.classList.toggle('is-success', kind === 'success');
+  }
+
+  function renderSavedLocation(location) {
+    const current = $('#tuc-store-location-current');
+    if (!current) return;
+    if (!location || !Number.isFinite(Number(location.lat)) || !Number.isFinite(Number(location.lng))) {
+      current.textContent = 'Aucune localisation enregistrée.';
+      return;
+    }
+    const source = location.source === 'gps' ? 'GPS sur place' : location.source === 'google_maps_link' ? 'lien Google Maps' : 'coordonnées existantes';
+    const accuracy = location.source === 'gps' && Number(location.accuracy) > 0 ? ` · précision déclarée ±${Math.round(Number(location.accuracy))} m` : '';
+    current.textContent = `Localisation enregistrée : ${Number(location.lat).toFixed(6)}, ${Number(location.lng).toFixed(6)} · ${source}${accuracy}.`;
+  }
+
+  function updateLocationSaveState() {
+    const save = $('#tuc-save-location');
+    if (!save) return;
+    const confirmed = pendingLocation?.source !== 'google_maps_link' || $('#tuc-location-confirm')?.checked;
+    save.disabled = !pendingLocation || !confirmed;
+  }
+
+  function previewLocation(location, label) {
+    pendingLocation = location;
+    $('#tuc-store-location-preview').textContent = `${label} : ${Number(location.lat).toFixed(6)}, ${Number(location.lng).toFixed(6)}. Vérifiez que le point correspond à votre établissement, puis enregistrez.`;
+    $('#tuc-location-confirm-wrap').hidden = location.source !== 'google_maps_link';
+    $('#tuc-location-confirm').checked = false;
+    updateLocationSaveState();
+    setLocationNotice('');
+  }
+
   function fillStoreSettings(restaurant) {
     const open = $('#tuc-store-open');
     if (!open) return;
@@ -260,6 +298,87 @@
     $('#tuc-store-tables').value = Number(restaurant.tables || 0);
     $$('input[name="mode"]', $('#tuc-store-settings')).forEach((input) => { input.checked = (restaurant.modes || []).includes(input.value); });
     $('#tuc-store-tables-wrap').hidden = !$('input[name="mode"][value="table"]', $('#tuc-store-settings')).checked;
+    if (!pendingLocation) renderSavedLocation(restaurant.location);
+  }
+
+  function mapsCoordinates(rawLink) {
+    let url;
+    try { url = new URL(rawLink); } catch { return null; }
+    const host = url.hostname.toLowerCase();
+    const isGoogle = host === 'maps.app.goo.gl' || host === 'goo.gl' || host === 'g.page'
+      || host === 'google.com' || host.endsWith('.google.com')
+      || host === 'google.co.ma' || host.endsWith('.google.co.ma');
+    if (!isGoogle || !['https:', 'http:'].includes(url.protocol)) return null;
+    let decoded;
+    try { decoded = decodeURIComponent(url.href.replace(/\+/g, '%20')); } catch { decoded = url.href; }
+    const patterns = [
+      /@(-?\d{1,2}(?:\.\d+)?),\s*(-?\d{1,3}(?:\.\d+)?)/,
+      /!3d(-?\d{1,2}(?:\.\d+)?)!4d(-?\d{1,3}(?:\.\d+)?)/
+    ];
+    let match = patterns.map((pattern) => decoded.match(pattern)).find(Boolean);
+    if (!match) {
+      const candidates = ['query', 'q', 'll', 'center'].map((key) => url.searchParams.get(key) || '').filter(Boolean);
+      for (const candidate of candidates) {
+        match = candidate.match(/(-?\d{1,2}(?:\.\d+)?)\s*[,;]\s*(-?\d{1,3}(?:\.\d+)?)/);
+        if (match) break;
+      }
+    }
+    if (!match) return null;
+    const lat = Number(match[1]);
+    const lng = Number(match[2]);
+    return Number.isFinite(lat) && Number.isFinite(lng) && lat >= -90 && lat <= 90 && lng >= -180 && lng <= 180 ? { lat, lng } : null;
+  }
+
+  function captureRestaurantGps() {
+    const button = $('#tuc-capture-location');
+    if (!navigator.geolocation) {
+      setLocationNotice('La géolocalisation n’est pas disponible sur cet appareil. Vous pouvez coller un lien Google Maps complet.', 'error');
+      return;
+    }
+    button.disabled = true;
+    button.textContent = 'Recherche de votre position…';
+    setLocationNotice('Autorisez la localisation dans la fenêtre du navigateur. Placez-vous près de l’entrée du restaurant.');
+    navigator.geolocation.getCurrentPosition((position) => {
+      button.disabled = false;
+      button.textContent = 'Capturer ma position actuelle';
+      const accuracy = Number(position.coords.accuracy);
+      if (!Number.isFinite(accuracy) || accuracy <= 0 || accuracy > 100) {
+        setLocationNotice(`La précision GPS est de ±${Math.round(accuracy || 0)} m, insuffisante (100 m maximum). Réessayez dehors ou utilisez un lien Google Maps.`, 'error');
+        return;
+      }
+      const capturedAt = Math.floor(Number(position.timestamp || Date.now()) / 1000);
+      previewLocation({ lat: Number(position.coords.latitude), lng: Number(position.coords.longitude), accuracy, capturedAt, source: 'gps' }, 'Position GPS capturée');
+      setLocationNotice(`Position capturée avec une précision de ±${Math.round(accuracy)} m.`, 'success');
+    }, (error) => {
+      button.disabled = false;
+      button.textContent = 'Capturer ma position actuelle';
+      const message = error.code === 1 ? 'Autorisation refusée. Vous pouvez réessayer ou coller un lien Google Maps complet.' : error.code === 3 ? 'La recherche GPS a expiré. Réessayez sur place ou utilisez un lien Google Maps.' : 'Position indisponible. Vérifiez les réglages de localisation ou collez un lien Google Maps.';
+      setLocationNotice(message, 'error');
+    }, { enableHighAccuracy: true, maximumAge: 0, timeout: 15000 });
+  }
+
+  async function saveRestaurantLocation() {
+    if (!pendingLocation || $('#tuc-save-location').disabled) return;
+    const button = $('#tuc-save-location');
+    button.disabled = true;
+    button.textContent = 'Enregistrement…';
+    try {
+      const saved = await request('restaurant/location', {
+        method: 'POST',
+        body: JSON.stringify({ ...pendingLocation, confirmed: pendingLocation.source === 'google_maps_link' ? Boolean($('#tuc-location-confirm').checked) : undefined })
+      });
+      pendingLocation = null;
+      $('#tuc-store-location-preview').textContent = '';
+      $('#tuc-location-confirm-wrap').hidden = true;
+      $('#tuc-location-confirm').checked = false;
+      renderSavedLocation(saved.location);
+      setLocationNotice('La localisation du restaurant a été enregistrée.', 'success');
+    } catch (error) {
+      setLocationNotice(error.message, 'error');
+    } finally {
+      button.textContent = 'Enregistrer cette localisation';
+      updateLocationSaveState();
+    }
   }
 
   async function saveStoreSettings(event) {
@@ -385,6 +504,22 @@
     } catch (error) { showNotice(error.message, true); button.disabled = false; }
   });
   $('#tuc-store-settings')?.addEventListener('submit', saveStoreSettings);
+  $('#tuc-capture-location')?.addEventListener('click', captureRestaurantGps);
+  $('#tuc-parse-google-link')?.addEventListener('click', () => {
+    const input = $('#tuc-store-google-link');
+    const coordinates = mapsCoordinates(input.value.trim());
+    if (!coordinates) {
+      setLocationNotice('Ce lien ne contient pas de coordonnées lisibles. Les liens courts ne sont pas résolus par une API externe. Ouvrez le lieu dans Google Maps et copiez son lien complet avec les coordonnées, ou utilisez le GPS sur place.', 'error');
+      $('#tuc-store-location-preview').textContent = '';
+      pendingLocation = null;
+      $('#tuc-location-confirm-wrap').hidden = true;
+      updateLocationSaveState();
+      return;
+    }
+    previewLocation({ ...coordinates, source: 'google_maps_link' }, 'Coordonnées extraites du lien Google Maps');
+  });
+  $('#tuc-location-confirm')?.addEventListener('change', updateLocationSaveState);
+  $('#tuc-save-location')?.addEventListener('click', saveRestaurantLocation);
   $('#tuc-store-settings')?.addEventListener('change', (event) => {
     if (event.target.matches('input[name="mode"]')) $('#tuc-store-tables-wrap').hidden = !$('input[name="mode"][value="table"]', $('#tuc-store-settings')).checked;
   });
