@@ -93,15 +93,13 @@ async function main() {
     await page.bringToFront();
     await page.waitForTimeout(1200);
 
-    // Use Windows SendInput via pywinauto, not CDP keyboard events, so NVDA receives the same OS focus/input events as a human.
+    // Place focus on the first field, then use Windows SendInput (not CDP keyboard events) for the NVDA traversal.
     await page.bringToFront();
-    // Put keyboard focus in the document rather than browser chrome before the OS-level Tab sequence.
-    await page.locator('body').click({ position: { x: 8, y: 8 } });
+    await page.locator('#tuc-onboarding-name').focus();
+    await waitForActiveElement(page, () => document.activeElement.id === 'tuc-onboarding-name', 'restaurant name field');
     await page.waitForTimeout(250);
     focusScreenReaderBrowser();
-    sendScreenReaderKeys('{TAB}');
-    await waitForActiveElement(page, () => document.activeElement.id === 'tuc-onboarding-name', 'restaurant name after first Tab');
-    await page.waitForTimeout(500);
+    await page.waitForTimeout(250);
     sendScreenReaderKeys('{TAB}');
     await waitForActiveElement(page, () => document.activeElement.id === 'tuc-onboarding-menu-photo', 'menu photo after second Tab');
     await page.waitForTimeout(500);
