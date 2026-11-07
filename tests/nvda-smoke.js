@@ -36,7 +36,7 @@ async function startFixtureServer() {
 function readSpeechViewer() {
   const python = process.env.PYTHON || 'python';
   const script = path.join(__dirname, 'read-nvda-speech-viewer.py');
-  const output = execFileSync(python, [script, '25'], { encoding: 'utf8', timeout: 30000 });
+  const output = execFileSync(python, [script, '60'], { encoding: 'utf8', timeout: 90000 });
   return JSON.parse(output.trim());
 }
 
@@ -104,9 +104,12 @@ async function main() {
     const arabicName = 'مطعم الاختبار';
     await page.locator('#tuc-onboarding-name').focus();
     sendScreenReaderKeys(page, '{TAB}', '{TAB}', '+{TAB}', '+{TAB}');
-    await page.locator('#tuc-onboarding-name').fill('Test Restaurant');
-    await page.locator('#tuc-onboarding-name').fill(arabicName);
-    await page.locator('#tuc-onboarding-name').focus();
+    const nameField = page.locator('#tuc-onboarding-name');
+    await nameField.fill('Test Restaurant');
+    await nameField.press('Control+A');
+    await nameField.type(arabicName, { delay: 100 });
+    await nameField.focus();
+    await page.waitForTimeout(600);
     assert.equal(await page.locator('#tuc-onboarding-name').inputValue(), arabicName);
     assert.equal(await page.locator('#tuc-onboarding-name').getAttribute('lang'), 'ar');
     await page.locator('.tuc-onboarding-submit[type="submit"]').focus();

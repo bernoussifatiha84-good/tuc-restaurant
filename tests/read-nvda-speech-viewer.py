@@ -7,7 +7,7 @@ from pywinauto import Desktop
 def read_speech():
     fragments = []
     diagnostics = []
-    for backend in ('uia', 'win32'):
+    for backend in ('win32', 'uia'):
         try:
             window = Desktop(backend=backend).window(title='NVDA Speech Viewer')
             window.wait('exists visible', timeout=1)
