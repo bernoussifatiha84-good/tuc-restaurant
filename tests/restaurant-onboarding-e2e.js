@@ -138,7 +138,8 @@ async function main() {
     const draftVisibility = await applicant.evaluate(async () => {
       const response = await fetch(`${TUCPro.rest}restaurant`, { headers: { 'X-WP-Nonce': TUCPro.nonce } });
       const restaurant = await response.json();
-      const publicMenu = await fetch(`${TUCPro.rest}menu/${encodeURIComponent(restaurant.slug)}`);
+      const publicMenuBase = TUCPro.rest.replace(/pro\/?$/, '');
+      const publicMenu = await fetch(`${publicMenuBase}menu/${encodeURIComponent(restaurant.slug)}`);
       return { status: response.status, name: restaurant.name, publicMenuStatus: publicMenu.status };
     });
     assert.equal(draftVisibility.status, 200);
