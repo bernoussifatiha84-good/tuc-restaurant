@@ -765,6 +765,20 @@ try {
         && !array_key_exists('url', $mapLocation) && get_post_meta($restaurantId, 'tuc_coord_link', true) === ''
         && (float) get_post_meta($restaurantId, 'tuc_lng', true) === -7.62789,
         'l’API enregistre les coordonnées confirmées du lien Maps sans conserver le lien ni inventer une précision GPS');
+    $unconfirmedCoordinatesRequest = new WP_REST_Request('POST', '/tuc/v1/pro/restaurant/location');
+    $unconfirmedCoordinatesRequest->set_header('content-type', 'application/json');
+    $unconfirmedCoordinatesRequest->set_body(wp_json_encode(['lat' => 33.59234, 'lng' => -7.62891, 'source' => 'manual_coordinates']));
+    $assert(is_wp_error(TUC_Espace_Pro::enregistrer_localisation_restaurant($unconfirmedCoordinatesRequest))
+        && (float) get_post_meta($restaurantId, 'tuc_lat', true) === 33.59123,
+        'l’API exige la confirmation explicite de coordonnées saisies');
+    $manualCoordinatesRequest = new WP_REST_Request('POST', '/tuc/v1/pro/restaurant/location');
+    $manualCoordinatesRequest->set_header('content-type', 'application/json');
+    $manualCoordinatesRequest->set_body(wp_json_encode(['lat' => 33.59234, 'lng' => -7.62891, 'source' => 'manual_coordinates', 'confirmed' => true]));
+    $manualCoordinatesResult = TUC_Espace_Pro::enregistrer_localisation_restaurant($manualCoordinatesRequest);
+    $manualCoordinates = $manualCoordinatesResult instanceof WP_REST_Response ? $manualCoordinatesResult->get_data()['location'] : null;
+    $assert(is_array($manualCoordinates) && $manualCoordinates['source'] === 'manual_coordinates' && $manualCoordinates['accuracy'] === null
+        && (float) get_post_meta($restaurantId, 'tuc_lat', true) === 33.59234,
+        'l’API accepte les coordonnées saisies et ne leur attribue pas une précision GPS fictive');
     foreach ($locationBefore as $metaKey => $metaValue) {
         if ($metaValue === '') {
             delete_post_meta($restaurantId, $metaKey);

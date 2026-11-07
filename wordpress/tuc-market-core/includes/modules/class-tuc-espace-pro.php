@@ -302,8 +302,8 @@ final class TUC_Espace_Pro
             return new WP_Error('tuc_location_bounds', 'Les coordonnées doivent être valides (latitude −90 à 90, longitude −180 à 180).', ['status' => 422]);
         }
         $source = is_string($payload['source'] ?? null) ? sanitize_key($payload['source']) : '';
-        if (!in_array($source, ['gps', 'google_maps_link'], true)) {
-            return new WP_Error('tuc_location_source', 'Utilisez le GPS sur place ou un lien Google Maps contenant les coordonnées.', ['status' => 422]);
+        if (!in_array($source, ['gps', 'google_maps_link', 'manual_coordinates'], true)) {
+            return new WP_Error('tuc_location_source', 'Utilisez le GPS, un lien Google Maps ou des coordonnées copiées.', ['status' => 422]);
         }
         if ($source === 'gps') {
             $accuracy = $payload['accuracy'] ?? null;

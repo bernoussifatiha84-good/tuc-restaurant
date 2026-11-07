@@ -266,7 +266,7 @@
       current.textContent = 'Aucune localisation enregistrée.';
       return;
     }
-    const source = location.source === 'gps' ? 'GPS sur place' : location.source === 'google_maps_link' ? 'lien Google Maps' : 'coordonnées existantes';
+    const source = location.source === 'gps' ? 'GPS sur place' : location.source === 'google_maps_link' ? 'lien Google Maps' : location.source === 'manual_coordinates' ? 'coordonnées saisies' : 'coordonnées existantes';
     const accuracy = location.source === 'gps' && Number(location.accuracy) > 0 ? ` · précision déclarée ±${Math.round(Number(location.accuracy))} m` : '';
     current.textContent = `Localisation enregistrée : ${Number(location.lat).toFixed(6)}, ${Number(location.lng).toFixed(6)} · ${source}${accuracy}.`;
   }
@@ -274,17 +274,30 @@
   function updateLocationSaveState() {
     const save = $('#tuc-save-location');
     if (!save) return;
-    const confirmed = pendingLocation?.source !== 'google_maps_link' || $('#tuc-location-confirm')?.checked;
+    const confirmed = pendingLocation?.source === 'gps' || $('#tuc-location-confirm')?.checked;
     save.disabled = !pendingLocation || !confirmed;
   }
 
   function previewLocation(location, label) {
     pendingLocation = location;
     $('#tuc-store-location-preview').textContent = `${label} : ${Number(location.lat).toFixed(6)}, ${Number(location.lng).toFixed(6)}. Vérifiez que le point correspond à votre établissement, puis enregistrez.`;
-    $('#tuc-location-confirm-wrap').hidden = location.source !== 'google_maps_link';
+    $('#tuc-location-confirm-wrap').hidden = location.source === 'gps';
+    $('#tuc-location-confirm-text').textContent = location.source === 'manual_coordinates'
+      ? 'J’ai vérifié que ces coordonnées placent le repère sur mon établissement.'
+      : 'J’ai vérifié que le repère du lien correspond bien à mon établissement.';
     $('#tuc-location-confirm').checked = false;
     updateLocationSaveState();
     setLocationNotice('');
+  }
+
+  function invalidatePendingLocation(source, message) {
+    if (pendingLocation?.source !== source) return;
+    pendingLocation = null;
+    $('#tuc-store-location-preview').textContent = '';
+    $('#tuc-location-confirm-wrap').hidden = true;
+    $('#tuc-location-confirm').checked = false;
+    updateLocationSaveState();
+    setLocationNotice(message);
   }
 
   function fillStoreSettings(restaurant) {
@@ -330,6 +343,23 @@
     return Number.isFinite(lat) && Number.isFinite(lng) && lat >= -90 && lat <= 90 && lng >= -180 && lng <= 180 ? { lat, lng } : null;
   }
 
+  function previewManualRestaurantCoordinates() {
+    const rawLat = $('#tuc-store-lat').value.trim();
+    const rawLng = $('#tuc-store-lng').value.trim();
+    const lat = Number(rawLat);
+    const lng = Number(rawLng);
+    if (!rawLat || !rawLng || !Number.isFinite(lat) || !Number.isFinite(lng) || lat < -90 || lat > 90 || lng < -180 || lng > 180) {
+      pendingLocation = null;
+      $('#tuc-store-location-preview').textContent = '';
+      $('#tuc-location-confirm-wrap').hidden = true;
+      $('#tuc-location-confirm').checked = false;
+      updateLocationSaveState();
+      setLocationNotice('Saisissez une latitude entre −90 et 90 et une longitude entre −180 et 180.', 'error');
+      return;
+    }
+    previewLocation({ lat, lng, source: 'manual_coordinates' }, 'Coordonnées saisies');
+  }
+
   function captureRestaurantGps() {
     const button = $('#tuc-capture-location');
     if (!navigator.geolocation) {
@@ -366,7 +396,7 @@
     try {
       const saved = await request('restaurant/location', {
         method: 'POST',
-        body: JSON.stringify({ ...pendingLocation, confirmed: pendingLocation.source === 'google_maps_link' ? Boolean($('#tuc-location-confirm').checked) : undefined })
+        body: JSON.stringify({ ...pendingLocation, confirmed: pendingLocation.source !== 'gps' ? Boolean($('#tuc-location-confirm').checked) : undefined })
       });
       pendingLocation = null;
       $('#tuc-store-location-preview').textContent = '';
@@ -539,6 +569,9 @@
     previewLocation({ ...coordinates, source: 'google_maps_link' }, 'Coordonnées extraites du lien Google Maps');
   });
   $('#tuc-location-confirm')?.addEventListener('change', updateLocationSaveState);
+  $('#tuc-store-google-link')?.addEventListener('input', () => invalidatePendingLocation('google_maps_link', 'Lien modifié : extrayez à nouveau ses coordonnées avant de les enregistrer.'));
+  ['#tuc-store-lat', '#tuc-store-lng'].forEach((selector) => $(selector)?.addEventListener('input', () => invalidatePendingLocation('manual_coordinates', 'Coordonnées modifiées : prévisualisez-les à nouveau avant de les enregistrer.')));
+  $('#tuc-use-manual-coordinates')?.addEventListener('click', previewManualRestaurantCoordinates);
   $('#tuc-save-location')?.addEventListener('click', saveRestaurantLocation);
   $('#tuc-store-settings')?.addEventListener('change', (event) => {
     if (event.target.matches('input[name="mode"]')) $('#tuc-store-tables-wrap').hidden = !$('input[name="mode"][value="table"]', $('#tuc-store-settings')).checked;

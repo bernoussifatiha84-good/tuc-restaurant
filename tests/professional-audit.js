@@ -111,7 +111,16 @@ async function auditProDashboard(browser) {
   const context = await browser.newContext({ viewport: { width: 390, height: 844 }, isMobile: true, hasTouch: true });
   const page = await context.newPage();
   const browserErrors = [];
+  const externalGoogleApiRequests = [];
   page.on('pageerror', (error) => browserErrors.push(error.stack || error.message));
+  page.on('request', (request) => {
+    try {
+      const hostname = new URL(request.url()).hostname.toLowerCase();
+      if (hostname === 'googleapis.com' || hostname.endsWith('.googleapis.com') || hostname === 'maps.google.com') {
+        externalGoogleApiRequests.push(request.url());
+      }
+    } catch { /* ignore malformed browser request URLs */ }
+  });
   try {
     await page.goto(`${baseUrl}/wp-login.php`, { waitUntil: 'domcontentloaded' });
     await page.locator('#user_login').fill(username);
@@ -153,6 +162,12 @@ async function auditProDashboard(browser) {
     await page.keyboard.press('Space');
     await page.keyboard.press('Tab');
     const focusAfterConfirmation = await page.evaluate(() => document.activeElement?.id);
+    await page.keyboard.press('Tab');
+    const focusAfterLatitude = await page.evaluate(() => document.activeElement?.id);
+    await page.keyboard.press('Tab');
+    const focusAfterLongitude = await page.evaluate(() => document.activeElement?.id);
+    await page.keyboard.press('Tab');
+    const focusAfterSave = await page.evaluate(() => document.activeElement?.id);
 
     await page.addScriptTag({ content: axe.source });
     const accessibility = await page.evaluate(async () => {
@@ -170,7 +185,7 @@ async function auditProDashboard(browser) {
       };
     });
     const adminBarPresent = await page.evaluate(() => Boolean(document.querySelector('#wpadminbar, .screen-reader-shortcut')));
-    return { skipped: false, httpStatus: proResponse.status(), widths: widthsChecked, keyboardFocus: { focusAfterGps, focusAfterUrl, focusAfterParse, focusAfterConfirmation }, adminBarPresent, accessibility, browserErrors };
+    return { skipped: false, httpStatus: proResponse.status(), widths: widthsChecked, keyboardFocus: { focusAfterGps, focusAfterUrl, focusAfterParse, focusAfterConfirmation, focusAfterLatitude, focusAfterLongitude, focusAfterSave }, adminBarPresent, externalGoogleApiRequests, accessibility, browserErrors };
   } finally {
     await context.close();
   }
@@ -255,7 +270,8 @@ async function main() {
       issues.push({ page: 'espace-pro', severity: 'high', finding: 'localisation masquée ou débordement horizontal sur un viewport mobile' });
     }
     if (proDashboard.adminBarPresent) issues.push({ page: 'espace-pro', severity: 'medium', finding: 'la barre d’administration WordPress est encore injectée dans le parcours restaurateur' });
-    const expectedFocus = ['tuc-store-google-link', 'tuc-parse-google-link', 'tuc-location-confirm', 'tuc-save-location'];
+    if (proDashboard.externalGoogleApiRequests.length) issues.push({ page: 'espace-pro', severity: 'high', finding: 'une requête API Google externe est émise malgré le parcours sans frais' });
+    const expectedFocus = ['tuc-store-google-link', 'tuc-parse-google-link', 'tuc-location-confirm', 'tuc-store-lat', 'tuc-store-lng', 'tuc-use-manual-coordinates', 'tuc-save-location'];
     const observedFocus = Object.values(proDashboard.keyboardFocus);
     if (observedFocus.some((id, index) => id !== expectedFocus[index])) {
       issues.push({ page: 'espace-pro', severity: 'high', finding: `parcours clavier inattendu: ${observedFocus.join(' → ')}` });
@@ -293,6 +309,7 @@ async function main() {
       widths: proDashboard.widths,
       keyboardFocus: proDashboard.keyboardFocus,
       adminBarPresent: proDashboard.adminBarPresent,
+      externalGoogleApiRequestCount: proDashboard.externalGoogleApiRequests.length,
       axeViolations: proDashboard.accessibility.violations.map(({ id, impact, count, examples }) => ({ id, impact, count, targets: examples.slice(0, 2).map((example) => example.target) })),
     }),
     lighthouse: lighthouse.map(({ name, scores, vitals }) => ({ name, scores, vitals })),

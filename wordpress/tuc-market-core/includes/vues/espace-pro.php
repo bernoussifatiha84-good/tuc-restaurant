@@ -99,9 +99,18 @@ $peutGererBoutique = current_user_can(TUC_Roles::CAP_MANAGE_RESTAURANT) || curre
         <div class="tuc-location-method">
           <h4><?php esc_html_e('Option 2 — Lien Google Maps ou Business', 'tuc-core'); ?></h4>
           <label class="tuc-field" for="tuc-store-google-link"><span><?php esc_html_e('Lien Google Maps', 'tuc-core'); ?></span><input id="tuc-store-google-link" type="url" inputmode="url" autocomplete="url" placeholder="https://www.google.com/maps/..." aria-describedby="tuc-store-google-help"></label>
-          <p id="tuc-store-google-help" class="tuc-location-help"><?php esc_html_e('Les coordonnées peuvent être extraites si elles figurent dans le lien. Les liens courts (par exemple maps.app.goo.gl) ne les contiennent généralement pas : ils ne sont pas résolus par un service externe. Dans ce cas, utilisez le GPS sur place ou ouvrez le lieu dans Google Maps et copiez le lien complet avec le repère.', 'tuc-core'); ?></p>
+          <p id="tuc-store-google-help" class="tuc-location-help"><?php esc_html_e('Le lien est analysé dans votre navigateur, sans API ni service externe. Les coordonnées peuvent être extraites si elles figurent dans l’URL. Les liens courts (par exemple maps.app.goo.gl) ne les contiennent généralement pas. Dans ce cas, utilisez le GPS sur place ou ouvrez le lieu dans Google Maps et copiez le lien complet avec le repère.', 'tuc-core'); ?></p>
           <button id="tuc-parse-google-link" class="tuc-button tuc-button-soft" type="button"><?php esc_html_e('Extraire les coordonnées du lien', 'tuc-core'); ?></button>
-          <label id="tuc-location-confirm-wrap" class="tuc-location-confirm" hidden><input id="tuc-location-confirm" type="checkbox"> <span><?php esc_html_e('J’ai vérifié que le repère correspond bien à l’adresse de mon établissement.', 'tuc-core'); ?></span></label>
+          <label id="tuc-location-confirm-wrap" class="tuc-location-confirm" hidden><input id="tuc-location-confirm" type="checkbox"> <span id="tuc-location-confirm-text"><?php esc_html_e('J’ai vérifié que le repère correspond bien à l’adresse de mon établissement.', 'tuc-core'); ?></span></label>
+        </div>
+        <div class="tuc-location-method">
+          <h4><?php esc_html_e('Option 3 — Coordonnées copiées', 'tuc-core'); ?></h4>
+          <p><?php esc_html_e('Si vous ne souhaitez pas utiliser le GPS, copiez la latitude et la longitude du repère de votre restaurant dans Google Maps. Une adresse écrite seule ne suffit pas.', 'tuc-core'); ?></p>
+          <div class="tuc-field-row">
+            <label class="tuc-field" for="tuc-store-lat"><span><?php esc_html_e('Latitude', 'tuc-core'); ?></span><input id="tuc-store-lat" type="number" min="-90" max="90" step="0.000001" inputmode="decimal" placeholder="33.590000"></label>
+            <label class="tuc-field" for="tuc-store-lng"><span><?php esc_html_e('Longitude', 'tuc-core'); ?></span><input id="tuc-store-lng" type="number" min="-180" max="180" step="0.000001" inputmode="decimal" placeholder="-7.628000"></label>
+          </div>
+          <button id="tuc-use-manual-coordinates" class="tuc-button tuc-button-soft" type="button"><?php esc_html_e('Prévisualiser ces coordonnées', 'tuc-core'); ?></button>
         </div>
         <p id="tuc-store-location-preview" class="tuc-location-preview" aria-live="polite"></p>
         <p id="tuc-store-location-notice" class="tuc-location-notice" role="status" aria-live="polite"></p>

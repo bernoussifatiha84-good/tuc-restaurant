@@ -541,12 +541,25 @@ async function main() {
     await managerPage.locator('#tuc-store-google-link').fill('https://maps.app.goo.gl/exemple');
     await managerPage.locator('#tuc-parse-google-link').click();
     await managerPage.locator('#tuc-store-location-notice').filter({ hasText: 'Les liens courts ne sont pas résolus' }).waitFor();
+    await managerPage.locator('#tuc-store-lat').fill('91');
+    await managerPage.locator('#tuc-store-lng').fill('-7.628');
+    await managerPage.locator('#tuc-use-manual-coordinates').click();
+    await managerPage.locator('#tuc-store-location-notice').filter({ hasText: 'latitude entre' }).waitFor();
+    assert.equal(await managerPage.locator('#tuc-save-location').isDisabled(), true, 'des coordonnées hors limites ne peuvent pas être prévisualisées ni enregistrées');
+    await managerPage.locator('#tuc-store-lat').fill('33.59234');
+    await managerPage.locator('#tuc-store-lng').fill('-7.62891');
+    await managerPage.locator('#tuc-use-manual-coordinates').click();
+    await managerPage.locator('#tuc-location-confirm').check();
+    await managerPage.locator('#tuc-save-location').click();
+    await managerPage.locator('#tuc-store-location-notice').filter({ hasText: 'localisation du restaurant a été enregistrée' }).waitFor();
+    assert((await managerPage.locator('#tuc-store-location-current').innerText()).includes('33.592340, -7.628910 · coordonnées saisies'), 'les coordonnées copiées peuvent être confirmées et enregistrées sans service externe');
     const storedLocation = await managerPage.evaluate(async () => {
       const response = await fetch(`${TUCPro.rest}restaurant`, { headers: { 'X-WP-Nonce': TUCPro.nonce } });
       return (await response.json()).location;
     });
-    assert.equal(storedLocation.source, 'google_maps_link', 'l’API pro retourne la source sauvegardée sans enregistrer le lien partagé');
-    assert.equal(storedLocation.lat, 33.59123);
+    assert.equal(storedLocation.source, 'manual_coordinates', 'l’API pro retourne les coordonnées saisies, sans enregistrer le lien partagé');
+    assert.equal(storedLocation.lat, 33.59234);
+    assert.equal(Object.hasOwn(storedLocation, 'url'), false, 'l’API ne conserve aucun lien Google Maps');
     await modifierPlat(managerPage, itemId, { price: 25 });
     activePage = fallbackPage;
     await fallbackPage.locator('#tuc-submit-order').click();
@@ -602,7 +615,7 @@ async function main() {
     console.log('PASS scénarios 6–7: compte client retrouvé, GPS refusé et repli vers le retrait');
     console.log('PASS scénario 8: perte de réponse réseau, rechargement et reprise idempotente sans doublon');
     console.log('PASS scénario 9: prix actualisé avec reconfirmation et plat épuisé retiré du panier');
-    console.log('PASS espace pro: position GPS, extraction de lien Maps direct, refus des liens courts et persistance REST');
+    console.log('PASS espace pro: GPS et erreurs, repère Maps prioritaire, repli @, coordonnées saisies, lien court refusé et persistance REST');
     console.log('PASS scénario 10: caisse fait progresser la commande, suivi client actualisé sans données privées');
   } catch (error) {
     const diagnostics = await activePage.evaluate(() => ({
