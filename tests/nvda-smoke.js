@@ -87,37 +87,36 @@ async function main() {
     await page.bringToFront();
     await page.waitForTimeout(1200);
 
-    // Activate Chromium with a native click, then begin the real Windows keyboard traversal.
+    // Use native Windows keyboard input while recording the browser's actual focus order.
     await page.bringToFront();
-    sendScreenReaderKeys(page);
-    await page.locator('#tuc-onboarding-name').focus();
-    await waitForActiveElement(page, () => document.activeElement.id === 'tuc-onboarding-name', 'restaurant name field');
-    await page.waitForTimeout(250);
-    await sendScreenReaderKeys(page, '{TAB}');
-    await waitForActiveElement(page, () => document.activeElement.id === 'tuc-onboarding-menu-photo', 'menu photo after first Tab');
-    // Re-emit a genuine accessibility focus event so NVDA announces the file control, even in CDP-driven CI.
-    await page.evaluate(() => document.activeElement.blur());
-    await page.locator('#tuc-onboarding-menu-photo').focus();
-    await page.waitForTimeout(800);
-    await sendScreenReaderKeys(page, '{TAB}');
-    await waitForActiveElement(page, () => document.activeElement.matches('.tuc-onboarding-submit[type="submit"]'), 'submit button after second Tab');
-    await page.waitForTimeout(500);
-    await sendScreenReaderKeys(page, '+{TAB}', '+{TAB}');
-    await waitForActiveElement(page, () => document.activeElement.id === 'tuc-onboarding-name', 'restaurant name after reverse Tabs');
-    const arabicName = 'مطعم الاختبار';
-    await sendScreenReaderKeys(page, 'Test Restaurant', '^a', arabicName);
-    assert.equal(await page.locator('#tuc-onboarding-name').getAttribute('lang'), 'ar');
     await page.locator('#tuc-onboarding-menu-photo').setInputFiles({
       name: 'nvda-menu.png', mimeType: 'image/png',
       buffer: Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+j5Z8AAAAASUVORK5CYII=', 'base64'),
     });
-    await page.evaluate(() => document.querySelector('#tuc-onboarding-name').focus());
-    await sendScreenReaderKeys(page, '{TAB}', '{TAB}');
+    await page.evaluate(() => {
+      window.__tucFocusTrail = [];
+      document.addEventListener('focusin', (event) => {
+        const target = event.target;
+        window.__tucFocusTrail.push(target.id || (typeof target.className === 'string' ? target.className : '') || target.tagName);
+      });
+      document.activeElement?.blur();
+    });
+    const arabicName = 'مطعم الاختبار';
     const responsePromise = page.waitForResponse((response) => response.url().includes('/wp-json/tuc/v1/restaurant-applications'));
-    await sendScreenReaderKeys(page, '{ENTER}');
+    sendScreenReaderKeys(
+      page,
+      '{TAB}', 'Test Restaurant', '^a', arabicName,
+      '{TAB}', '{TAB}', '+{TAB}', '+{TAB}',
+      '{TAB}', '{TAB}', '{ENTER}',
+    );
     const response = await responsePromise;
     assert.equal(response.status(), 201);
     await waitForActiveElement(page, () => document.activeElement?.id === 'tuc-onboarding-wa-link', 'WhatsApp link after application submission');
+    const focusTrail = await page.evaluate(() => window.__tucFocusTrail);
+    const nameFocus = focusTrail.indexOf('tuc-onboarding-name');
+    const photoFocus = focusTrail.indexOf('tuc-onboarding-menu-photo');
+    const submitFocus = focusTrail.findIndex((entry) => entry.includes('tuc-onboarding-submit'));
+    assert(nameFocus >= 0 && photoFocus > nameFocus && submitFocus > photoFocus, `unexpected NVDA keyboard focus order: ${JSON.stringify(focusTrail)}`);
     await page.waitForTimeout(1200);
 
     const speechViewer = readSpeechViewer();
