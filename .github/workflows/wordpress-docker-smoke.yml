@@ -610,15 +610,19 @@ jobs:
             $exe = $candidates | Where-Object { Test-Path $_ } | Select-Object -First 1
             if (-not $exe) { throw "eSpeak NG executable not found at expected install paths: $($candidates -join '; ')" }
             Write-Host "Using eSpeak NG: $exe"
+            $voices = (& $exe --voices 2>&1 | Out-String)
+            Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value "`n### eSpeak NG voices available`n````text`n$voices`n````"
             $french = Join-Path $env:RUNNER_TEMP 'espeak-fr.wav'
             $arabic = Join-Path $env:RUNNER_TEMP 'espeak-ar.wav'
             Write-Host 'Synthesizing French sample'
             & $exe -v fr-fr -s 150 -w $french 'Bonjour. Votre demande a bien été enregistrée. Continuez dans WhatsApp.'
             if ($LASTEXITCODE -ne 0) { throw "eSpeak French synthesis failed: $LASTEXITCODE" }
             Write-Host "French WAV size: $((Get-Item $french).Length) bytes"
-            Write-Host 'Synthesizing Arabic sample'
-            & $exe -v ar -s 150 -w $arabic 'تم تسجيل طلبك بنجاح. أرسل رسالة واتساب الجاهزة لفريقنا.'
-            if ($LASTEXITCODE -ne 0) { throw "eSpeak Arabic synthesis failed: $LASTEXITCODE" }
+            Write-Host 'Synthesizing Arabic sample from explicit UTF-8 input file'
+            $arabicText = Join-Path $env:RUNNER_TEMP 'espeak-ar.txt'
+            [System.IO.File]::WriteAllText($arabicText, 'تم تسجيل طلبك بنجاح. أرسل رسالة واتساب الجاهزة لفريقنا.', [System.Text.UTF8Encoding]::new($false))
+            $arabicOutput = (& $exe -v ar -s 150 -f $arabicText -w $arabic 2>&1 | Out-String)
+            if ($LASTEXITCODE -ne 0) { throw "eSpeak Arabic synthesis failed ($LASTEXITCODE): $arabicOutput" }
             Write-Host "Arabic WAV size: $((Get-Item $arabic).Length) bytes"
             $result = python tests/validate-espeak-audio.py --french $french --arabic $arabic 2>&1 | Out-String
             if ($LASTEXITCODE -ne 0) { throw "eSpeak French/Arabic WAV validation failed: $result" }

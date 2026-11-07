@@ -30,7 +30,9 @@ def inspect_sample(label: str, path: Path) -> dict[str, object]:
         samples.byteswap()
     peak = max((abs(value) for value in samples), default=0)
     if peak == 0:
-        raise ValueError(f"{label}: all samples are silent")
+        raise ValueError(
+            f"{label}: all samples are silent ({duration:.2f}s, {sample_rate} Hz, {channels} channel(s), {sample_width * 8}-bit)"
+        )
 
     return {
         "language": label,
