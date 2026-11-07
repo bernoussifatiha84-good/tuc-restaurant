@@ -108,7 +108,9 @@ async function main() {
     const speechViewer = readSpeechViewer();
     const transcript = speechViewer.text || '';
     fs.writeFileSync(transcriptPath, transcript || JSON.stringify(speechViewer, null, 2), 'utf8');
-    assert(!/French \(not supported\)|Arabic \(not supported\)/i.test(transcript), 'NVDA eSpeak must support the form language tags for French and Arabic');
+    if (/French \(not supported\)|Arabic \(not supported\)/i.test(transcript)) {
+      throw new Error(`NVDA eSpeak language support diagnostic; transcript: ${transcript}`);
+    }
     for (const phrase of [
       'Nom du restaurant',
       'En français ou en arabe',

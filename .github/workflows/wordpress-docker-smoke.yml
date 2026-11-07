@@ -555,6 +555,8 @@ jobs:
           node tests/nvda-smoke.js
           if ($LASTEXITCODE -ne 0) {
             $detail = if (Test-Path $env:TUC_NVDA_FAILURE) { Get-Content $env:TUC_NVDA_FAILURE -Raw } else { 'No diagnostic file was produced' }
+            $nvdaLog = Join-Path $env:RUNNER_TEMP 'nvda.log'
+            if (Test-Path $nvdaLog) { $detail += "`nNVDA log tail:`n" + (Get-Content $nvdaLog -Tail 30 | Out-String) }
             $oneLine = ($detail -replace '\r?\n', ' ' -replace '%', '%25' -replace ':', '%3A' -replace ',', '%2C')
             Write-Output "::error title=NVDA Speech Viewer diagnostic::$oneLine"
             Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value "`n### NVDA test failure`n````text`n$detail`n````"
