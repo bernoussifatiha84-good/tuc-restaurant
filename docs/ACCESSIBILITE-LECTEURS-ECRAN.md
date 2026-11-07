@@ -2,9 +2,11 @@
 
 ## Contrôles automatisés
 
-Le workflow WordPress Docker exécute axe-core sur le composant avant envoi et après apparition du lien WhatsApp, pour les règles WCAG 2.0/2.1/2.2 A et AA. Playwright vérifie aussi l’ordre clavier nom → photo → bouton, l’annonce de la langue `ar` lorsque le nom est saisi en arabe, le rôle de statut, le nom accessible du lien et le déplacement du focus vers celui-ci après l’envoi.
+Le workflow WordPress Docker exécute axe-core sur le composant avant envoi et après apparition du lien WhatsApp, pour les règles WCAG 2.0/2.1/2.2 A et AA. Playwright vérifie aussi l’ordre clavier nom → photo → bouton, la langue `ar` lorsque le nom est saisi en arabe, le rôle de statut, le nom accessible du lien et le déplacement du focus après l’envoi.
 
-Ces contrôles détectent des défauts de structure, d’étiquetage et de parcours clavier. Ils ne synthétisent pas la parole et **ne valent pas une validation réelle avec VoiceOver ou NVDA**.
+Un second job Windows lance maintenant le formulaire rendu par WordPress dans Chromium avec **NVDA réellement actif**. Le script parcourt le formulaire par Tab/Shift+Tab/Entrée et lit la transcription de NVDA Speech Viewer pour vérifier que les libellés, aides, statut et nom du lien sont prononcés par le lecteur. La transcription est publiée comme artefact du workflow.
+
+Cela teste les annonces textuelles produites par NVDA, mais ne permet pas à un humain d’écouter et d’évaluer la qualité de la voix ou la prononciation arabe. Cela ne remplace pas non plus VoiceOver sur iOS/macOS.
 
 ## Test manuel à exécuter avant mise en production
 

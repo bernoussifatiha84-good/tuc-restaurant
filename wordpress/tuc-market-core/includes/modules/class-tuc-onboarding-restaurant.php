@@ -92,16 +92,16 @@ final class TUC_Onboarding_Restaurant
             <h1 id="tuc-onboarding-title">Votre restaurant, accompagné par notre équipe</h1>
             <p class="tuc-onboarding-intro">Commencez simplement. Envoyez le nom de votre restaurant et une photo de votre menu. Notre équipe vous contactera sur WhatsApp pour préparer votre espace et vos accès.</p>
             <form id="tuc-restaurant-onboarding-form" enctype="multipart/form-data" data-rest="<?php echo esc_url(rest_url('tuc/v1/')); ?>">
-              <label class="tuc-onboarding-field" for="tuc-onboarding-name">
-                <span>Nom du restaurant</span>
-                <input id="tuc-onboarding-name" name="restaurant_name" type="text" maxlength="120" minlength="2" autocomplete="organization" dir="auto" lang="fr" required>
-                <small>En français ou en arabe.</small>
-              </label>
-              <label class="tuc-onboarding-field" for="tuc-onboarding-menu-photo">
-                <span>Photo du menu</span>
+              <div class="tuc-onboarding-field">
+                <label for="tuc-onboarding-name">Nom du restaurant</label>
+                <input id="tuc-onboarding-name" name="restaurant_name" type="text" maxlength="120" minlength="2" autocomplete="organization" dir="auto" lang="fr" required aria-describedby="tuc-onboarding-name-help">
+                <small id="tuc-onboarding-name-help">En français ou en arabe.</small>
+              </div>
+              <div class="tuc-onboarding-field">
+                <label for="tuc-onboarding-menu-photo">Photo du menu</label>
                 <input id="tuc-onboarding-menu-photo" name="menu_photo" type="file" accept="image/jpeg,image/png,image/webp" required aria-describedby="tuc-onboarding-photo-help">
                 <small id="tuc-onboarding-photo-help">JPEG, PNG ou WebP · 5 Mo maximum · une photo nette suffit.</small>
-              </label>
+              </div>
               <button class="tuc-onboarding-submit" type="submit">Demander l’accompagnement</button>
             </form>
             <p id="tuc-onboarding-status" class="tuc-onboarding-status" role="status" aria-live="polite"></p>

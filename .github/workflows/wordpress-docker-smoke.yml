@@ -370,6 +370,24 @@ jobs:
             exit "$status"
           fi
 
+      - name: Exporter le formulaire WordPress réel pour le test NVDA
+        shell: bash
+        env:
+          NODE_PATH: ${{ runner.temp }}/tuc-playwright/node_modules
+          TUC_MOBILE_E2E_URL: http://127.0.0.1:8080
+          TUC_NVDA_FIXTURE_DIR: ${{ runner.temp }}/tuc-onboarding-nvda-fixture
+        run: |
+          set -euo pipefail
+          node tests/export-onboarding-nvda-fixture.js
+
+      - name: Publier le formulaire rendu pour le lecteur d’écran Windows
+        uses: actions/upload-artifact@v4
+        with:
+          name: onboarding-nvda-fixture
+          path: ${{ runner.temp }}/tuc-onboarding-nvda-fixture/
+          if-no-files-found: error
+          retention-days: 1
+
       - name: Audit web professionnel (Lighthouse mobile, SEO, WCAG, responsive, REST)
         shell: bash
         env:
@@ -465,3 +483,92 @@ jobs:
         run: |
           docker compose down --volumes --remove-orphans || true
           rm -f .env
+
+  nvda-windows:
+    name: Vérifier les annonces avec NVDA sous Windows
+    runs-on: windows-2025
+    needs: wordpress-docker
+    timeout-minutes: 15
+    steps:
+      - name: Récupérer le dépôt
+        uses: actions/checkout@v5
+
+      - name: Télécharger le formulaire rendu par WordPress
+        uses: actions/download-artifact@v4
+        with:
+          name: onboarding-nvda-fixture
+          path: ${{ runner.temp }}/tuc-onboarding-nvda-fixture
+
+      - name: Installer Playwright et Chromium
+        shell: pwsh
+        run: |
+          $prefix = Join-Path $env:RUNNER_TEMP 'tuc-playwright'
+          npm install --prefix $prefix --no-audit --no-fund playwright@1.56.1
+          if ($LASTEXITCODE -ne 0) { throw 'Playwright installation failed' }
+          & (Join-Path $prefix 'node_modules/.bin/playwright.cmd') install chromium
+          if ($LASTEXITCODE -ne 0) { throw 'Chromium installation failed' }
+          python -m pip install --disable-pip-version-check pywinauto
+          if ($LASTEXITCODE -ne 0) { throw 'pywinauto installation failed' }
+
+      - name: Installer le lecteur d’écran NVDA portable
+        shell: pwsh
+        run: |
+          $installer = Join-Path $env:RUNNER_TEMP 'nvda.exe'
+          $portable = Join-Path $env:RUNNER_TEMP 'nvda-portable'
+          $config = Join-Path $env:RUNNER_TEMP 'nvda-config'
+          New-Item -ItemType Directory -Force -Path $config | Out-Null
+          Invoke-WebRequest -Uri 'https://github.com/nvaccess/nvda/releases/download/release-2026.3/nvda_2026.3.exe' -OutFile $installer
+          $process = Start-Process -FilePath $installer -ArgumentList @('--create-portable-silent', "--portable-path=$portable") -Wait -PassThru -WindowStyle Hidden
+          if ($process.ExitCode -ne 0) { throw "NVDA portable creation failed: $($process.ExitCode)" }
+          @'
+          schemaVersion = 2
+          [general]
+          language = en
+          showWelcomeDialogAtStartup = False
+          [update]
+          askedAllowUsageStats = True
+          autoCheck = False
+          startupNotification = False
+          allowUsageStats = False
+          [speech]
+          autoLanguageSwitching = True
+          [speechViewer]
+          showSpeechViewerAtStartup = True
+          '@ | Set-Content -Path (Join-Path $config 'nvda.ini') -Encoding utf8
+          $nvda = Get-ChildItem -Path $portable -Filter 'nvda.exe' -Recurse | Select-Object -First 1
+          if (-not $nvda) { throw 'Portable NVDA executable not found' }
+          $log = Join-Path $env:RUNNER_TEMP 'nvda.log'
+          Start-Process -FilePath $nvda.FullName -ArgumentList @("--config-path=$config", '--debug-logging', "--log-file=$log")
+          Start-Sleep -Seconds 8
+          "NVDA=$($nvda.FullName)" | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Append
+
+      - name: Parcourir le formulaire avec NVDA Speech Viewer
+        shell: pwsh
+        env:
+          NODE_PATH: ${{ runner.temp }}/tuc-playwright/node_modules
+          TUC_NVDA_FIXTURE_DIR: ${{ runner.temp }}/tuc-onboarding-nvda-fixture
+          TUC_NVDA_TRANSCRIPT: ${{ runner.temp }}/nvda-speech-viewer.txt
+        run: |
+          node --check tests/nvda-smoke.js
+          node tests/nvda-smoke.js
+          if ($LASTEXITCODE -ne 0) { throw 'NVDA screen-reader smoke test failed' }
+          if (Test-Path $env:TUC_NVDA_TRANSCRIPT) {
+            Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value "`n### NVDA Speech Viewer output`n````text`n$(Get-Content $env:TUC_NVDA_TRANSCRIPT -Raw)`n````"
+          }
+
+      - name: Publier la transcription NVDA et les journaux
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: nvda-speech-viewer-${{ github.run_id }}
+          path: |
+            ${{ runner.temp }}/nvda-speech-viewer.txt
+            ${{ runner.temp }}/nvda.log
+          if-no-files-found: warn
+          retention-days: 7
+
+      - name: Arrêter NVDA
+        if: always()
+        shell: pwsh
+        run: |
+          Get-Process -Name nvda -ErrorAction SilentlyContinue | Stop-Process -Force
