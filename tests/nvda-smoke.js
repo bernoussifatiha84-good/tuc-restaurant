@@ -52,6 +52,21 @@ function sendScreenReaderKeys(keys) {
   execFileSync(python, [script, keys], { encoding: 'utf8', timeout: 15000 });
 }
 
+async function waitForActiveElement(page, predicate, description) {
+  try {
+    await page.waitForFunction(predicate, undefined, { timeout: 10000 });
+  } catch (error) {
+    const focusState = await page.evaluate(() => ({
+      activeElement: document.activeElement?.outerHTML?.slice(0, 500) || null,
+      hasFocus: document.hasFocus(),
+      title: document.title,
+      focusableElements: [...document.querySelectorAll('a[href], button, input, select, textarea, [tabindex]:not([tabindex="-1"])')]
+        .map((element) => ({ id: element.id, tag: element.tagName, disabled: element.disabled, tabIndex: element.tabIndex })),
+    }));
+    throw new Error(`Timed out waiting for focus on ${description}: ${error.message}; state: ${JSON.stringify(focusState)}`);
+  }
+}
+
 function assertSpoken(transcript, text, context) {
   assert(transcript.toLocaleLowerCase().includes(text.toLocaleLowerCase()), `NVDA Speech Viewer did not contain ${JSON.stringify(text)} (${context}). Transcript:\n${transcript}`);
 }
@@ -85,26 +100,17 @@ async function main() {
     await page.waitForTimeout(250);
     focusScreenReaderBrowser();
     sendScreenReaderKeys('{TAB}');
-    try {
-      await page.waitForFunction(() => document.activeElement.id === 'tuc-onboarding-name', undefined, { timeout: 10000 });
-    } catch (error) {
-      const focusState = await page.evaluate(() => ({
-        activeElement: document.activeElement?.outerHTML?.slice(0, 500) || null,
-        hasFocus: document.hasFocus(),
-        title: document.title,
-      }));
-      throw new Error(`${error.message}; first-tab focus state: ${JSON.stringify(focusState)}`);
-    }
+    await waitForActiveElement(page, () => document.activeElement.id === 'tuc-onboarding-name', 'restaurant name after first Tab');
     await page.waitForTimeout(500);
     sendScreenReaderKeys('{TAB}');
-    await page.waitForFunction(() => document.activeElement.id === 'tuc-onboarding-menu-photo');
+    await waitForActiveElement(page, () => document.activeElement.id === 'tuc-onboarding-menu-photo', 'menu photo after second Tab');
     await page.waitForTimeout(500);
     sendScreenReaderKeys('{TAB}');
-    await page.waitForFunction(() => document.activeElement.matches('.tuc-onboarding-submit[type="submit"]'));
+    await waitForActiveElement(page, () => document.activeElement.matches('.tuc-onboarding-submit[type="submit"]'), 'submit button after third Tab');
     await page.waitForTimeout(500);
     sendScreenReaderKeys('+{TAB}');
     sendScreenReaderKeys('+{TAB}');
-    await page.waitForFunction(() => document.activeElement.id === 'tuc-onboarding-name');
+    await waitForActiveElement(page, () => document.activeElement.id === 'tuc-onboarding-name', 'restaurant name after reverse Tabs');
     sendScreenReaderKeys('Test Restaurant');
     const arabicName = 'مطعم الاختبار';
     sendScreenReaderKeys('^a');
@@ -121,7 +127,7 @@ async function main() {
     sendScreenReaderKeys('{ENTER}');
     const response = await responsePromise;
     assert.equal(response.status(), 201);
-    await page.waitForFunction(() => document.activeElement?.id === 'tuc-onboarding-wa-link');
+    await waitForActiveElement(page, () => document.activeElement?.id === 'tuc-onboarding-wa-link', 'WhatsApp link after application submission');
     await page.waitForTimeout(1200);
 
     const speechViewer = readSpeechViewer();
