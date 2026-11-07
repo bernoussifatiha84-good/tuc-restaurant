@@ -41,7 +41,7 @@ def main():
         focus_browser_window()
         return
 
-    # Focus the browser once per test; avoid repeatedly enumerating windows while typing.
+    focus_browser_window()
     move_mouse_away_from_speech_viewer()
     send_keys(sys.argv[1], pause=0.04)
 
