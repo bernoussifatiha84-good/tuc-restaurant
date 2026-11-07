@@ -7,7 +7,12 @@
   const link = document.querySelector('#tuc-onboarding-wa-link');
   const confirmed = document.querySelector('#tuc-onboarding-wa-confirmed');
   const button = form.querySelector('button[type="submit"]');
+  const nameInput = form.querySelector('#tuc-onboarding-name');
   const restBase = form.dataset.rest;
+
+  nameInput.addEventListener('input', () => {
+    nameInput.lang = /[\u0600-\u06FF\u0750-\u077F\u08A0-\u08FF]/u.test(nameInput.value) ? 'ar' : 'fr';
+  });
   let pollTimer = 0;
   let pollCount = 0;
   let credentials = null;
@@ -42,6 +47,7 @@
     status.textContent = 'Envoi de votre demande…';
     result.hidden = true;
     confirmed.hidden = true;
+    form.setAttribute('aria-busy', 'true');
     button.disabled = true;
     try {
       const response = await fetch(`${restBase}restaurant-applications`, {
@@ -55,10 +61,14 @@
       link.textContent = 'Continuer dans WhatsApp';
       result.hidden = false;
       status.textContent = `${data.message} Référence : ${data.reference}.`;
+      form.setAttribute('aria-busy', 'false');
       form.hidden = true;
+      link.focus();
     } catch (error) {
       status.textContent = error.message || 'Une erreur est survenue. Réessayez.';
+      form.setAttribute('aria-busy', 'false');
       button.disabled = false;
+      button.focus();
     }
   });
 })();

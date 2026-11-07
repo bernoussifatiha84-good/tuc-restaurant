@@ -86,7 +86,7 @@ final class TUC_Onboarding_Restaurant
     public static function render_form(): string
     {
         ob_start(); ?>
-        <section class="tuc-onboarding" lang="fr">
+        <div class="tuc-onboarding" lang="fr">
           <section class="tuc-onboarding-card" aria-labelledby="tuc-onboarding-title">
             <p class="tuc-onboarding-kicker">TUC · Casablanca</p>
             <h1 id="tuc-onboarding-title">Votre restaurant, accompagné par notre équipe</h1>
@@ -94,7 +94,7 @@ final class TUC_Onboarding_Restaurant
             <form id="tuc-restaurant-onboarding-form" enctype="multipart/form-data" data-rest="<?php echo esc_url(rest_url('tuc/v1/')); ?>">
               <label class="tuc-onboarding-field" for="tuc-onboarding-name">
                 <span>Nom du restaurant</span>
-                <input id="tuc-onboarding-name" name="restaurant_name" type="text" maxlength="120" minlength="2" autocomplete="organization" dir="auto" required>
+                <input id="tuc-onboarding-name" name="restaurant_name" type="text" maxlength="120" minlength="2" autocomplete="organization" dir="auto" lang="fr" required>
                 <small>En français ou en arabe.</small>
               </label>
               <label class="tuc-onboarding-field" for="tuc-onboarding-menu-photo">
@@ -107,12 +107,12 @@ final class TUC_Onboarding_Restaurant
             <p id="tuc-onboarding-status" class="tuc-onboarding-status" role="status" aria-live="polite"></p>
             <div id="tuc-onboarding-whatsapp" class="tuc-onboarding-whatsapp" hidden>
               <p>Votre demande est enregistrée. Appuyez sur le bouton, puis envoyez le message prérempli dans WhatsApp pour que notre équipe puisse vous répondre.</p>
-              <a id="tuc-onboarding-wa-link" class="tuc-onboarding-submit" href="#" target="_blank" rel="noopener noreferrer" referrerpolicy="no-referrer">Continuer dans WhatsApp</a>
+              <a id="tuc-onboarding-wa-link" class="tuc-onboarding-submit" href="#" target="_blank" rel="noopener noreferrer" referrerpolicy="no-referrer" aria-label="Continuer dans WhatsApp (s’ouvre dans un nouvel onglet)">Continuer dans WhatsApp</a>
               <p id="tuc-onboarding-wa-confirmed" class="tuc-onboarding-confirmed" hidden>WhatsApp confirmé. Notre équipe vous accompagnera pour créer votre espace et vous transmettre un lien d’accès personnel.</p>
             </div>
             <p class="tuc-onboarding-privacy">Aucun mot de passe, e-mail ou numéro n’est demandé dans ce formulaire. Votre message WhatsApp est envoyé par vous; TUC ne l’envoie pas automatiquement.</p>
           </section>
-        </section>
+        </div>
         <?php return (string) ob_get_clean();
     }
 

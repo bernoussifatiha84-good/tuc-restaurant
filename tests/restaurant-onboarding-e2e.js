@@ -1,6 +1,7 @@
 const assert = require('node:assert/strict');
 const crypto = require('node:crypto');
 const { chromium } = require('playwright');
+const axeCorePath = require.resolve('axe-core');
 
 const baseUrl = (process.env.TUC_MOBILE_E2E_URL || 'http://127.0.0.1:8080').replace(/\/$/, '');
 const n8nUrl = (process.env.TUC_N8N_URL || 'http://127.0.0.1:5678').replace(/\/$/, '');
@@ -37,6 +38,18 @@ async function sendApplicationMessageThroughN8n(code, phone) {
   return data;
 }
 
+async function assertAccessibleComponent(page, state) {
+  await page.addScriptTag({ path: axeCorePath });
+  const result = await page.evaluate(async () => {
+    const root = document.querySelector('.tuc-onboarding-card');
+    return window.axe.run(root, {
+      runOnly: { type: 'tag', values: ['wcag2a', 'wcag2aa', 'wcag21a', 'wcag21aa', 'wcag22aa'] },
+    });
+  });
+  const violations = result.violations.map((item) => `${item.id}: ${item.nodes.map((node) => node.target.join(' ')).join(', ')}`);
+  assert.deepEqual(violations, [], `axe-core WCAG checks pass (${state}): ${violations.join('; ')}`);
+}
+
 async function main() {
   assert(inboundSecret.length >= 32 && waSecret.length >= 32, 'secrets HMAC éphémères configurés pour le test n8n');
   assert(adminPassword.length >= 24, 'identifiants éphémères de l’administration configurés');
@@ -52,17 +65,29 @@ async function main() {
     await form.waitFor({ state: 'visible' });
     assert.equal(await form.locator('input').count(), 2, 'le formulaire public ne demande que le nom et la photo du menu');
     assert.equal(await applicant.locator('#tuc-onboarding-name').getAttribute('dir'), 'auto', 'le nom s’affiche correctement en français ou en arabe');
+    assert.equal(await applicant.locator('#tuc-onboarding-name').getAttribute('lang'), 'fr');
+    await assertAccessibleComponent(applicant, 'formulaire initial');
     await applicant.locator('#tuc-onboarding-name').fill(restaurantName);
+    assert.equal(await applicant.locator('#tuc-onboarding-name').getAttribute('lang'), 'ar', 'le champ nom marque la langue arabe pour les technologies d’assistance');
     await applicant.locator('#tuc-onboarding-menu-photo').setInputFiles({
       name: 'menu-test.png',
       mimeType: 'image/png',
       buffer: Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+j5Z8AAAAASUVORK5CYII=', 'base64'),
     });
+    await applicant.locator('#tuc-onboarding-name').focus();
+    await applicant.keyboard.press('Tab');
+    assert.equal(await applicant.evaluate(() => document.activeElement.id), 'tuc-onboarding-menu-photo', 'le champ photo suit le nom dans l’ordre clavier');
+    await applicant.keyboard.press('Tab');
+    assert(await applicant.locator('.tuc-onboarding-submit[type="submit"]').evaluate((button) => button === document.activeElement), 'le bouton envoyer est accessible au clavier');
     const submitResponse = applicant.waitForResponse((response) => response.url().includes('/wp-json/tuc/v1/restaurant-applications'));
-    await applicant.locator('.tuc-onboarding-submit[type="submit"]').click();
+    await applicant.keyboard.press('Enter');
     const applicationResponse = await submitResponse;
     const application = await applicationResponse.json();
     assert.equal(applicationResponse.status(), 201, `la demande est créée : ${JSON.stringify(application)}`);
+    await applicant.waitForFunction(() => document.activeElement?.id === 'tuc-onboarding-wa-link');
+    assert.equal(await applicant.evaluate(() => document.activeElement.id), 'tuc-onboarding-wa-link', 'après envoi, le focus est placé sur l’étape suivante');
+    assert.match(await applicant.locator('#tuc-onboarding-wa-link').getAttribute('aria-label'), /nouvel onglet/);
+    await assertAccessibleComponent(applicant, 'confirmation et lien WhatsApp');
     assert.match(application.reference, /^[A-Z0-9]{10}$/);
     assert.equal(new URL(application.wa_url).hostname, 'wa.me');
     const waMessage = new URL(application.wa_url).searchParams.get('text') || '';
