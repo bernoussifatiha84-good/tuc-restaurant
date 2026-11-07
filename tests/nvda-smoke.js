@@ -37,8 +37,13 @@ function readSpeechViewer() {
   const python = process.env.PYTHON || 'python';
   const script = path.join(__dirname, 'read-nvda-speech-viewer.py');
   const output = execFileSync(python, [script, '25'], { encoding: 'utf8', timeout: 30000 });
-  const parsed = JSON.parse(output.trim());
-  return parsed;
+  return JSON.parse(output.trim());
+}
+
+function sendScreenReaderKeys(keys) {
+  const python = process.env.PYTHON || 'python';
+  const script = path.join(__dirname, 'send-nvda-keys.py');
+  execFileSync(python, [script, keys], { encoding: 'utf8', timeout: 15000 });
 }
 
 function assertSpoken(transcript, text, context) {
@@ -67,33 +72,34 @@ async function main() {
     await page.bringToFront();
     await page.waitForTimeout(1200);
 
-    // Use actual Tab/Shift+Tab/Enter so NVDA observes real browser focus transitions.
-    await page.keyboard.press('Tab');
-    assert.equal(await page.evaluate(() => document.activeElement.id), 'tuc-onboarding-name');
+    // Use Windows SendInput via pywinauto, not CDP keyboard events, so NVDA receives the same OS focus/input events as a human.
+    await page.bringToFront();
+    sendScreenReaderKeys('{TAB}');
+    await page.waitForFunction(() => document.activeElement.id === 'tuc-onboarding-name');
     await page.waitForTimeout(500);
-    await page.keyboard.press('Tab');
-    assert.equal(await page.evaluate(() => document.activeElement.id), 'tuc-onboarding-menu-photo');
+    sendScreenReaderKeys('{TAB}');
+    await page.waitForFunction(() => document.activeElement.id === 'tuc-onboarding-menu-photo');
     await page.waitForTimeout(500);
-    await page.keyboard.press('Tab');
-    assert(await page.locator('.tuc-onboarding-submit[type="submit"]').evaluate((button) => button === document.activeElement));
+    sendScreenReaderKeys('{TAB}');
+    await page.waitForFunction(() => document.activeElement.matches('.tuc-onboarding-submit[type="submit"]'));
     await page.waitForTimeout(500);
-    await page.keyboard.press('Shift+Tab');
-    await page.keyboard.press('Shift+Tab');
-    assert.equal(await page.evaluate(() => document.activeElement.id), 'tuc-onboarding-name');
-    await page.keyboard.type('Test Restaurant', { delay: 50 });
+    sendScreenReaderKeys('+{TAB}');
+    sendScreenReaderKeys('+{TAB}');
+    await page.waitForFunction(() => document.activeElement.id === 'tuc-onboarding-name');
+    sendScreenReaderKeys('Test Restaurant');
     const arabicName = 'مطعم الاختبار';
-    await page.keyboard.press('Control+A');
-    await page.keyboard.type(arabicName, { delay: 80 });
+    sendScreenReaderKeys('^a');
+    sendScreenReaderKeys(arabicName);
     assert.equal(await page.locator('#tuc-onboarding-name').getAttribute('lang'), 'ar');
     await page.locator('#tuc-onboarding-menu-photo').setInputFiles({
       name: 'nvda-menu.png', mimeType: 'image/png',
       buffer: Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+j5Z8AAAAASUVORK5CYII=', 'base64'),
     });
-    await page.locator('#tuc-onboarding-name').focus();
-    await page.keyboard.press('Tab');
-    await page.keyboard.press('Tab');
+    await page.evaluate(() => document.querySelector('#tuc-onboarding-name').focus());
+    sendScreenReaderKeys('{TAB}');
+    sendScreenReaderKeys('{TAB}');
     const responsePromise = page.waitForResponse((response) => response.url().includes('/wp-json/tuc/v1/restaurant-applications'));
-    await page.keyboard.press('Enter');
+    sendScreenReaderKeys('{ENTER}');
     const response = await responsePromise;
     assert.equal(response.status(), 201);
     await page.waitForFunction(() => document.activeElement?.id === 'tuc-onboarding-wa-link');
