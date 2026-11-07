@@ -591,7 +591,8 @@ jobs:
         shell: pwsh
         run: |
           $ErrorActionPreference = 'Stop'
-          $msi = Join-Path $env:RUNNER_TEMP 'espeak-ng-1.52.0.msi'
+          try {
+            $msi = Join-Path $env:RUNNER_TEMP 'espeak-ng-1.52.0.msi'
           Invoke-WebRequest -Uri 'https://github.com/espeak-ng/espeak-ng/releases/download/1.52.0/espeak-ng.msi' -OutFile $msi -TimeoutSec 90
           $install = Start-Process -FilePath msiexec.exe -ArgumentList @('/i', $msi, '/qn', '/norestart') -Wait -PassThru
           if ($install.ExitCode -notin @(0, 3010)) { throw "eSpeak NG installation failed: $($install.ExitCode)" }
@@ -606,7 +607,16 @@ jobs:
           $result = python tests/validate-espeak-audio.py --french $french --arabic $arabic
           if ($LASTEXITCODE -ne 0) { throw 'eSpeak French/Arabic WAV validation failed' }
           Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value "`n### Offline eSpeak NG audio samples`n````json`n$result`n````"
-          Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value '`nThese WAVs are generated directly by eSpeak NG (not NVDA); they verify usable French/Arabic synthesis and are available for human listening.'
+            Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value '`nThese WAVs are generated directly by eSpeak NG (not NVDA); they verify usable French/Arabic synthesis and are available for human listening.'
+          } catch {
+            $detail = $_.Exception.ToString() + "`n" + $_.ScriptStackTrace
+            $files = Get-ChildItem -Path $env:RUNNER_TEMP -Filter 'espeak-*.wav' -ErrorAction SilentlyContinue | Select-Object Name, Length | Format-Table | Out-String
+            $detail += "`nGenerated sample files:`n$files"
+            Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value "`n### eSpeak sample generation error`n````text`n$detail`n````"
+            $annotation = ($detail -replace '%', '%25' -replace '\r', '%0D' -replace '\n', '%0A')
+            Write-Output "::error title=eSpeak offline voice test::$annotation"
+            throw
+          }
 
       - name: Publier la transcription, les journaux NVDA et les WAV eSpeak
         if: always()
