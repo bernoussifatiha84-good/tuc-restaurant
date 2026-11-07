@@ -129,10 +129,16 @@ final class TUC_Compte
     {
         $jeton = wp_generate_password(40, false, false);
         $retour = self::chemin_retour($retour);
-        set_transient('tuc_magie_' . hash('sha256', $jeton), [
+        $transientKey = 'tuc_magie_' . hash('sha256', $jeton);
+        $previousKey = (string) get_user_meta($uid, 'tuc_magic_link_key', true);
+        if (preg_match('/^tuc_magie_[a-f0-9]{64}$/', $previousKey)) {
+            delete_transient($previousKey);
+        }
+        set_transient($transientKey, [
             'uid' => $uid,
             'retour' => $retour,
         ], 15 * MINUTE_IN_SECONDS);
+        update_user_meta($uid, 'tuc_magic_link_key', $transientKey);
         return add_query_arg('tuc_magie', $jeton, home_url('/connexion/'));
     }
 
@@ -257,17 +263,29 @@ final class TUC_Compte
      */
     public static function wa_lien(WP_REST_Request $req)
     {
-        $but   = sanitize_key((string) ($req->get_param('but') ?? 'compte')); // compte | commande
+        $but   = sanitize_key((string) ($req->get_param('but') ?? 'compte')); // compte | commande | restaurant_onboarding
         $resto = sanitize_title((string) ($req->get_param('resto') ?? ''));
         $table = (int) ($req->get_param('table') ?? 0);
+        $applicationId = absint($req->get_param('application_id'));
         $retour = self::chemin_retour((string) ($req->get_param('retour') ?? home_url('/')));
 
         $numero = preg_replace('/[^0-9]/', '', (string) get_option('tuc_wa_numero', ''));
         if ($numero === '') {
             return new WP_Error('tuc_wa', 'Numéro WhatsApp du site non configuré.', ['status' => 503]);
         }
-        if (!in_array($but, ['compte', 'commande'], true)) {
+        if (!in_array($but, ['compte', 'commande', 'restaurant_onboarding'], true)) {
             return new WP_Error('tuc_but', 'Objet de demande invalide.', ['status' => 422]);
+        }
+        if ($but === 'restaurant_onboarding') {
+            $application = get_post($applicationId);
+            $proof = (string) $req->get_param('wa_proof');
+            $proofHash = (string) get_post_meta($applicationId, 'tuc_onboarding_wa_proof_hash', true);
+            if (!$application instanceof WP_Post || $application->post_type !== TUC_Onboarding_Restaurant::CPT
+                || (string) get_post_meta($applicationId, 'tuc_onboarding_state', true) !== 'pending'
+                || strlen($proof) < 32 || $proofHash === '' || !hash_equals($proofHash, hash('sha256', $proof))) {
+                return new WP_Error('tuc_application', 'Demande restaurant inconnue ou déjà traitée.', ['status' => 404]);
+            }
+            delete_post_meta($applicationId, 'tuc_onboarding_wa_proof_hash');
         }
         if (!self::limiter_anonyme('wa_lien', 20, 10 * MINUTE_IN_SECONDS)) {
             return new WP_Error('tuc_trop', 'Trop de demandes. Réessayez plus tard.', ['status' => 429]);
@@ -291,11 +309,14 @@ final class TUC_Compte
             'resto'      => $resto,
             'table'      => $table,
             'retour'     => $retour,
+            'application_id' => $but === 'restaurant_onboarding' ? $applicationId : 0,
             'poll_hash'  => hash('sha256', $pollSecret),
         ], 30 * MINUTE_IN_SECONDS);
 
         if ($but === 'commande') {
             $texte = sprintf('TUC — JE COMMANDE %s [table %d] ref:%s', $resto, $table, $code);
+        } elseif ($but === 'restaurant_onboarding') {
+            $texte = sprintf('TUC — DEMANDE RESTAURANT ref:%s', $code);
         } else {
             $texte = sprintf('TUC — JE VEUX CRÉER MON COMPTE ref:%s', $code);
         }
@@ -328,6 +349,23 @@ final class TUC_Compte
         $telNormalise = self::normaliser($tel);
         if (!preg_match('/^[1-9][0-9]{7,14}$/', $telNormalise)) {
             return new WP_Error('tuc_tel', 'Numéro WhatsApp invalide.', ['status' => 422]);
+        }
+
+        if (($ctx['but'] ?? '') === 'restaurant_onboarding') {
+            $association = TUC_Onboarding_Restaurant::associer_whatsapp((int) ($ctx['application_id'] ?? 0), $telNormalise);
+            if (is_wp_error($association)) {
+                return $association;
+            }
+            $message = 'Merci, votre demande de restaurant est bien reçue. Notre équipe TUC va vous accompagner sur WhatsApp pour préparer votre espace et vous transmettre un accès personnel.';
+            set_transient('tuc_wa_ok_' . $code, [
+                'poll_hash' => (string) ($ctx['poll_hash'] ?? ''),
+                'type' => 'restaurant_application',
+                'reponse' => $message,
+                'magie' => '',
+                'cree' => false,
+            ], 30 * MINUTE_IN_SECONDS);
+            delete_transient('tuc_wa_' . $code);
+            return new WP_REST_Response(['ok' => true, 'type' => 'restaurant_application', 'reponse' => $message], 200);
         }
 
         [$user, $cree] = self::assurer($telNormalise);
@@ -470,8 +508,10 @@ final class TUC_Compte
 
         $response = new WP_REST_Response([
             'pret'  => true,
-            'cree'  => (bool) $ok['cree'],
-            'magie' => $ok['magie'],
+            'type' => (string) ($ok['type'] ?? 'client'),
+            'cree'  => (bool) ($ok['cree'] ?? false),
+            'magie' => (string) ($ok['magie'] ?? ''),
+            'reponse' => (string) ($ok['reponse'] ?? ''),
         ], 200);
         $response->header('Cache-Control', 'no-store, private, max-age=0');
         $response->header('Pragma', 'no-cache');
@@ -486,11 +526,18 @@ final class TUC_Compte
         if ($record === false) {
             return new WP_Error('tuc_jeton', 'Lien expiré ou déjà utilisé.', ['status' => 410]);
         }
-        delete_transient($cle); // usage unique
         $uid = is_array($record) ? (int) ($record['uid'] ?? 0) : (int) $record;
         if ($uid <= 0 || !get_userdata($uid)) {
+            delete_transient($cle);
             return new WP_Error('tuc_jeton', 'Compte associé au lien introuvable.', ['status' => 410]);
         }
+        $currentKey = (string) get_user_meta($uid, 'tuc_magic_link_key', true);
+        if ($currentKey !== '' && !hash_equals($currentKey, $cle)) {
+            delete_transient($cle);
+            return new WP_Error('tuc_jeton', 'Lien remplacé, expiré ou déjà utilisé.', ['status' => 410]);
+        }
+        delete_transient($cle); // usage unique
+        delete_user_meta($uid, 'tuc_magic_link_key');
         $retour = is_array($record) ? (string) ($record['retour'] ?? home_url('/')) : home_url('/');
 
         wp_set_current_user($uid);

@@ -286,7 +286,10 @@ final class TUC_Caisse
         $id = (int) get_user_meta($user_id, 'tuc_resto_id', true);
         if ($id > 0) {
             $p = get_post($id);
-            if ($p instanceof WP_Post && $p->post_type === 'tuc_resto' && $p->post_status === 'publish') {
+            $published = $p instanceof WP_Post && $p->post_type === 'tuc_resto' && $p->post_status === 'publish';
+            $ownedDraft = $p instanceof WP_Post && $p->post_type === 'tuc_resto' && $p->post_status === 'draft'
+                && user_can($user_id, TUC_Roles::CAP_MANAGE_RESTAURANT);
+            if ($published || $ownedDraft) {
                 return $p;
             }
             return null; // une affectation invalide ne doit jamais retomber sur un autre commerce.

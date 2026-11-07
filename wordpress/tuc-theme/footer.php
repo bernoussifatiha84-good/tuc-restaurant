@@ -22,6 +22,7 @@ $privacy_url = get_privacy_policy_url();
         <h2><?php esc_html_e('Restaurants', 'tuc'); ?></h2>
         <ul>
           <li><a href="<?php echo esc_url(home_url('/espace-pro/')); ?>"><?php esc_html_e('Espace restaurateur', 'tuc'); ?></a></li>
+          <li><a href="<?php echo esc_url(home_url('/devenir-restaurateur/')); ?>"><?php esc_html_e('Rejoindre TUC', 'tuc'); ?></a></li>
           <li><a href="<?php echo esc_url(home_url('/caisse/')); ?>"><?php esc_html_e('Accès caisse', 'tuc'); ?></a></li>
         </ul>
       </div>

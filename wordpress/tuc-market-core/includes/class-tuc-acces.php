@@ -5,7 +5,7 @@ if (!defined('ABSPATH')) {
     exit;
 }
 
-/** Point unique d’autorisation métier, toujours scoppé à un restaurant publié. */
+/** Point unique d’autorisation métier, scoppé au restaurant publié ou au brouillon de son responsable. */
 final class TUC_Acces
 {
     public static function peut(string $capability, ?int $restaurant_id = null, ?int $user_id = null): bool
@@ -27,7 +27,13 @@ final class TUC_Acces
         }
 
         $restaurant = get_post($restaurant_id);
-        if (!$restaurant instanceof WP_Post || $restaurant->post_type !== TUC_CPT::RESTO || $restaurant->post_status !== 'publish') {
+        if (!$restaurant instanceof WP_Post || $restaurant->post_type !== TUC_CPT::RESTO) {
+            return false;
+        }
+        $ownsDraft = $restaurant->post_status === 'draft'
+            && (int) get_user_meta($user_id, 'tuc_resto_id', true) === $restaurant_id
+            && user_can($user_id, TUC_Roles::CAP_MANAGE_RESTAURANT);
+        if ($restaurant->post_status !== 'publish' && !$ownsDraft) {
             return false;
         }
         if (user_can($user_id, 'manage_options')) {
