@@ -111,6 +111,8 @@ async function main() {
     for (const phrase of [
       'Nom du restaurant',
       'En français ou en arabe',
+      'مطعم',
+      'الاختبار',
       'Photo du menu',
       'JPEG, PNG ou WebP',
       'Demander l’accompagnement',
