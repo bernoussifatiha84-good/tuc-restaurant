@@ -6,6 +6,7 @@ import time
 from ctypes import wintypes
 
 user32 = ctypes.windll.user32
+kernel32 = ctypes.windll.kernel32
 KEYEVENTF_KEYUP = 0x0002
 KEYEVENTF_UNICODE = 0x0004
 INPUT_KEYBOARD = 1
@@ -60,7 +61,7 @@ def focus_browser(hwnd):
     foreground = user32.GetForegroundWindow()
     foreground_thread = user32.GetWindowThreadProcessId(foreground, None) if foreground else 0
     target_thread = user32.GetWindowThreadProcessId(hwnd, None)
-    current_thread = user32.GetCurrentThreadId()
+    current_thread = kernel32.GetCurrentThreadId()
     attached = []
     for thread in {foreground_thread, target_thread} - {0, current_thread}:
         if user32.AttachThreadInput(current_thread, thread, True):
