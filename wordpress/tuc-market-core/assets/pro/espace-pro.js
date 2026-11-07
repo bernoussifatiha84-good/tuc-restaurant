@@ -480,15 +480,34 @@
     updatePreview();
   });
   $('#tuc-pro-tabs')?.addEventListener('click', (event) => {
-    const button = event.target.closest('[data-tab]');
+    const button = event.target.closest('[role="tab"][data-tab]');
     if (!button) return;
     const tab = button.dataset.tab;
-    $$('[data-tab]', $('#tuc-pro-tabs')).forEach((item) => item.setAttribute('aria-selected', String(item === button)));
+    $$('[role="tab"]', $('#tuc-pro-tabs')).forEach((item) => {
+      const selected = item === button;
+      item.setAttribute('aria-selected', String(selected));
+      item.tabIndex = selected ? 0 : -1;
+    });
     $$('[data-panel]').forEach((panel) => { panel.hidden = panel.dataset.panel !== tab; });
     $('#tuc-pro-page-title').textContent = { menu: 'Votre menu', orders: 'Commandes', settings: 'Votre boutique' }[tab] || 'Votre espace';
     $('#tuc-new-item').hidden = tab !== 'menu';
     if (tab !== 'menu') editor.hidden = true;
     if (tab === 'orders') loadOrders();
+  });
+  $('#tuc-pro-tabs')?.addEventListener('keydown', (event) => {
+    const tabs = $$('[role="tab"]', $('#tuc-pro-tabs'));
+    const currentIndex = tabs.indexOf(event.target.closest('[role="tab"]'));
+    if (currentIndex < 0) return;
+    const rtl = getComputedStyle($('#tuc-pro-tabs')).direction === 'rtl';
+    let nextIndex = currentIndex;
+    if (event.key === 'Home') nextIndex = 0;
+    else if (event.key === 'End') nextIndex = tabs.length - 1;
+    else if (event.key === 'ArrowRight') nextIndex = (currentIndex + (rtl ? -1 : 1) + tabs.length) % tabs.length;
+    else if (event.key === 'ArrowLeft') nextIndex = (currentIndex + (rtl ? 1 : -1) + tabs.length) % tabs.length;
+    else return;
+    event.preventDefault();
+    tabs[nextIndex].focus();
+    tabs[nextIndex].click();
   });
   $('#tuc-refresh-orders')?.addEventListener('click', loadOrders);
   $('#tuc-order-filter')?.addEventListener('change', loadOrders);

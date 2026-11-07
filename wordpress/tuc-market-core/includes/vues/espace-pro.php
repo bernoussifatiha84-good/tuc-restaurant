@@ -25,13 +25,13 @@ $peutGererBoutique = current_user_can(TUC_Roles::CAP_MANAGE_RESTAURANT) || curre
         <p class="tuc-pro-intro"><?php esc_html_e('Menu, commandes et paramètres de votre restaurant.', 'tuc-core'); ?></p></div>
       <button id="tuc-new-item" class="tuc-button tuc-button-primary" type="button"><span aria-hidden="true">＋</span> <?php esc_html_e('Ajouter un plat', 'tuc-core'); ?></button>
     </div>
-    <nav id="tuc-pro-tabs" class="tuc-pro-tabs" aria-label="Navigation de l’espace professionnel">
-      <button type="button" data-tab="menu" aria-selected="true"><?php esc_html_e('Menu', 'tuc-core'); ?></button>
-      <?php if ($peutVoirCommandes) : ?><button type="button" data-tab="orders" aria-selected="false"><?php esc_html_e('Commandes', 'tuc-core'); ?><span id="tuc-orders-count" class="tuc-tab-count"></span></button><?php endif; ?>
-      <?php if ($peutGererBoutique) : ?><button type="button" data-tab="settings" aria-selected="false"><?php esc_html_e('Boutique', 'tuc-core'); ?></button><?php endif; ?>
+    <nav id="tuc-pro-tabs" class="tuc-pro-tabs" role="tablist" aria-label="Navigation de l’espace professionnel">
+      <button id="tuc-tab-menu" type="button" role="tab" aria-controls="tuc-panel-menu" aria-selected="true" tabindex="0" data-tab="menu"><?php esc_html_e('Menu', 'tuc-core'); ?></button>
+      <?php if ($peutVoirCommandes) : ?><button id="tuc-tab-orders" type="button" role="tab" aria-controls="tuc-panel-orders" aria-selected="false" tabindex="-1" data-tab="orders"><?php esc_html_e('Commandes', 'tuc-core'); ?><span id="tuc-orders-count" class="tuc-tab-count"></span></button><?php endif; ?>
+      <?php if ($peutGererBoutique) : ?><button id="tuc-tab-settings" type="button" role="tab" aria-controls="tuc-panel-settings" aria-selected="false" tabindex="-1" data-tab="settings"><?php esc_html_e('Boutique', 'tuc-core'); ?></button><?php endif; ?>
     </nav>
     <div id="tuc-pro-notice" class="tuc-notice" role="status" aria-live="polite" hidden></div>
-    <section class="tuc-pro-panel" data-panel="menu">
+    <section id="tuc-panel-menu" class="tuc-pro-panel" data-panel="menu" role="tabpanel" aria-labelledby="tuc-tab-menu" tabindex="0">
       <div class="tuc-pro-grid">
         <section class="tuc-menu-panel" aria-label="Menu du restaurant">
           <div id="tuc-menu-loading" class="tuc-loading" role="status"><?php esc_html_e('Chargement de votre menu…', 'tuc-core'); ?></div>
@@ -66,7 +66,7 @@ $peutGererBoutique = current_user_can(TUC_Roles::CAP_MANAGE_RESTAURANT) || curre
     </section>
 
     <?php if ($peutVoirCommandes) : ?>
-    <section class="tuc-pro-panel" data-panel="orders" hidden>
+    <section id="tuc-panel-orders" class="tuc-pro-panel" data-panel="orders" role="tabpanel" aria-labelledby="tuc-tab-orders" tabindex="0" hidden>
       <div class="tuc-panel-heading"><div><p class="tuc-eyebrow"><?php esc_html_e('SERVICE', 'tuc-core'); ?></p><h2><?php esc_html_e('Commandes récentes', 'tuc-core'); ?></h2></div><button id="tuc-refresh-orders" type="button" class="tuc-button tuc-button-soft"><?php esc_html_e('Actualiser', 'tuc-core'); ?></button></div>
       <label class="tuc-order-filter"><span><?php esc_html_e('Afficher', 'tuc-core'); ?></span><select id="tuc-order-filter"><option value="toutes"><?php esc_html_e('Toutes les commandes', 'tuc-core'); ?></option><option value="nouvelle"><?php esc_html_e('À traiter', 'tuc-core'); ?></option><option value="preparation"><?php esc_html_e('En préparation', 'tuc-core'); ?></option><option value="prete"><?php esc_html_e('Prêtes', 'tuc-core'); ?></option><option value="servie"><?php esc_html_e('Terminées', 'tuc-core'); ?></option></select></label>
       <div id="tuc-orders-list" class="tuc-orders-list" aria-live="polite"><div class="tuc-loading"><?php esc_html_e('Chargement des commandes…', 'tuc-core'); ?></div></div>
@@ -74,7 +74,7 @@ $peutGererBoutique = current_user_can(TUC_Roles::CAP_MANAGE_RESTAURANT) || curre
     <?php endif; ?>
 
     <?php if ($peutGererBoutique) : ?>
-    <section class="tuc-pro-panel" data-panel="settings" hidden>
+    <section id="tuc-panel-settings" class="tuc-pro-panel" data-panel="settings" role="tabpanel" aria-labelledby="tuc-tab-settings" tabindex="0" hidden>
       <div class="tuc-panel-heading"><div><p class="tuc-eyebrow"><?php esc_html_e('PARAMÈTRES', 'tuc-core'); ?></p><h2><?php esc_html_e('Votre boutique', 'tuc-core'); ?></h2></div></div>
       <form id="tuc-store-settings" class="tuc-settings-card">
         <label class="tuc-toggle"><input id="tuc-store-open" type="checkbox" checked><span class="tuc-toggle-ui"></span><span><?php esc_html_e('Accepter les commandes', 'tuc-core'); ?></span></label>

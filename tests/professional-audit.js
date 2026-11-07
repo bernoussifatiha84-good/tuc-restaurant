@@ -290,7 +290,7 @@ async function main() {
       httpStatus: proDashboard.httpStatus,
       widths: proDashboard.widths,
       keyboardFocus: proDashboard.keyboardFocus,
-      axeViolations: proDashboard.accessibility.violations.map(({ id, impact, count }) => ({ id, impact, count })),
+      axeViolations: proDashboard.accessibility.violations.map(({ id, impact, count, examples }) => ({ id, impact, count, targets: examples.slice(0, 2).map((example) => example.target) })),
     }),
     lighthouse: lighthouse.map(({ name, scores, vitals }) => ({ name, scores, vitals })),
     pages: manual.map((page) => {
