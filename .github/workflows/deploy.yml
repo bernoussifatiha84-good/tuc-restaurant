@@ -26,6 +26,8 @@ permissions:
 
 concurrency:
   group: deploy-${{ github.ref }}
+  # Jamais d'annulation en cours de route : un rsync --delete interrompu
+  # laisserait le site a moitie deploye.
   cancel-in-progress: false
 
 jobs:
