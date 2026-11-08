@@ -161,3 +161,45 @@ existantes, ce qui faisait passer de la fiction pour de vrais commerces.
 Il ne crée ni numéro WhatsApp ni compte : ce sont des décisions distinctes.
 
 **BREAKING :** `/tuc/v1/restos` et `/tuc/v1/promos` renvoient désormais la base.
+
+### Exécuter le seed sur un serveur : deux prérequis, pas zéro
+
+La commande ci-dessus suppose le fichier **présent sur l'hôte**. Or `deploy.yml`
+ne synchronise que `wordpress/tuc-theme/` et `wordpress/tuc-market-core/` :
+`tools/` n'est **pas déployé**. Constater avant d'exécuter :
+
+```bash
+wp eval 'echo wp_get_environment_type();'   # 'production' => le script refusera
+test -r tools/seed-demo.php                 # absent => rien à exécuter
+```
+
+**Ne pas déplacer le seed dans `tuc-market-core/tools/` pour le voir déployé.** Le
+job `deploiement` est commun à `uat` et `prd` (`environment:` dynamique) et le
+rsync du plugin est le même pour les deux : le script de démonstration partirait
+aussi **en production**, dans un répertoire servi par le web. C'est l'inverse du
+but recherché.
+
+Le bon modèle existe déjà dans ce dépôt : `tools/woocommerce-inventory.php` est
+envoyé par `scp` vers `/tmp/tuc-…-<run_id>.php`, exécuté par `wp eval-file`, dans un
+job `environment: uat` garde-fouté contre `URL_UAT == URL_PRD`. Rien ne reste à
+demeure sur l'hôte. Le seed doit suivre ce chemin, **sur déclenchement manuel** —
+on ne re-sème pas de la démo à chaque déploiement.
+
+### `WP_ENVIRONMENT_TYPE` est un réglage d'hôte, pas de dépôt
+
+Il vit dans `wp-config.php`. Le poser à la main hors Git veut dire qu'une
+réinstallation le fait revenir à `production` — le seed refuse alors de nouveau :
+la panne est du bon côté. Le risque réel est inverse : un `wp-config.php` d'UAT
+recopié en production y passerait la prod en `staging`.
+
+**Effet de bord à connaître :** `TUC_Security_Headers` n'émet HSTS qu'en
+`production`. Passer l'UAT en `staging` **retire donc `Strict-Transport-Security`**
+des réponses de l'UAT, qui ne reproduit plus ce comportement de la prod. Les
+autres en-têtes sont inchangés. Ce contrat est désormais couvert par la suite de
+régression (`headers_for()`), pour qu'un changement d'environnement ne soit plus
+un effet silencieux.
+
+Le plugin ne doit **jamais** définir cette constante lui-même : il l'imposerait à
+tous les sites où il est installé. Le déploiement peut en revanche la **lire et
+refuser** si elle ne correspond pas à la cible (`uat` → `staging`, `prd` →
+`production`).

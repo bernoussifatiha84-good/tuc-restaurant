@@ -103,6 +103,28 @@ try {
     $assert(post_type_exists('tuc_resto'), 'CPT restaurant enregistré');
     $assert(post_type_exists('tuc_menu_item'), 'CPT article/menu enregistré');
     $assert(post_type_exists('tuc_commande'), 'CPT commande enregistré');
+
+    // Les en-têtes de sécurité dépendent de WP_ENVIRONMENT_TYPE. Basculer un hôte
+    // en « staging » (pour laisser passer le seed de démonstration) retire HSTS :
+    // cet effet de bord doit être un contrat testé, pas une découverte en prod.
+    $assert(has_action('send_headers', [TUC_Security_Headers::class, 'send']) !== false, 'les en-têtes de sécurité sont branchés sur send_headers');
+    $headerEnvironments = ['production', 'staging', 'development', 'local', ''];
+    foreach ($headerEnvironments as $headerEnvironment) {
+        $emitted = TUC_Security_Headers::headers_for(true, $headerEnvironment);
+        $assert(($emitted['X-Content-Type-Options'] ?? '') === 'nosniff'
+            && ($emitted['X-Frame-Options'] ?? '') === 'SAMEORIGIN'
+            && ($emitted['Referrer-Policy'] ?? '') === 'strict-origin-when-cross-origin'
+            && ($emitted['Permissions-Policy'] ?? '') === 'geolocation=(self), camera=(), microphone=()',
+            'les en-têtes invariants sont émis quel que soit l’environnement (' . ($headerEnvironment ?: 'inconnu') . ')');
+    }
+    $assert(TUC_Security_Headers::headers_for(true, 'production')['Strict-Transport-Security'] === 'max-age=31536000',
+        'HSTS est émis en production sur HTTPS');
+    $assert(!array_key_exists('Strict-Transport-Security', TUC_Security_Headers::headers_for(true, 'staging')),
+        'HSTS est retiré en staging : l’UAT ne doit pas épingler les navigateurs en HTTPS');
+    $assert(!array_key_exists('Strict-Transport-Security', TUC_Security_Headers::headers_for(false, 'production')),
+        'HSTS n’est jamais émis sans HTTPS vérifié');
+    $assert(!array_key_exists('Strict-Transport-Security', TUC_Security_Headers::headers_for(true, '')),
+        'un environnement inconnu n’émet pas HSTS');
     $assert(TUC_Geo::distance2(33.5900, -7.6280, 33.5900, -7.6280) === 0.0
         && is_infinite(TUC_Geo::distance2(91, 0, 0, 0)), 'la distance géographique est métrique et rejette les coordonnées impossibles');
     $geoSorted = TUC_Geo::trier([
