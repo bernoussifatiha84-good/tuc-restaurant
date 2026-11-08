@@ -23,6 +23,7 @@ function utterances() {
     .map((name) => JSON.parse(fs.readFileSync(path.join(captureDir, name), 'utf8')));
 }
 
+let activePage;
 async function waitForSpeech(needle, timeout = 20000) {
   const start = Date.now();
   while (Date.now() - start < timeout) {
@@ -30,7 +31,8 @@ async function waitForSpeech(needle, timeout = 20000) {
     if (match) return match;
     await new Promise((resolve) => setTimeout(resolve, 200));
   }
-  throw new Error(`NVDA did not send ${JSON.stringify(needle)} to its built-in eSpeak driver. Captured text:\n${utterances().map((item) => item.text).join('\n')}`);
+  const state = activePage ? await activePage.evaluate(() => ({ active: document.activeElement?.outerHTML?.slice(0, 500), value: document.querySelector('#tuc-onboarding-name')?.value, lang: document.querySelector('#tuc-onboarding-name')?.lang, selection: [document.activeElement?.selectionStart, document.activeElement?.selectionEnd], hasFocus: document.hasFocus() })) : null;
+  throw new Error(`NVDA did not send ${JSON.stringify(needle)} to its built-in eSpeak driver. DOM: ${JSON.stringify(state)}. Captured text:\n${utterances().map((item) => item.text).join('\n')}`);
 }
 
 async function startFixtureServer() {
@@ -63,6 +65,7 @@ async function main() {
   try {
     const context = await browser.newContext({ viewport: { width: 1000, height: 760 } });
     const page = await context.newPage();
+    activePage = page;
     await page.route('**/wp-json/tuc/v1/restaurant-applications', (route) => route.fulfill({
       status: 201,
       contentType: 'application/json',
@@ -105,7 +108,8 @@ async function main() {
     await page.locator('#tuc-onboarding-name').fill(arabicName);
     await page.waitForFunction(() => document.querySelector('#tuc-onboarding-name').lang === 'ar');
     await page.locator('#tuc-onboarding-name').focus();
-    nativeKeys('{HOME}', '{RIGHT 12}');
+    await page.bringToFront();
+    nativeKeys('^a', '{HOME}', '{RIGHT 12}');
     for (const character of new Set([...arabicName.replace(/\s/gu, '')])) {
       await waitForSpeech(character);
     }
