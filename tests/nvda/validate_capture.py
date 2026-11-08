@@ -111,6 +111,9 @@ def main() -> int:
             chunk_stats = pcm_stats(chunk, fmt[1])
             if chunk_stats["peak"] < 100:
                 raise ValueError(f"NVDA {family} language segment is silent: {metadata['file']} {language}")
+            frame_bytes = fmt[0] * fmt[1]
+            if len(language_pcm[family]) % frame_bytes or len(chunk) % frame_bytes:
+                raise ValueError(f"Unaligned concatenated PCM: {metadata['file']} {language}, prefix={len(language_pcm[family])}, chunk={len(chunk)}")
             if language_pcm[family]:
                 language_pcm[family].extend(b"\x00" * (fmt[0] * fmt[1] * fmt[2] // 20))
             language_pcm[family].extend(chunk)
@@ -136,6 +139,8 @@ def main() -> int:
     samples = []
     for language in ("fr", "ar"):
         pcm = bytes(language_pcm[language])
+        if len(pcm) % (fmt[0] * fmt[1]):
+            raise ValueError(f"Final {language} PCM is unaligned: {len(pcm)} bytes")
         path = args.output / f"nvda-builtin-espeak-{language}.wav"
         write_wav(path, fmt, pcm)
         stats = pcm_stats(pcm, fmt[1])
