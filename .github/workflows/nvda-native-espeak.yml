@@ -275,8 +275,15 @@ jobs:
         shell: pwsh
         run: |
           $output = Join-Path $env:RUNNER_TEMP 'nvda-audio'
-          python tests/nvda/validate_capture.py --capture $env:TUC_NVDA_CAPTURE_DIR --output $output
-          if ($LASTEXITCODE -ne 0) { throw 'NVDA built-in eSpeak proof failed' }
+          python tests/nvda/validate_capture.py --capture $env:TUC_NVDA_CAPTURE_DIR --output $output *> (Join-Path $env:RUNNER_TEMP 'nvda-validation.log')
+          $validationExit = $LASTEXITCODE
+          $detail = Get-Content (Join-Path $env:RUNNER_TEMP 'nvda-validation.log') -Raw -Encoding UTF8
+          Write-Output $detail
+          if ($validationExit -ne 0) {
+            $oneLine = ($detail -replace '%','%25' -replace "`r",'%0D' -replace "`n",'%0A')
+            Write-Output "::error title=NVDA PCM validation::$oneLine"
+            throw 'NVDA built-in eSpeak proof failed'
+          }
           Add-Content $env:GITHUB_STEP_SUMMARY "### WAV issus du moteur eSpeak intégré à NVDA`n````json`n$(Get-Content (Join-Path $output 'manifest.json') -Raw)`n````"
 
       - name: Afficher les diagnostics NVDA même en cas d'échec
@@ -314,6 +321,7 @@ jobs:
             ${{ runner.temp }}/nvda-audio/
             ${{ runner.temp }}/nvda-report.json
             ${{ runner.temp }}/nvda-node.log
+            ${{ runner.temp }}/nvda-validation.log
             ${{ runner.temp }}/nvda.log
             ${{ runner.temp }}/nvda-config/nvda.ini
             ${{ runner.temp }}/fixture/source-commit.txt
