@@ -45,6 +45,36 @@ TOOL_TARGETS = {
     "seed-demo-uat": "uat",
 }
 
+# Topologie réelle : l'UAT est un sous-répertoire du dev. C'est le cas
+# dangereux — une racine dev mal renseignée peut désigner l'UAT.
+PERIMETER_VARS = {
+    "SSH_HOST": "host.example.invalid",
+    "SSH_USER": "deploy",
+    "SSH_PRIVATE_KEY": "cle-factice",
+    "SITE_URL": "https://dev.example.invalid",
+    "URL_PRD": "https://prd.example.invalid",
+    "ROOT_DEV": "sites/example/public_html",
+    "ROOT_UAT": "sites/example/public_html/uat",
+    "ROOT_PRD": "sites/prod/public_html",
+}
+
+# (libellé, ENV_NAME, SSH_ROOT, overrides, code_attendu)
+PERIMETER_CASES = [
+    ("dev + ROOT_DEV", "dev", "sites/example/public_html", {}, 0),
+    ("uat + ROOT_UAT", "uat", "sites/example/public_html/uat", {}, 0),
+    ("prd refusé", "prd", "sites/prod/public_html", {}, 1),
+    ("environnement inconnu refusé", "banana", "sites/example/public_html", {}, 1),
+    ("dev pointé sur l'UAT refusé", "dev", "sites/example/public_html/uat", {}, 1),
+    ("uat pointé sur le dev refusé", "uat", "sites/example/public_html", {}, 1),
+    ("ROOT_DEV finissant par /uat refusé", "dev", "sites/autre/uat",
+     {"ROOT_DEV": "sites/autre/uat"}, 1),
+    ("cible = ROOT_PRD refusée", "dev", "sites/prod/public_html", {}, 1),
+    ("cible = URL_PRD refusée", "dev", "sites/example/public_html",
+     {"SITE_URL": "https://prd.example.invalid"}, 1),
+    ("secret SSH manquant refusé", "dev", "sites/example/public_html",
+     {"SSH_HOST": ""}, 1),
+]
+
 # (libellé, ref_type, ref_name, event, operation, vars, code_attendu, env_attendu)
 CASES = [
     ("branche develop -> dev", "branch", "develop", "push", "", FAKE_VARS, 0, "dev"),
@@ -163,6 +193,97 @@ def check_guards(text: str | None = None) -> list[tuple[bool, str]]:
     return results
 
 
+def perimeter_step(job) -> str | None:
+    """Le step de validation de périmètre d'un job outil, s'il existe."""
+    for step in job.get("steps", []):
+        run = str(step.get("run", ""))
+        if 'case "$ENV_NAME"' in run:
+            return run
+    return None
+
+
+def run_perimeter(script: str, env_name: str, root: str, overrides: dict) -> tuple[int, str]:
+    env = {
+        "PATH": os.environ.get("PATH", "/usr/bin:/bin"),
+        **PERIMETER_VARS,
+        "ENV_NAME": env_name,
+        "SSH_ROOT": root,
+        **overrides,
+    }
+    proc = subprocess.run(
+        ["bash", "-c", script], env=env, capture_output=True, text=True, timeout=30
+    )
+    return proc.returncode, (proc.stdout + proc.stderr).strip()
+
+
+def perimeter_refuses_unknown(job) -> bool:
+    """Un refus n'est fermé que si un environnement imprévu arrête le job."""
+    script = perimeter_step(job)
+    if script is None:
+        return False
+    for env_name in ("prd", "banana", ""):
+        code, _ = run_perimeter(script, env_name, PERIMETER_VARS["ROOT_DEV"], {})
+        if code == 0:
+            return False
+    return True
+
+
+def check_dev_guard_harness() -> list[tuple[bool, str]]:
+    """Exécute le harnais du garde-fou dev, qui n'était appelé par personne.
+
+    `scripts/preuve-garde-dev.py` extrait le vrai step, substitue les expressions
+    GitHub, shimme `ssh` et joue 7 cas. Il était correct mais jamais invoqué : la
+    CI n'appelle que `tests/…`. Un garde-fou dont la preuve ne tourne pas n'est pas
+    prouvé. On l'appelle depuis ce contrat, déjà câblé dans la CI, et chaque cas
+    devient une assertion. Sa disparition rendrait ce contrôle rouge.
+    """
+    harness = WORKFLOW.parent.parent.parent / "scripts" / "preuve-garde-dev.py"
+    if not harness.is_file():
+        return [(False, f"harnais du garde-fou dev absent : {harness.name}")]
+    proc = subprocess.run(
+        [sys.executable, str(harness)], capture_output=True, text=True, timeout=180
+    )
+    lines = [l for l in proc.stdout.splitlines() if l.startswith(("PASS ", "FAIL "))]
+    results = [(l.startswith("PASS "), l[5:]) for l in lines]
+    if not results:
+        detail = (proc.stdout + proc.stderr).strip().splitlines()
+        results.append((False, "harnais dev sans cas : " + (detail[-1][:150] if detail else "aucune sortie")))
+    results.append((proc.returncode == 0, f"harnais du garde-fou dev : {len(lines)} cas, code {proc.returncode}"))
+    return results
+
+
+def check_seed_perimeter_behaviour() -> list[tuple[bool, str]]:
+    """Exécute le VRAI step de périmètre des jobs outils, sans aucun accès distant.
+
+    Le step ne fait que des comparaisons de chaînes : il est testable tel quel.
+    On vérifie le comportement attendu, pas la présence d'un `case`.
+    """
+    document = yaml.safe_load(WORKFLOW.read_text(encoding="utf-8"))
+    results = []
+    found = False
+    for name, job in document["jobs"].items():
+        # Jobs outils seulement : le garde-fou du job de déploiement accepte
+        # légitimement dev/uat/prd et se teste avec un autre jeu de cas. On
+        # reconnaît un job outil à son verbe, pas à la présence de
+        # `inputs.operation` — le job de déploiement le mentionne aussi.
+        if not any(f"inputs.operation == '{verb}'" in str(job.get("if", "")) for verb in TOOL_TARGETS):
+            continue
+        script = perimeter_step(job)
+        if script is None:
+            continue
+        found = True
+        for label, env_name, root, overrides, expected in PERIMETER_CASES:
+            code, output = run_perimeter(script, env_name, root, overrides)
+            ok = (code != 0) if expected else (code == 0)
+            detail = f"{name} / {label} : code {code}"
+            if not ok and output:
+                detail += f" — {output.splitlines()[-1][:150]}"
+            results.append((ok, detail))
+    if not found:
+        results.append((False, "aucun step de périmètre trouvé dans les jobs outils"))
+    return results
+
+
 def check_operations_behaviour() -> list[tuple[bool, str]]:
     """Chaque verbe de dispatch doit être porté et cantonné, pas seulement listé.
 
@@ -210,11 +331,11 @@ def check_operations_behaviour() -> list[tuple[bool, str]]:
         job = jobs[carriers[0]]
         environment = job.get("environment")
         delegated = environment == "${{ needs.cible.outputs.env }}"
-        clos = any(
-            'case "$ENV_NAME" in' in str(step.get("run", ""))
-            and "*)" in str(step.get("run", ""))
-            for step in job.get("steps", [])
-        )
+        # Refus fermé prouvé par EXÉCUTION, pas par présence de texte. Chercher
+        # `case … in` et `*)` ne dit pas que la branche par défaut refuse : une
+        # branche `*) echo … ;;` sans exit passe une garde de forme. On exécute
+        # donc le step avec un environnement inconnu et on exige un refus.
+        clos = perimeter_refuses_unknown(job)
         litteral_non_prod = (
             isinstance(environment, str)
             and environment not in ("prd", "production")
@@ -425,6 +546,16 @@ def main() -> int:
 
     print("\n=== Cantonnement des verbes de dispatch (résolveur réel exécuté) ===")
     for ok, detail in check_operations_behaviour():
+        print(f"{'PASS' if ok else 'FAIL'} {detail}")
+        failures += 0 if ok else 1
+
+    print("\n=== Périmètre des jobs outils : step réel exécuté, sans accès distant ===")
+    for ok, detail in check_seed_perimeter_behaviour():
+        print(f"{'PASS' if ok else 'FAIL'} {detail}")
+        failures += 0 if ok else 1
+
+    print("\n=== Garde-fou dev : harnais réel exécuté (ssh shimmé, aucun accès) ===")
+    for ok, detail in check_dev_guard_harness():
         print(f"{'PASS' if ok else 'FAIL'} {detail}")
         failures += 0 if ok else 1
 
