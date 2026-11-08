@@ -84,6 +84,32 @@ jobs:
           grep -q "const TUC_CORE_VERSION" wordpress/tuc-market-core/tuc-market-core.php
           echo "Thème et plugin présents."
 
+      - name: Cohérence des versions (en-tête, constante, tag)
+        shell: bash
+        env:
+          GITHUB_REF_NAME: ${{ github.ref_name }}
+          GITHUB_REF_TYPE: ${{ github.ref_type }}
+        run: |
+          set -euo pipefail
+          # Le health check lit la constante, `wp plugin get` lit l'en-tête :
+          # un désaccord publie deux versions différentes pour un même déploiement.
+          if output="$(python3 tests/version-contract.py 2>&1)"; then
+            printf '%s\n' "$output"
+          else
+            printf '%s\n' "$output"
+            excerpt="$(printf '%s\n' "$output" | tail -c 1200 | tr '\n' ' ' | sed 's/%/%25/g; s/\r/%0D/g')"
+            echo "::error title=Incohérence de version::$excerpt"
+            exit 1
+          fi
+
+      - name: Auto-test du garde-fou de version
+        shell: bash
+        run: |
+          set -euo pipefail
+          # Prouve à chaque exécution que le garde-fou rejette bien le tag fautif
+          # pre-release-0.8.9 (en-tête 0.8.8 / constante 0.8.9).
+          python3 tests/version-contract.py --self-test
+
   cible:
     name: Résoudre la cible
     runs-on: ubuntu-latest
@@ -151,9 +177,26 @@ jobs:
           THEME_VERSION=$(sed -n 's/^Version:[[:space:]]*//p' wordpress/tuc-theme/style.css | head -n 1)
           PLUGIN_VERSION=$(sed -n "s/.*const TUC_CORE_VERSION = '\([^']*\)'.*/\1/p" \
             wordpress/tuc-market-core/tuc-market-core.php | head -n 1)
-          test -n "$THEME_VERSION" && test -n "$PLUGIN_VERSION"
+          PLUGIN_HEADER=$(sed -n 's/^ \* Version:[[:space:]]*//p' \
+            wordpress/tuc-market-core/tuc-market-core.php | head -n 1)
+          test -n "$THEME_VERSION" && test -n "$PLUGIN_VERSION" && test -n "$PLUGIN_HEADER"
+          # Dernier verrou avant rsync : ce qui sera publié doit porter une seule
+          # version, et un tag de déploiement doit porter la version qu'il annonce.
+          if [ "$PLUGIN_HEADER" != "$PLUGIN_VERSION" ]; then
+            echo "::error title=Incohérence de version::en-tête $PLUGIN_HEADER != constante $PLUGIN_VERSION ; déploiement annulé avant toute écriture."
+            exit 1
+          fi
+          case "$GITHUB_REF_NAME" in
+            pre-release-*|release-*)
+              TAG_VERSION=$(printf '%s' "$GITHUB_REF_NAME" | sed -E 's/^(pre-release|release)-([0-9]+\.[0-9]+\.[0-9]+).*$/\2/')
+              if [ "$TAG_VERSION" != "$PLUGIN_VERSION" ]; then
+                echo "::error title=Tag et version divergents::$GITHUB_REF_NAME annonce $TAG_VERSION mais le plugin porte $PLUGIN_VERSION ; déploiement annulé."
+                exit 1
+              fi
+              ;;
+          esac
           printf 'theme=%s\nplugin=%s\n' "$THEME_VERSION" "$PLUGIN_VERSION" >> "$GITHUB_OUTPUT"
-          echo "Thème $THEME_VERSION · plugin $PLUGIN_VERSION"
+          echo "Thème $THEME_VERSION · plugin $PLUGIN_VERSION (en-tête et constante alignés)"
 
       - name: Vérifier les secrets de déploiement
         env:

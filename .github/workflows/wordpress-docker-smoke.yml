@@ -48,6 +48,22 @@ jobs:
           echo "::notice title=Contrôle de lignée develop::$summary"
 
 
+      - name: Vérifier la cohérence des versions
+        shell: bash
+        run: |
+          set -euo pipefail
+          if output="$(python3 tests/version-contract.py 2>&1)"; then
+            printf '%s\n' "$output"
+          else
+            printf '%s\n' "$output"
+            excerpt="$(printf '%s\n' "$output" | tail -c 1200 | tr '\n' ' ' | sed 's/%/%25/g; s/\r/%0D/g')"
+            echo "::error title=Incohérence de version::$excerpt"
+            exit 1
+          fi
+          python3 tests/version-contract.py --self-test
+          summary="$(printf '%s\n' "$output" | grep -E 'En-tête plugin|Constante|Thème' | tr '\n' ' ' | sed 's/%/%25/g')"
+          echo "::notice title=Cohérence des versions::$summary"
+
       - name: Vérifier le contrat de déploiement sans déployer
         shell: bash
         run: |

@@ -47,7 +47,7 @@ Le workflow `WordPress Docker smoke test` installe un WordPress éphémère, act
 - parcours E2E mobile, dix scénarios de commande client/restaurant, onboarding restaurateur via n8n simulé ;
 - audit web professionnel (Lighthouse mobile, SEO, WCAG/axe, responsive, REST) ;
 - job Windows : **régression automatisée NVDA + eSpeak intégré** avec capture PCM français/arabe sans pilote audio virtuel — ce n’est pas une validation d’accessibilité (pas de voix Windows réelle ni d’utilisateur réel) ;
-- garde-fous de **lignée `develop`** et de **contrat de déploiement** (le script de résolution de cible est exécuté sur 10 cas, sans déployer).
+- garde-fous de **lignée `develop`**, de **contrat de déploiement** (10 cas, sans déployer) et de **cohérence des versions** (en-tête == constante, tag ⇒ version), voir `docs/VERSIONS-ET-TAGS.md`.
 
 Dernier run d’intégration réussi : <https://github.com/bernoussifatiha84-good/tuc-restaurant/actions/runs/42482683516>.
 

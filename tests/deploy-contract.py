@@ -118,6 +118,16 @@ def check_guards() -> list[tuple[bool, str]]:
         and "La version du thème déployée ne correspond pas" in text,
         "le contrôle de santé vérifie les versions déployées",
     ))
+    # Méta-garde : le garde-fou de version ne doit pas disparaître discrètement.
+    results.append((
+        "tests/version-contract.py" in text,
+        "le job qualité appelle le garde-fou de version",
+    ))
+    results.append((
+        "Incohérence de version::en-tête" in text
+        and "Tag et version divergents::" in text,
+        "verrou en-tête/constante et tag/version présent avant le rsync",
+    ))
     return results
 
 
