@@ -27,9 +27,9 @@ ARABIC_NAME = "مطعم الاختبار"
 
 
 def normalized(text: str) -> str:
-    # NVDA's bundled eSpeak pronounces the brand as two words. This is an
-    # engine pronunciation difference, not a missing accessible announcement.
-    return " ".join(text.casefold().replace("whats app", "whatsapp").split())
+    # NVDA's bundled eSpeak pronounces WhatsApp and WebP as split words.
+    # These are engine pronunciation differences, not missing announcements.
+    return " ".join(text.casefold().replace("whats app", "whatsapp").replace("web p", "webp").split())
 
 
 def pcm_stats(pcm: bytes, sample_width: int) -> dict:
