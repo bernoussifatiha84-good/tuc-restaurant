@@ -89,7 +89,9 @@ def main() -> int:
         formats.add(fmt)
         stats = pcm_stats(pcm, fmt[1])
         if not pcm or stats["peak"] < 100:
-            raise ValueError(f"Completed NVDA utterance is silent: {metadata['file']} {stats}")
+            # NVDA can complete an empty/cancelled utterance (e.g. a mode change
+            # represented by a sound rather than speech). It is not language proof.
+            continue
         complete.append({"file": metadata["file"], "text": metadata["text"], "bytes": len(pcm), **stats})
         for language in metadata["languages"]:
             start, end = language["start_byte"], language["end_byte"]
