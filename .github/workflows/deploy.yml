@@ -294,12 +294,15 @@ jobs:
               echo "::error::$2 absent ou vide alors que $1 existe. Arret avant toute ecriture."
               exit 1
             fi
-            entrees=$(tar -tzf "$backup/$2" | wc -l)
-            if [ "$entrees" -lt 2 ]; then
-              echo "::error::$2 ne contient que $entrees entree(s) : $1 semble vide. Arret avant toute ecriture."
+            # On compte les FICHIERS, pas les entrees : un dossier ne contenant
+            # qu'un sous-dossier vide fait 2 entrees et 0 fichier. Compter les
+            # entrees laissait donc passer une sauvegarde inutile.
+            fichiers=$(tar -tzf "$backup/$2" | grep -vc '/$' || true)
+            if [ -z "$fichiers" ] || [ "$fichiers" -lt 1 ]; then
+              echo "::error::$2 ne contient aucun fichier ($1 n'a que des dossiers vides). Arret avant toute ecriture."
               exit 1
             fi
-            echo "  $2 : $entrees entrees, $(du -h "$backup/$2" | cut -f1)"
+            echo "  $2 : $fichiers fichier(s), $(du -h "$backup/$2" | cut -f1)"
             faits=$((faits + 1))
           }
           ranger wp-content/themes/tuc-theme theme.tgz
