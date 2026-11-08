@@ -1,0 +1,672 @@
+name: WordPress Docker smoke test
+
+on:
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: wp-docker-smoke-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  wordpress-docker:
+    name: Installer et vérifier WordPress/TUC
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - name: Récupérer le dépôt
+        uses: actions/checkout@v5
+
+      - name: Créer des identifiants éphémères pour la base locale au runner
+        shell: bash
+        run: |
+          set -euo pipefail
+          DB_PASSWORD="$(openssl rand -hex 24)"
+          DB_ROOT_PASSWORD="$(openssl rand -hex 24)"
+          TUC_WA_SECRET="$(openssl rand -hex 32)"
+          TUC_N8N_INBOUND_SECRET="$(openssl rand -hex 32)"
+          TUC_N8N_POLL_SECRET="$(openssl rand -hex 32)"
+          N8N_ENCRYPTION_KEY="$(openssl rand -hex 32)"
+          for secret in "$DB_PASSWORD" "$DB_ROOT_PASSWORD" "$TUC_WA_SECRET" "$TUC_N8N_INBOUND_SECRET" "$TUC_N8N_POLL_SECRET" "$N8N_ENCRYPTION_KEY"; do
+            echo "::add-mask::$secret"
+          done
+          {
+            printf 'TUC_WP_IMAGE=wordpress:php8.2-apache\n'
+            printf 'TUC_WP_CLI_IMAGE=wordpress:cli-php8.2\n'
+            printf 'TUC_DB_IMAGE=mariadb:10.11\n'
+            printf 'TUC_N8N_IMAGE=n8nio/n8n:2.46.6\n'
+            printf 'TUC_WP_PORT=8080\n'
+            printf 'TUC_N8N_PORT=5678\n'
+            printf 'TUC_DB_NAME=tuc_smoke\n'
+            printf 'TUC_DB_USER=tuc_smoke\n'
+            printf 'TUC_DB_PASSWORD=%s\n' "$DB_PASSWORD"
+            printf 'TUC_DB_ROOT_PASSWORD=%s\n' "$DB_ROOT_PASSWORD"
+            printf 'TUC_WA_SECRET=%s\n' "$TUC_WA_SECRET"
+            printf 'TUC_N8N_INBOUND_SECRET=%s\n' "$TUC_N8N_INBOUND_SECRET"
+            printf 'TUC_N8N_POLL_SECRET=%s\n' "$TUC_N8N_POLL_SECRET"
+            printf 'N8N_ENCRYPTION_KEY=%s\n' "$N8N_ENCRYPTION_KEY"
+          } > .env
+
+      - name: Valider la configuration Compose
+        run: docker compose config --quiet
+
+      - name: Démarrer WordPress et MariaDB
+        run: docker compose up --detach --wait --wait-timeout 180 wordpress
+
+      - name: Vérifier WP-CLI
+        run: docker compose run --rm --entrypoint wp wpcli cli info
+
+      - name: Installer WordPress avec WP-CLI
+        shell: bash
+        run: |
+          set -euo pipefail
+          WP_ADMIN_PASSWORD="$(openssl rand -hex 24)"
+          echo "::add-mask::$WP_ADMIN_PASSWORD"
+          docker compose run --rm --entrypoint wp wpcli core install \
+            --url='http://127.0.0.1:8080' \
+            --title='TUC WordPress Docker smoke test' \
+            --admin_user='tuc-smoke-admin' \
+            --admin_password="$WP_ADMIN_PASSWORD" \
+            --admin_email='tuc-smoke@example.invalid' \
+            --skip-email
+          {
+            printf 'TUC_SMOKE_ADMIN_USER=tuc-smoke-admin\n'
+            printf 'TUC_SMOKE_ADMIN_PASSWORD=%s\n' "$WP_ADMIN_PASSWORD"
+          } >> "$GITHUB_ENV"
+
+      - name: Activer le plugin et le thème TUC
+        run: |
+          set -euo pipefail
+          docker compose run --rm --entrypoint wp wpcli plugin activate tuc-market-core
+          docker compose run --rm --entrypoint wp wpcli theme activate tuc-theme
+          docker compose run --rm --entrypoint wp wpcli plugin is-active tuc-market-core
+          docker compose run --rm --entrypoint wp wpcli theme is-active tuc-theme
+          docker compose run --rm --entrypoint wp wpcli core version
+
+      - name: Vérifier désactivation et réactivation du plugin
+        shell: bash
+        run: |
+          set -euo pipefail
+          docker compose run --rm --entrypoint wp wpcli plugin deactivate tuc-market-core
+          inactive_plugins="$(docker compose run --rm --entrypoint wp wpcli plugin list --status=inactive --field=name)"
+          printf '%s\n' "$inactive_plugins" | grep -Fx 'tuc-market-core'
+          docker compose run --rm --entrypoint wp wpcli plugin activate tuc-market-core
+          docker compose run --rm --entrypoint wp wpcli plugin is-active tuc-market-core
+
+      - name: Vérifier la syntaxe du plugin, du thème et des tests PHP
+        shell: bash
+        run: |
+          set -euo pipefail
+          docker compose run --rm --entrypoint sh wpcli -lc '
+            find /var/www/html/wp-content/plugins/tuc-market-core \
+              /var/www/html/wp-content/themes/tuc-theme \
+              /opt/tuc-tests \
+              -type f -name "*.php" -print0 | xargs -0 -n1 php -l
+          '
+
+      - name: Exécuter les régressions WordPress/TUC
+        shell: bash
+        run: |
+          set -uo pipefail
+          # GitHub’s bash shell enables errexit; disable it while capturing the
+          # expected non-zero status so the diagnostic output below can run.
+          set +e
+          regression_output="$(docker compose run --rm --entrypoint wp wpcli eval-file /opt/tuc-tests/wp-docker-regression.php 2>&1)"
+          regression_status=$?
+          set -e
+          printf '%s\n' "$regression_output"
+          if [ "$regression_status" -ne 0 ]; then
+            echo "::error title=Regression runner failed::WP-CLI exited with status $regression_status"
+            failure_excerpt="$(printf '%s\n' "$regression_output" | grep -E 'ASSERTION_FAILURE:|WA_CART_DEBUG:|PHP_FATAL_DEBUG:|PHP Fatal error|Uncaught|ÉCHEC :' | tail -n 5 | tr '\n' ' ' | cut -c1-1200 | sed 's/%/%25/g; s/\r/%0D/g')"
+            if [ -z "$failure_excerpt" ]; then
+              failure_excerpt="$(printf '%s\n' "$regression_output" | tr '\n' ' ' | tail -c 1200 | sed 's/%/%25/g; s/\r/%0D/g')"
+            fi
+            echo "::error title=WP-CLI failure detail::$failure_excerpt"
+            exit "$regression_status"
+          fi
+
+      - name: Installer le client Playwright
+        shell: bash
+        run: |
+          set -euo pipefail
+          if output="$(npm install --prefix "$RUNNER_TEMP/tuc-playwright" --no-audit --no-fund playwright@1.56.1 axe-core@4.10.3 lighthouse@13.6.0 chrome-launcher@1.2.3 2>&1)"; then
+            printf '%s\n' "$output"
+          else
+            status=$?
+            printf '%s\n' "$output"
+            excerpt="$(printf '%s\n' "$output" | tail -c 1200 | tr '\n' ' ' | sed 's/%/%25/g; s/\r/%0D/g')"
+            echo "::error title=Playwright npm install failed::$excerpt"
+            exit "$status"
+          fi
+
+      - name: Installer Chromium et ses dépendances système
+        shell: bash
+        run: |
+          set -euo pipefail
+          if output="$("$RUNNER_TEMP/tuc-playwright/node_modules/.bin/playwright" install --with-deps chromium 2>&1)"; then
+            printf '%s\n' "$output"
+          else
+            status=$?
+            printf '%s\n' "$output"
+            excerpt="$(printf '%s\n' "$output" | tail -c 1200 | tr '\n' ' ' | sed 's/%/%25/g; s/\r/%0D/g')"
+            echo "::error title=Chromium install failed::$excerpt"
+            exit "$status"
+          fi
+
+      - name: Vérifier le contrat sonore et les notifications push
+        run: |
+          node --check tests/push-notification-contract.js
+          node tests/push-notification-contract.js
+
+      - name: Créer un restaurant et un compte restaurateur synthétiques
+        shell: bash
+        run: |
+          set -euo pipefail
+          mobile_password="$(openssl rand -hex 24)"
+          echo "::add-mask::$mobile_password"
+          docker compose run --rm -e TUC_MOBILE_E2E_PASSWORD="$mobile_password" \
+            --entrypoint wp wpcli eval-file /opt/tuc-tests/wp-mobile-fixtures.php
+          {
+            printf 'TUC_MOBILE_E2E_USER=tuc-mobile-e2e\n'
+            printf 'TUC_MOBILE_E2E_SERVER_USER=tuc-mobile-server\n'
+            printf 'TUC_MOBILE_E2E_CASHIER_USER=tuc-mobile-cashier\n'
+            printf 'TUC_MOBILE_E2E_PASSWORD=%s\n' "$mobile_password"
+          } >> "$GITHUB_ENV"
+
+      - name: Parcours E2E mobile navigateur sur WordPress Docker
+        shell: bash
+        env:
+          NODE_PATH: ${{ runner.temp }}/tuc-playwright/node_modules
+          TUC_MOBILE_E2E_URL: http://127.0.0.1:8080
+          TUC_MOBILE_E2E_ARTIFACTS: ${{ runner.temp }}/tuc-mobile-e2e-artifacts
+        run: |
+          set -euo pipefail
+          node --check tests/mobile-e2e.js
+          if output="$(node tests/mobile-e2e.js 2>&1)"; then
+            printf '%s\n' "$output"
+          else
+            status=$?
+            printf '%s\n' "$output"
+            excerpt="$(printf '%s\n' "$output" | tail -c 1800 | tr '\n' ' ' | sed 's/%/%25/g; s/\r/%0D/g')"
+            echo "::error title=Mobile browser E2E failed::$excerpt"
+            exit "$status"
+          fi
+
+      - name: Publier les captures du parcours mobile
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: tuc-wordpress-mobile-e2e
+          path: ${{ runner.temp }}/tuc-mobile-e2e-artifacts/
+          if-no-files-found: ignore
+          retention-days: 7
+
+      - name: Préparer les fixtures du parcours WhatsApp E2E
+        run: |
+          set -euo pipefail
+          docker compose run --rm -e TUC_N8N_E2E_PHASE=setup \
+            --entrypoint wp wpcli eval-file /opt/tuc-tests/n8n/whatsapp-e2e.php
+
+      - name: Importer et activer le workflow n8n de test
+        shell: bash
+        run: |
+          set -euo pipefail
+          N8N_SETUP_LOG="$RUNNER_TEMP/tuc-n8n-setup.log"
+          : > "$N8N_SETUP_LOG"
+          on_n8n_setup_error() {
+            local status=$? failed_command="$BASH_COMMAND" failed_line="$LINENO" n8n_logs
+            n8n_logs="$(docker compose logs --no-color n8n 2>/dev/null | tail -n 40 | tr '\n' ' ' | sed 's/%/%25/g; s/\r/%0D/g' || true)"
+            echo "::error title=n8n setup command failed::line=$failed_line status=$status command=$failed_command logs=$n8n_logs"
+          }
+          trap on_n8n_setup_error ERR
+          run_n8n_cli() {
+            local output status excerpt
+            if output="$(docker compose run --rm --entrypoint n8n n8n "$@" 2>&1)"; then
+              printf 'SUCCESS: n8n %s\n' "$*" >> "$N8N_SETUP_LOG"
+              printf 'n8n command succeeded: %s\n' "$*"
+            else
+              status=$?
+              excerpt="$(printf '%s\n' "$output" | tail -c 800 | tr '\n' ' ' | sed 's/%/%25/g; s/\r/%0D/g')"
+              printf 'FAILED COMMAND: n8n %s (status %s) detail: %s\n' "$*" "$status" "$excerpt" >> "$N8N_SETUP_LOG"
+              echo "::error title=n8n CLI failed::$excerpt"
+              return "$status"
+            fi
+          }
+          run_n8n_cli import:workflow --input=/opt/tuc-n8n/tuc-wa-smoke.workflow.json
+          if output="$(docker compose up --detach n8n 2>&1)"; then
+            printf 'COMMAND: docker compose up n8n\n%s\n' "$output" >> "$N8N_SETUP_LOG"
+            printf '%s\n' "$output"
+          else
+            status=$?
+            printf 'FAILED COMMAND: docker compose up n8n (status %s)\n%s\n' "$status" "$output" >> "$N8N_SETUP_LOG"
+            echo "::error title=n8n container failed to start::$(printf '%s' "$output" | tr '\n' ' ' | sed 's/%/%25/g; s/\r/%0D/g')"
+            exit "$status"
+          fi
+          if curl --fail --silent --show-error --retry 60 --retry-delay 2 --retry-connrefused --retry-all-errors \
+            http://127.0.0.1:5678/healthz --output /dev/null; then
+            printf 'n8n health endpoint is ready\n' >> "$N8N_SETUP_LOG"
+          else
+            status=$?
+            n8n_logs="$(docker compose logs --no-color n8n 2>/dev/null | tail -n 30 || true)"
+            printf 'n8n health check failed (status %s)\n%s\n' "$status" "$n8n_logs" >> "$N8N_SETUP_LOG"
+            excerpt="$(printf '%s\n' "$n8n_logs" | tr '\n' ' ' | sed 's/%/%25/g; s/\r/%0D/g')"
+            echo "::error title=n8n failed readiness::$excerpt"
+            exit 1
+          fi
+          run_n8n_cli publish:workflow --id=f31a00c7-d902-4f4a-91fa-61176d0c39f7
+          # Restart after the CLI publish to force the server to load the new
+          # published version and register its production webhook route.
+          if output="$(docker compose restart n8n 2>&1)"; then
+            printf 'COMMAND: docker compose restart n8n\n%s\n' "$output" >> "$N8N_SETUP_LOG"
+            printf '%s\n' "$output"
+          else
+            status=$?
+            echo "::error title=n8n restart after publish failed::$output"
+            exit "$status"
+          fi
+          if curl --fail --silent --show-error --retry 30 --retry-delay 2 --retry-connrefused --retry-all-errors \
+            http://127.0.0.1:5678/healthz --output /dev/null; then
+            printf 'n8n health endpoint is ready after publish\n' >> "$N8N_SETUP_LOG"
+          else
+            status=$?
+            n8n_logs="$(docker compose logs --no-color n8n 2>&1 | tail -n 30 || true)"
+            excerpt="$(printf '%s\n' "$n8n_logs" | tr '\n' ' ' | sed 's/%/%25/g; s/\r/%0D/g')"
+            echo "::error title=n8n failed readiness after publish::$excerpt"
+            exit "$status"
+          fi
+          if output="$(docker compose run --rm --entrypoint n8n n8n list:workflow 2>&1)"; then
+            printf 'WORKFLOW LIST:\n%s\n' "$output" >> "$N8N_SETUP_LOG"
+            printf 'n8n workflows after publish:\n%s\n' "$output"
+          else
+            status=$?
+            echo "::error title=n8n workflow listing failed::$output"
+            exit "$status"
+          fi
+          if output="$(docker compose run --rm --entrypoint sh n8n -lc 'n8n export:workflow --id=f31a00c7-d902-4f4a-91fa-61176d0c39f7 --output=/tmp/tuc-workflow.json >/dev/null && printf "TUC_WORKFLOW_JSON_START\\n" && cat /tmp/tuc-workflow.json && printf "\\nTUC_WORKFLOW_JSON_END\\n"' 2>&1)"; then
+            workflow_json="$(printf '%s\n' "$output" | sed -n '/^TUC_WORKFLOW_JSON_START$/,/^TUC_WORKFLOW_JSON_END$/p' | sed '1d;$d')"
+            workflow_state="$(printf '%s\n' "$workflow_json" | python3 -c 'import json, sys; data=json.load(sys.stdin); workflow=data[0] if isinstance(data, list) else data; assert workflow.get("active") is True, workflow; print("active")')"
+            printf 'n8n workflow publication state: %s\n' "$workflow_state"
+            printf 'WORKFLOW PUBLISH STATE: %s\n' "$workflow_state" >> "$N8N_SETUP_LOG"
+          else
+            status=$?
+            echo "::error title=n8n workflow state inspection failed::$output"
+            exit "$status"
+          fi
+
+      - name: Tester n8n, webhook signé, anti-rejeu et lien magique
+        shell: bash
+        run: |
+          set -euo pipefail
+          set -a
+          source .env
+          set +a
+          if output="$(python3 tests/n8n/send-smoke-events.py 2>&1)"; then
+            printf '%s\n' "$output"
+          else
+            status=$?
+            printf '%s\n' "$output"
+            excerpt="$(printf '%s\n' "$output" | tail -c 1000 | tr '\n' ' ' | sed 's/%/%25/g; s/\r/%0D/g')"
+            n8n_logs="$(docker compose logs --no-color n8n 2>&1 | tail -n 40 | tr '\n' ' ' | sed 's/%/%25/g; s/\r/%0D/g' || true)"
+            echo "::error title=n8n webhook test failed::$excerpt"
+            echo "::error title=n8n runtime logs::$n8n_logs"
+            exit "$status"
+          fi
+          if output="$(docker compose run --rm -e TUC_N8N_E2E_PHASE=verify \
+            --entrypoint wp wpcli eval-file /opt/tuc-tests/n8n/whatsapp-e2e.php 2>&1)"; then
+            printf '%s\n' "$output"
+          else
+            status=$?
+            printf '%s\n' "$output"
+            excerpt="$(printf '%s\n' "$output" | tail -c 1400 | tr '\n' ' ' | sed 's/%/%25/g; s/\r/%0D/g')"
+            echo "::error title=WordPress magic-link E2E failed::$excerpt"
+            exit "$status"
+          fi
+
+      - name: Vérifier les dix scénarios de commande client et restaurant
+        shell: bash
+        env:
+          NODE_PATH: ${{ runner.temp }}/tuc-playwright/node_modules
+          TUC_MOBILE_E2E_URL: http://127.0.0.1:8080
+          TUC_N8N_URL: http://127.0.0.1:5678
+        run: |
+          set -euo pipefail
+          set -a
+          source .env
+          set +a
+          node --check tests/checkout-scenarios.js
+          if output="$(node tests/checkout-scenarios.js 2>&1)"; then
+            printf '%s\n' "$output"
+          else
+            status=$?
+            printf '%s\n' "$output"
+            excerpt="$(printf '%s\n' "$output" | tail -c 1800 | tr '\n' ' ' | sed 's/%/%25/g; s/\r/%0D/g')"
+            echo "::error title=Ten checkout scenarios failed::$excerpt"
+            exit "$status"
+          fi
+
+      - name: Parcours mobile de demande et d’accès restaurateur via n8n
+        shell: bash
+        env:
+          NODE_PATH: ${{ runner.temp }}/tuc-playwright/node_modules
+          TUC_MOBILE_E2E_URL: http://127.0.0.1:8080
+          TUC_N8N_URL: http://127.0.0.1:5678
+        run: |
+          set -euo pipefail
+          set -a
+          source .env
+          set +a
+          node --check tests/restaurant-onboarding-e2e.js
+          if output="$(node tests/restaurant-onboarding-e2e.js 2>&1)"; then
+            printf '%s\n' "$output"
+          else
+            status=$?
+            printf '%s\n' "$output"
+            excerpt="$(printf '%s\n' "$output" | tail -c 1800 | tr '\n' ' ' | sed 's/%/%25/g; s/\r/%0D/g')"
+            echo "::error title=Restaurant onboarding E2E failed::$excerpt"
+            exit "$status"
+          fi
+
+      - name: Exporter le formulaire WordPress réel pour le test NVDA
+        shell: bash
+        env:
+          NODE_PATH: ${{ runner.temp }}/tuc-playwright/node_modules
+          TUC_MOBILE_E2E_URL: http://127.0.0.1:8080
+          TUC_NVDA_FIXTURE_DIR: ${{ runner.temp }}/tuc-onboarding-nvda-fixture
+        run: |
+          set -euo pipefail
+          node tests/export-onboarding-nvda-fixture.js
+
+      - name: Publier le formulaire rendu pour le lecteur d’écran Windows
+        uses: actions/upload-artifact@v4
+        with:
+          name: onboarding-nvda-fixture
+          path: ${{ runner.temp }}/tuc-onboarding-nvda-fixture/
+          if-no-files-found: error
+          retention-days: 1
+
+      - name: Audit web professionnel (Lighthouse mobile, SEO, WCAG, responsive, REST)
+        shell: bash
+        env:
+          NODE_PATH: ${{ runner.temp }}/tuc-playwright/node_modules
+          TUC_MOBILE_E2E_URL: http://127.0.0.1:8080
+          TUC_AUDIT_REPORT_PATH: ${{ runner.temp }}/tuc-professional-audit.json
+        run: |
+          set -euo pipefail
+          node --check tests/professional-audit.js
+          node tests/professional-audit.js
+
+      - name: Publier le rapport de qualité web
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: tuc-professional-audit
+          path: ${{ runner.temp }}/tuc-professional-audit.json
+          if-no-files-found: ignore
+          retention-days: 7
+
+      - name: Vérifier HTTP, REST et la version PHP
+        shell: bash
+        run: |
+          set -euo pipefail
+          curl --fail --silent --show-error --retry 20 --retry-delay 3 --retry-connrefused \
+            http://127.0.0.1:8080/ --output /dev/null
+          health="$(curl --fail --silent --show-error --retry 20 --retry-delay 3 --retry-connrefused \
+            http://127.0.0.1:8080/wp-json/tuc/v1/sante)"
+          printf '%s' "$health" | python3 -c '
+          import json, sys
+          result = json.load(sys.stdin)
+          assert result.get("ok") is True, result
+          assert all(result.get("modules", {}).get(key) is True for key in ("cpt_resto", "cpt_menu", "cpt_commande")), result
+          print("REST health OK · plugin", result.get("plugin"), "· WordPress", result.get("wp"), "· PHP", result.get("php"))
+          '
+          docker compose exec --no-TTY wordpress php -v
+
+      - name: Échouer sur une erreur PHP fatale du site
+        shell: bash
+        run: |
+          set -euo pipefail
+          docker compose exec --no-TTY wordpress sh -lc '
+            if [ -f /var/www/html/wp-content/debug.log ] &&
+              grep -E "PHP Fatal error|Uncaught Error" /var/www/html/wp-content/debug.log; then
+              exit 1
+            fi
+          '
+
+      - name: Journaux Docker et erreurs PHP en cas d’échec
+        if: failure()
+        shell: bash
+        run: |
+          docker compose logs --no-color || true
+          n8n_container_state="$(docker compose ps --all n8n 2>&1 | tail -n 10 | tr '\n' ' ' | sed 's/%/%25/g; s/\r/%0D/g' || true)"
+          n8n_container_logs="$(docker compose logs --no-color n8n 2>&1 | tail -n 60 | tr '\n' ' ' | sed 's/%/%25/g; s/\r/%0D/g' || true)"
+          echo "::error title=n8n container state::$n8n_container_state"
+          echo "::error title=n8n container logs::$n8n_container_logs"
+          if [ -s "$RUNNER_TEMP/tuc-n8n-setup.log" ]; then
+            n8n_setup_log="$(tail -c 1200 "$RUNNER_TEMP/tuc-n8n-setup.log" | tr '\n' ' ' | sed 's/%/%25/g; s/\r/%0D/g')"
+            echo "::error title=n8n setup transcript::$n8n_setup_log"
+          fi
+          if docker compose exec --no-TTY wordpress sh -lc 'test -f /var/www/html/wp-content/debug.log'; then
+            debug_log="$(docker compose exec --no-TTY wordpress sh -lc 'tail -n 100 /var/www/html/wp-content/debug.log' || true)"
+            printf '%s\n' "$debug_log"
+            {
+              echo '### WordPress debug.log'
+              echo '```text'
+              printf '%s\n' "$debug_log" | tail -n 100
+              echo '```'
+            } >> "$GITHUB_STEP_SUMMARY"
+            fatal_line="$(printf '%s\n' "$debug_log" | grep -E 'PHP Fatal error|Uncaught|TypeError|Error:' | tail -n 1 | tr '\n' ' ' | cut -c1-900)"
+            if [ -n "$fatal_line" ]; then
+              echo "::error title=WordPress PHP error::$fatal_line"
+            fi
+          fi
+          if docker compose exec --no-TTY wordpress sh -lc 'test -f /var/www/html/wp-content/tuc-regression-progress.log'; then
+            progress_log="$(docker compose exec --no-TTY wordpress sh -lc 'cat /var/www/html/wp-content/tuc-regression-progress.log' || true)"
+            printf '%s\n' "$progress_log"
+            {
+              echo '### WordPress regression progress'
+              echo '```text'
+              printf '%s\n' "$progress_log"
+              echo '```'
+            } >> "$GITHUB_STEP_SUMMARY"
+            last_progress="$(printf '%s\n' "$progress_log" | tail -n 1 | tr '\n' ' ' | cut -c1-900)"
+            if [ -n "$last_progress" ]; then
+              echo "::error title=Last WordPress regression stage::$last_progress"
+            fi
+          fi
+
+      - name: Nettoyer les conteneurs, volumes et identifiants éphémères
+        if: always()
+        run: |
+          docker compose down --volumes --remove-orphans || true
+          rm -f .env
+
+  nvda-windows:
+    name: Vérifier les annonces avec NVDA sous Windows
+    runs-on: windows-2025
+    needs: wordpress-docker
+    timeout-minutes: 15
+    steps:
+      - name: Récupérer le dépôt
+        uses: actions/checkout@v5
+
+      - name: Télécharger le formulaire rendu par WordPress
+        uses: actions/download-artifact@v4
+        with:
+          name: onboarding-nvda-fixture
+          path: ${{ runner.temp }}/tuc-onboarding-nvda-fixture
+
+      - name: Installer Playwright et Chromium
+        shell: pwsh
+        run: |
+          $prefix = Join-Path $env:RUNNER_TEMP 'tuc-playwright'
+          npm install --prefix $prefix --no-audit --no-fund playwright@1.56.1
+          if ($LASTEXITCODE -ne 0) { throw 'Playwright installation failed' }
+          & (Join-Path $prefix 'node_modules/.bin/playwright.cmd') install chromium
+          if ($LASTEXITCODE -ne 0) { throw 'Chromium installation failed' }
+          python -m pip install --disable-pip-version-check pywinauto
+          if ($LASTEXITCODE -ne 0) { throw 'pywinauto installation failed' }
+
+      - name: Installer eSpeak NG et préparer la capture WAV sans périphérique audio
+        timeout-minutes: 3
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $msi = Join-Path $env:RUNNER_TEMP 'espeak-ng-1.52.0.msi'
+          Invoke-WebRequest -Uri 'https://github.com/espeak-ng/espeak-ng/releases/download/1.52.0/espeak-ng.msi' -OutFile $msi -TimeoutSec 90
+          $install = Start-Process -FilePath msiexec.exe -ArgumentList @('/i', $msi, '/qn', '/norestart') -PassThru
+          if (-not $install.WaitForExit(60000)) { Stop-Process -Id $install.Id -Force; throw 'eSpeak NG MSI installation timed out' }
+          if ($install.ExitCode -notin @(0, 3010)) { throw "eSpeak NG installation failed: $($install.ExitCode)" }
+          $candidates = @(
+            (Join-Path $env:ProgramFiles 'eSpeak NG/espeak-ng.exe'),
+            (Join-Path ${env:ProgramFiles(x86)} 'eSpeak NG/espeak-ng.exe')
+          )
+          $exe = $candidates | Where-Object { Test-Path $_ } | Select-Object -First 1
+          if (-not $exe) { throw "eSpeak NG executable not found: $($candidates -join '; ')" }
+          $speechDir = Join-Path $env:RUNNER_TEMP 'nvda-espeak-segments'
+          Remove-Item $speechDir -Recurse -Force -ErrorAction SilentlyContinue
+          New-Item -ItemType Directory -Force -Path $speechDir | Out-Null
+          [System.IO.File]::AppendAllText($env:GITHUB_ENV, "TUC_ESPEAK_EXE=$exe`nTUC_NVDA_SPEECH_DIR=$speechDir`n", [System.Text.UTF8Encoding]::new($false))
+          Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value "eSpeak NG installed at $exe; NVDA speech segments will be rendered to WAV files without a kernel audio driver."
+
+      - name: Installer le lecteur d’écran NVDA portable
+        shell: pwsh
+        run: |
+          $installer = Join-Path $env:RUNNER_TEMP 'nvda.exe'
+          $portable = Join-Path $env:RUNNER_TEMP 'nvda-portable'
+          $config = Join-Path $env:RUNNER_TEMP 'nvda-config'
+          New-Item -ItemType Directory -Force -Path $config | Out-Null
+          $scratchSynthDir = Join-Path $config 'scratchpad/synthDrivers'
+          New-Item -ItemType Directory -Force -Path $scratchSynthDir | Out-Null
+          Copy-Item tests/nvda-espeak-wav-driver.py (Join-Path $scratchSynthDir 'espeakWav.py') -Force
+          Invoke-WebRequest -Uri 'https://github.com/nvaccess/nvda/releases/download/release-2026.3/nvda_2026.3.exe' -OutFile $installer
+          $process = Start-Process -FilePath $installer -ArgumentList @('--create-portable-silent', "--portable-path=$portable") -Wait -PassThru -WindowStyle Hidden
+          if ($process.ExitCode -ne 0) { throw "NVDA portable creation failed: $($process.ExitCode)" }
+          @'
+          schemaVersion = 2
+          [general]
+          language = en
+          showWelcomeDialogAtStartup = False
+          [update]
+          askedAllowUsageStats = True
+          autoCheck = False
+          startupNotification = False
+          allowUsageStats = False
+          [development]
+          enableScratchpadDir = True
+          [speech]
+          synth = espeakWav
+          autoLanguageSwitching = True
+          [speechViewer]
+          showSpeechViewerAtStartup = True
+          '@ | Set-Content -Path (Join-Path $config 'nvda.ini') -Encoding utf8
+          $nvda = Get-ChildItem -Path $portable -Filter 'nvda.exe' -Recurse | Select-Object -First 1
+          if (-not $nvda) { throw 'Portable NVDA executable not found' }
+          $log = Join-Path $env:RUNNER_TEMP 'nvda.log'
+          Start-Process -FilePath $nvda.FullName -ArgumentList @("--config-path=$config", '--debug-logging', "--log-file=$log")
+          Start-Sleep -Seconds 8
+          "NVDA=$($nvda.FullName)" | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Append
+          $configText = Get-Content (Join-Path $config 'nvda.ini') -Raw
+          Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value "`n### NVDA effective config file`n````ini`n$configText`n````"
+          if (Test-Path $log) {
+            $logLines = Get-Content $log
+            $synthLines = $logLines | Select-String -Pattern 'synth|Synth|eSpeak|espeak|OneCore' | ForEach-Object { $_.Line }
+            $audioWarnings = $logLines | Select-String -Pattern "Couldn't open specified or default audio device|WinError -2147023728" | ForEach-Object { $_.Line }
+            $logTail = (Get-Content $log -Tail 50 | Out-String)
+            Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value "`n### NVDA synthesizer log lines`n````text`n$($synthLines -join "`n")`n````"
+            Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value "`n### NVDA audio-device diagnostics`n````text`n$($audioWarnings -join "`n")`n````"
+            Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value "`n### NVDA startup log tail`n````text`n$logTail`n````"
+            $diagnostics = (($synthLines -join ' | ') + ' | audio diagnostics: ' + ($audioWarnings -join ' | ') + ' | ' + $logTail)
+            $diagnosticsOneLine = ($diagnostics -replace '%', '%25' -replace '\r', '%0D' -replace '\n', '%0A')
+            Write-Output "::notice title=NVDA synthesizer diagnostics::$diagnosticsOneLine"
+            if (($synthLines -join "`n") -notmatch 'Loaded synthDriver espeakWav') {
+              Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value '`n**NVDA eSpeak WAV synthesizer failed to load; the test is not allowed to silently fall back.**'
+              throw 'NVDA did not load the CI eSpeakWav scratchpad synthesizer'
+            }
+            Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value '`nNVDA loaded the CI eSpeakWav synthesizer. It captures NVDA speech sequences to files without opening an audio device.'
+
+          } else {
+            Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value '`nNVDA startup log was not created.'
+          }
+
+      - name: Parcourir le formulaire avec NVDA Speech Viewer
+        shell: pwsh
+        env:
+          NODE_PATH: ${{ runner.temp }}/tuc-playwright/node_modules
+          TUC_NVDA_FIXTURE_DIR: ${{ runner.temp }}/tuc-onboarding-nvda-fixture
+          TUC_NVDA_TRANSCRIPT: ${{ runner.temp }}/nvda-speech-viewer.txt
+          TUC_NVDA_FAILURE: ${{ runner.temp }}/nvda-failure.txt
+        run: |
+          $nodeLog = Join-Path $env:RUNNER_TEMP 'nvda-smoke-node.log'
+          node --check tests/nvda-smoke.js *> $nodeLog
+          $checkExit = $LASTEXITCODE
+          if ($checkExit -eq 0) {
+            node tests/nvda-smoke.js *> $nodeLog
+            $nodeExit = $LASTEXITCODE
+          } else {
+            $nodeExit = $checkExit
+          }
+          if ($nodeExit -ne 0) {
+            $detail = if (Test-Path $env:TUC_NVDA_FAILURE) { Get-Content $env:TUC_NVDA_FAILURE -Raw } else { 'No diagnostic file was produced' }
+            if (Test-Path $nodeLog) { $detail += "`nNode output:`n" + (Get-Content $nodeLog -Raw) }
+            $speechDir = Join-Path $env:RUNNER_TEMP 'nvda-espeak-segments'
+            $segments = Get-ChildItem $speechDir -Filter '*.wav' -ErrorAction SilentlyContinue | Select-Object -ExpandProperty Name
+            $speechText = Get-ChildItem $speechDir -Filter '*.txt' -ErrorAction SilentlyContinue | ForEach-Object { "[$($_.BaseName)] $(Get-Content $_.FullName -Raw)" }
+            $detail += "`nNVDA eSpeak WAV segment count: $($segments.Count)`n$($segments -join "`n")`nNVDA speech segment text:`n$($speechText -join "`n")"
+            $nvdaLog = Join-Path $env:RUNNER_TEMP 'nvda.log'
+            if (Test-Path $nvdaLog) {
+              $logDiagnostics = Get-Content $nvdaLog | Select-String -Pattern 'espeakWav|Traceback|ERROR|Exception|SynthDriver' -Context 1,3 | Out-String
+              $detail += "`nNVDA driver/error log entries:`n$logDiagnostics"
+            }
+            $oneLine = ($detail -replace '\r?\n', ' ' -replace '%', '%25' -replace ':', '%3A' -replace ',', '%2C')
+            Write-Output "::error title=NVDA Speech Viewer diagnostic::$oneLine"
+            Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value "`n### NVDA test failure`n````text`n$detail`n````"
+            throw 'NVDA screen-reader smoke test failed'
+          }
+          if (Test-Path $env:TUC_NVDA_TRANSCRIPT) {
+            $transcript = Get-Content $env:TUC_NVDA_TRANSCRIPT -Raw
+            Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value "`n### NVDA Speech Viewer output`n````text`n$transcript`n````"
+            $annotation = ($transcript -replace '%', '%25' -replace '\r', '%0D' -replace '\n', '%0A')
+            Write-Output "::notice title=NVDA Speech Viewer transcript::$annotation"
+          }
+
+      - name: Fusionner et vérifier l’audio eSpeak émis par les séquences NVDA
+        shell: pwsh
+        env:
+          TUC_NVDA_SPEECH_DIR: ${{ runner.temp }}/nvda-espeak-segments
+        run: |
+          $outputDir = Join-Path $env:RUNNER_TEMP 'nvda-espeak-audio'
+          $result = python tests/merge-nvda-espeak-audio.py --chunks $env:TUC_NVDA_SPEECH_DIR --output $outputDir 2>&1 | Out-String
+          if ($LASTEXITCODE -ne 0) {
+            Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value "`n### NVDA eSpeak audio capture failed`n````text`n$result`n````"
+            $annotation = ($result -replace '%', '%25' -replace '\r', '%0D' -replace '\n', '%0A')
+            Write-Output "::error title=NVDA eSpeak WAV validation::$annotation"
+            throw 'NVDA did not produce usable French and Arabic eSpeak audio'
+          }
+          Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value "`n### WAV generated from NVDA speech sequences`n````json`n$result`n````"
+          Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value '`nThe WAVs come from NVDA speech sequences passed to the CI eSpeakWav synthesizer. They are not playback captured from NVDA’s built-in eSpeak driver.'
+
+      - name: Publier transcription NVDA, audio eSpeak et journaux
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: nvda-speech-viewer-${{ github.run_id }}
+          path: |
+            ${{ runner.temp }}/nvda-speech-viewer.txt
+            ${{ runner.temp }}/nvda-failure.txt
+            ${{ runner.temp }}/nvda.log
+            ${{ runner.temp }}/nvda-espeak-audio/nvda-espeak-fr.wav
+            ${{ runner.temp }}/nvda-espeak-audio/nvda-espeak-ar.wav
+            ${{ runner.temp }}/nvda-espeak-audio/nvda-espeak-all.wav
+            ${{ runner.temp }}/nvda-espeak-audio/nvda-espeak-manifest.json
+          if-no-files-found: warn
+          retention-days: 7
+
+      - name: Arrêter NVDA
+        if: always()
+        shell: pwsh
+        run: |
+          Get-Process -Name nvda -ErrorAction SilentlyContinue | Stop-Process -Force
