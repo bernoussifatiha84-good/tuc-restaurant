@@ -955,8 +955,8 @@ try {
 
     wp_set_current_user((int) $cashierUserId);
     $cashierMe = TUC_Caisse::moi()->get_data();
-    $assert(($cashierMe['alerte_sonore'] ?? true) === false,
-        'le caissier reçoit un profil de notification silencieux, sans bip/vibreur');
+    $assert(($cashierMe['alerte_sonore'] ?? false) === true,
+        'le caissier rattaché au restaurant reçoit le profil sonore (décision propriétaire : la caisse entend)');
     $assert(!TUC_Espace_Pro::permission_menu(), 'le caissier ne peut pas gérer le menu via les routes Espace Pro');
     $assert(TUC_Caisse::peut_acceder() && TUC_Caisse::peut_modifier_commandes()
         && !TUC_Caisse::peut_gerer_restaurant()

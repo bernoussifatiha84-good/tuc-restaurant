@@ -29,7 +29,10 @@ const serverPayload = {
   requireInteraction: true,
   vibrate: [120, 60, 120, 60, 220],
 };
-const cashierPayload = {
+// Le cas silencieux n'est plus le caissier : depuis la décision propriétaire,
+// tous les rôles caisse rattachés entendent. Le repli silencieux concerne un
+// compte non rattaché ou rattaché à un autre restaurant.
+const horsTenantPayload = {
   ...serverPayload,
   titre: 'Copie silencieuse · Table 7',
   silent: true,
@@ -55,10 +58,10 @@ async function main() {
   assert.equal(notifications[0].options.requireInteraction, true, 'la notification serveur reste visible');
   assert.deepEqual(Array.from(notifications[0].options.vibrate), serverPayload.vibrate, 'le push serveur demande une vibration');
 
-  await envoyerPush(cashierPayload, []);
-  assert.equal(notifications.length, 2, 'le caissier reçoit aussi la commande');
-  assert.equal(notifications[1].options.silent, true, 'la notification de secours du caissier reste silencieuse');
-  assert.deepEqual(Array.from(notifications[1].options.vibrate), [], 'le caissier n’a pas de vibration de serveur');
+  await envoyerPush(horsTenantPayload, []);
+  assert.equal(notifications.length, 2, 'le compte hors tenant reçoit aussi la commande');
+  assert.equal(notifications[1].options.silent, true, 'la copie hors tenant reste silencieuse');
+  assert.deepEqual(Array.from(notifications[1].options.vibrate), [], 'le compte hors tenant n’a pas de vibration');
 
   let refreshed = false;
   await envoyerPush(serverPayload, [{
@@ -69,7 +72,7 @@ async function main() {
   assert.equal(refreshed, true, 'si la caisse serveur est au premier plan, le push demande son rafraîchissement');
   assert.deepEqual(JSON.parse(JSON.stringify(postedMessages[0])), { type: 'tuc-rafraichir', commande: 42 });
   assert.equal(notifications.length, 2, 'pas de notification système en double quand la caisse est déjà visible');
-  console.log('PASS: Table 7 → serveur bip/vibreur, caissier notification silencieuse, caisse visible rafraîchie');
+  console.log('PASS: Table 7 → caisse rattachée bip/vibreur, compte hors tenant silencieux, caisse visible rafraîchie');
 }
 
 main().catch((error) => {
