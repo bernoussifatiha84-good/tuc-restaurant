@@ -228,8 +228,16 @@ jobs:
         run: |
           node --check tests/nvda/native-espeak-smoke.js
           if ($LASTEXITCODE -ne 0) { throw 'JavaScript syntax error' }
-          node tests/nvda/native-espeak-smoke.js
-          if ($LASTEXITCODE -ne 0) { throw 'Native NVDA keyboard test failed; see report and NVDA log artifacts' }
+          node tests/nvda/native-espeak-smoke.js *> (Join-Path $env:RUNNER_TEMP 'nvda-node.log')
+          $testExit = $LASTEXITCODE
+          Get-Content (Join-Path $env:RUNNER_TEMP 'nvda-node.log') -Encoding UTF8
+          if ($testExit -ne 0) {
+            $detail = Get-Content (Join-Path $env:RUNNER_TEMP 'nvda-node.log') -Raw -Encoding UTF8
+            $oneLine = ($detail -replace '%','%25' -replace "`r",'%0D' -replace "`n",'%0A')
+            if ($oneLine.Length -gt 28000) { $oneLine = $oneLine.Substring(0,28000) }
+            Write-Output "::error title=Native NVDA test failure::$oneLine"
+            throw 'Native NVDA keyboard test failed; see report and NVDA log artifacts'
+          }
 
       - name: Arrêter proprement NVDA et finaliser les WAV
         if: always()
@@ -271,6 +279,13 @@ jobs:
           } else { $detail = 'NVDA log file absent' }
           $captureFiles = Get-ChildItem $env:TUC_NVDA_CAPTURE_DIR -ErrorAction SilentlyContinue | Select-Object Name,Length | Out-String
           $detail += "`nCAPTURE FILES:`n$captureFiles"
+          $report = Join-Path $env:RUNNER_TEMP 'nvda-report.json'
+          if (Test-Path $report) { $detail += "`nTEST REPORT:`n" + (Get-Content $report -Raw -Encoding UTF8) }
+          $detail += "`nCAPTURED UTTERANCES:`n"
+          Get-ChildItem $env:TUC_NVDA_CAPTURE_DIR -Filter '*.json' -ErrorAction SilentlyContinue | Where-Object { $_.Name -match '^\d+' } | ForEach-Object {
+            $item = Get-Content $_.FullName -Raw -Encoding UTF8 | ConvertFrom-Json
+            $detail += "[$($_.Name)] complete=$($item.complete) reason=$($item.reason) text=$($item.text) languages=$($item.languages | ConvertTo-Json -Compress)`n"
+          }
           Add-Content $env:GITHUB_STEP_SUMMARY "### Diagnostic NVDA`n````text`n$detail`n````"
           $oneLine = ($detail -replace '%','%25' -replace "`r",'%0D' -replace "`n",'%0A')
           if ($oneLine.Length -gt 28000) { $oneLine = $oneLine.Substring($oneLine.Length - 28000) }
@@ -285,6 +300,7 @@ jobs:
             ${{ runner.temp }}/nvda-capture/
             ${{ runner.temp }}/nvda-audio/
             ${{ runner.temp }}/nvda-report.json
+            ${{ runner.temp }}/nvda-node.log
             ${{ runner.temp }}/nvda.log
             ${{ runner.temp }}/nvda-config/nvda.ini
             ${{ runner.temp }}/fixture/source-commit.txt
