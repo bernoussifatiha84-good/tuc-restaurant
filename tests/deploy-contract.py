@@ -15,6 +15,7 @@ import os
 import subprocess
 import sys
 import tempfile
+import textwrap
 from pathlib import Path
 
 import yaml
@@ -131,6 +132,94 @@ def check_guards() -> list[tuple[bool, str]]:
     return results
 
 
+def backup_script() -> str:
+    """Extrait le heredoc distant du step de sauvegarde, sans l'interpréter."""
+    doc = yaml.safe_load(WORKFLOW.read_text(encoding="utf-8"))
+    for step in doc["jobs"]["deploiement"]["steps"]:
+        if "Sauvegarder" in step.get("name", ""):
+            run = step.get("run", "")
+            if "<<'REMOTE'" not in run:
+                raise AssertionError("step de sauvegarde sans heredoc distant quoted")
+            body = run.split("<<'REMOTE'", 1)[1].rsplit("REMOTE", 1)[0]
+            return textwrap.dedent(body)
+    raise AssertionError("step de sauvegarde introuvable dans deploy.yml")
+
+
+def check_backup_behaviour() -> list[tuple[bool, str]]:
+    """Teste le COMPORTEMENT du garde-fou de sauvegarde, pas la forme du code.
+
+    Une assertion sur une chaîne (« test -s présent ? ») laisserait passer un
+    refactor qui déplace la vérification hors du chemin utile. On exécute donc le
+    script distant réel sur des arborescences fabriquées et on juge le code de
+    sortie et les archives produites.
+    """
+    script = backup_script()
+    results: list[tuple[bool, str]] = []
+
+    def peupler(root: str, relatif: str, fichiers: list[str]) -> None:
+        dossier = Path(root) / relatif
+        dossier.mkdir(parents=True, exist_ok=True)
+        for nom in fichiers:
+            cible = dossier / nom
+            cible.parent.mkdir(parents=True, exist_ok=True)
+            cible.write_text("contenu", encoding="utf-8")
+
+    def executer(root: str) -> subprocess.CompletedProcess:
+        return subprocess.run(
+            ["bash", "-c", script, "_", root],
+            capture_output=True, text=True,
+        )
+
+    def archives(root: str) -> list[Path]:
+        return sorted((Path(root) / "wp-content" / "upgrade").rglob("*.tgz"))
+
+    scenarios = [
+        (
+            "deux sources peuplees -> 2 archives non vides, code 0",
+            lambda r: (
+                peupler(r, "wp-content/themes/tuc-theme", ["style.css", "index.php"]),
+                peupler(r, "wp-content/plugins/tuc-market-core", ["tuc-market-core.php"]),
+            ),
+            0, 2, False,
+        ),
+        (
+            "source vide -> refus avant rsync (le cas d'origine du faux vert)",
+            lambda r: peupler(r, "wp-content/themes/tuc-theme", []),
+            1, None, False,
+        ),
+        (
+            "theme seul peuple -> 1 archive, code 0",
+            lambda r: peupler(r, "wp-content/themes/tuc-theme", ["style.css"]),
+            0, 1, False,
+        ),
+        (
+            "aucune source -> code 0 mais avertissement explicite, jamais silencieux",
+            lambda r: None,
+            0, 0, True,
+        ),
+    ]
+
+    for label, setup, code_attendu, nb_attendu, warning_attendu in scenarios:
+        with tempfile.TemporaryDirectory() as root:
+            setup(root)
+            proc = executer(root)
+            produced = archives(root)
+            ok = proc.returncode == code_attendu
+            if ok and nb_attendu is not None:
+                ok = len(produced) == nb_attendu
+            if ok and nb_attendu:
+                ok = all(a.stat().st_size > 0 for a in produced)
+            if ok and warning_attendu:
+                ok = "::warning::" in proc.stdout
+            sortie = (proc.stdout + proc.stderr).strip().splitlines()
+            detail = f"{label} (code {proc.returncode}, {len(produced)} archive(s))"
+            if not ok and sortie:
+                detail += f" — {sortie[-1][:160]}"
+            results.append((ok, detail))
+
+    return results
+
+
 def main() -> int:
     script = resolve_script()
     failures = 0
@@ -142,6 +231,11 @@ def main() -> int:
 
     print("\n=== Garde-fous structurels ===")
     for ok, detail in check_guards():
+        print(f"{'PASS' if ok else 'FAIL'} {detail}")
+        failures += 0 if ok else 1
+
+    print("\n=== Comportement du garde-fou de sauvegarde (script réel exécuté) ===")
+    for ok, detail in check_backup_behaviour():
         print(f"{'PASS' if ok else 'FAIL'} {detail}")
         failures += 0 if ok else 1
 

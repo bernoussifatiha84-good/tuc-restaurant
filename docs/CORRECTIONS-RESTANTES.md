@@ -126,3 +126,50 @@ durcissement n'est pas complet. Deux lignes.
 Le garde-fou de version ne dispense d'aucun de ces points : il empêche de
 **republier** un tag mensonger, il ne répare ni l'alerte caisse, ni la sauvegarde
 vide, ni l'écart d'environnement.
+
+---
+
+## Mise à jour après le correctif A (`76a97fb`)
+
+A est corrigé par la session serveur : chaque archive est vérifiée après création
+(`test -s` + nombre d'entrées), avec avertissement explicite si aucune source
+n'existe. `tests/deploy-contract.py` vérifie désormais ce garde-fou par son
+**comportement** : le heredoc distant est extrait de `deploy.yml` et exécuté sur
+des arborescences fabriquées. Confronté à l'ancien code (`83dba16`), ce test
+produit **2 échecs** — il détecte donc la régression, il ne se contente pas de
+chercher une chaîne.
+
+### Trou résiduel du garde-fou A
+
+Le seuil « au moins 2 entrées » laisse passer un dossier qui ne contient **qu'un
+sous-dossier vide** : l'archive a 2 entrées (le dossier et son enfant), donc 0
+fichier utile, et le step réussit. Vérifié en isolation. Ce n'est pas le cas
+d'origine et c'est peu probable en production, mais le garde-fou compte des
+entrées, pas des fichiers. À durcir si on veut la garantie « au moins un fichier
+régulier ».
+
+### Risque SQLite : correction du diagnostic
+
+Le risque n'est **pas** le tri sur métas numériques. Constaté dans le plugin :
+
+```
+meta_value_num                : 0 occurrence
+orderby                      : ID, date, title, display_name, menu_order
+SQL brut ($wpdb->query/...)   : 0 occurrence
+```
+
+Aucun tri par note ni par promo n'existe dans ce code. Le construit réellement à
+risque est **`'type' => 'NUMERIC'` dans les `meta_query`**, à quatre endroits :
+
+| Fichier | Ligne | Rôle |
+|---|---|---|
+| `class-tuc-caisse.php` | 418 | **liste des commandes de la caisse** |
+| `class-tuc-espace-pro.php` | 413, 473, 688 | filtrage par restaurant |
+
+WordPress traduit `type => NUMERIC` en `CAST(meta_value AS SIGNED)`. `SIGNED`
+n'existe pas en SQLite : c'est une syntaxe MySQL, qui dépend de la couche de
+traduction de l'intégration SQLite. Et ce n'est pas un tri cosmétique — c'est le
+**filtre d'isolation par restaurant** (`tuc_resto`). S'il se comporte mal, la
+caisse peut lister les mauvaises commandes, ou aucune.
+
+C'est là qu'un job CI SQLite aurait de la valeur, pas sur un tri de notes.
