@@ -116,3 +116,48 @@ publié via `tuc_resto_id`, pour que le parcours `/caisse/` puisse être exercé
 
 Sans ce rattachement, aucune alerte sonore n'est possible — la règle d'isolation
 le refuse, et c'est voulu. Le test métier n'a pas de sens avant.
+
+## 5. Catalogue public — base + démonstration marquée (option B)
+
+**Décision :** brancher le thème sur la base, et garder un jeu de démonstration
+**clairement signalé**, au lieu de faux commerces présentés comme réels.
+
+### Pourquoi les cartes n'étaient pas cliquables
+
+`inc/data.php` contenait 25 restaurants codés en dur. Sans article WordPress
+derrière eux, ils n'avaient **aucun permalien** : `front-page.php` rendait
+`<article class="card">` sans lien. Les vrais restaurants, eux, étaient bien liés
+(`get_permalink`) — mais n'apparaissaient que sur une recherche par quartier ou par
+ville. Ce mélange de deux sources rendait la page incohérente, et **un reset de la
+base n'y aurait rien changé** puisque les faux commerces venaient d'un fichier PHP
+déployé depuis Git.
+
+### Ce qui change
+
+- `tuc_restos()` et `tuc_promos()` interrogent `tuc_resto` / `tuc_menu_item`. La
+  forme du tableau est conservée pour ne pas casser les gabarits ; s'y ajoutent
+  `id`, `url`, `demo`, `thumb`, `livraison`.
+- Cartes restaurants **et** promotions enveloppées dans un lien vers la boutique.
+- Badge « Démo » sur tout contenu portant `tuc_demo = 1`.
+- Trois métas enregistrés sur `tuc_resto` : `tuc_kind` (section d'accueil),
+  `tuc_demo`, `tuc_img` (visuel de repli).
+- « Livraison offerte » n'aspire plus un commerce qui ne livre pas.
+
+### Jeu de démonstration
+
+```bash
+wp eval-file tools/seed-demo.php                  # crée ou met à jour, idempotent
+wp eval-file tools/seed-demo.php -- --supprimer    # retire tout le contenu démo
+```
+
+12 restaurants et 36 plats, créés comme de **vrais articles** : ils ont donc un
+permalien, une fiche restaurant et un menu. Tous marqués `tuc_demo=1`, donc badgés
+et retirables d'un coup quand de vrais commerces arrivent.
+
+Le script **refuse de s'exécuter** si `WP_ENVIRONMENT_TYPE` vaut `production`, et
+n'utilise **aucun nom de marque réelle** — l'ancien jeu citait des enseignes
+existantes, ce qui faisait passer de la fiction pour de vrais commerces.
+
+Il ne crée ni numéro WhatsApp ni compte : ce sont des décisions distinctes.
+
+**BREAKING :** `/tuc/v1/restos` et `/tuc/v1/promos` renvoient désormais la base.
