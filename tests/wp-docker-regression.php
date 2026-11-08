@@ -1026,6 +1026,56 @@ try {
     $assert(isset($routesRest['/tuc/v1/commande']) && isset($routesRest['/tuc/v1/wa-lien']),
         'le chemin de commande réel et la vérification WhatsApp restent enregistrés');
 
+    // ------------------------------------------------------------------
+    // Catalogue public : lu en base, cliquable, démonstration signalée.
+    // Le thème servait 25 restaurants codés en dur, sans article WordPress
+    // donc sans URL : cartes non cliquables et aucune boutique consultable.
+    // ------------------------------------------------------------------
+    if (function_exists('tuc_restos') && function_exists('tuc_promos')) {
+        update_post_meta((int) $restaurantId, 'tuc_kind', 'snack');
+        update_post_meta((int) $restaurantId, 'tuc_demo', '1');
+        update_post_meta((int) $restaurantId, 'tuc_img', 'tacos');
+        update_post_meta((int) $otherRestaurantId, 'tuc_kind', 'restaurant');
+        update_post_meta((int) $otherRestaurantId, 'tuc_demo', '0');
+        update_post_meta((int) $itemId, 'tuc_promo_pct', 25);
+
+        $catalogue = tuc_restos();
+        $parId = [];
+        foreach ($catalogue as $entree) {
+            $parId[(int) $entree['id']] = $entree;
+        }
+        $fictif = $parId[(int) $restaurantId] ?? null;
+        $reel = $parId[(int) $otherRestaurantId] ?? null;
+
+        $assert(is_array($fictif) && is_array($reel),
+            'le catalogue public vient des articles tuc_resto, pas d\'un tableau codé en dur');
+        $assert(($fictif['url'] ?? '') !== '' && ($reel['url'] ?? '') !== ''
+            && str_starts_with((string) $fictif['url'], 'http'),
+            'chaque restaurant du catalogue porte une URL : la carte est cliquable');
+        $assert(($fictif['demo'] ?? false) === true && ($reel['demo'] ?? true) === false,
+            'le contenu de démonstration est distingué du contenu réel pour être badgé');
+        $assert(($fictif['k'] ?? '') === 'snack' && ($reel['k'] ?? '') === 'restaurant',
+            'le type de commerce alimente les sections de la page d\'accueil');
+        $assert(($fictif['n'] ?? '') === $restaurant->post_title,
+            'le nom affiché est celui de WordPress');
+
+        // « Livraison offerte » ne doit pas aspirer un commerce qui ne livre pas.
+        $sansLivraison = ['k' => 'snack', 'r' => 4.5, 't' => '10–20', 'fee' => null, 'livraison' => false];
+        $livraisonOfferte = ['k' => 'snack', 'r' => 4.5, 't' => '10–20', 'fee' => null, 'livraison' => true];
+        $sectionFree = tuc_pick([$sansLivraison, $livraisonOfferte], ['type' => 'free']);
+        $assert(count($sectionFree) === 1 && $sectionFree[0]['livraison'] === true,
+            'un commerce qui ne livre pas n\'apparaît pas dans « Livraison offerte »');
+
+        $promos = tuc_promos();
+        $promosDuResto = array_values(array_filter($promos, fn($x) => ($x['shop'] ?? '') === $restaurant->post_title));
+        $assert($promosDuResto !== [] && ($promosDuResto[0]['url'] ?? '') !== ''
+            && ($promosDuResto[0]['big'] ?? '') === '−25 %',
+            'les promotions viennent des articles en remise et pointent vers la boutique');
+        update_post_meta((int) $itemId, 'tuc_promo_pct', 0);
+    } else {
+        $assert(false, 'le thème expose tuc_restos() et tuc_promos() : catalogue testable');
+    }
+
     // La référence WhatsApp seule ne suffit pas à récupérer un lien magique.
     $pollCode = strtoupper(bin2hex(random_bytes(4)));
     $pollSecret = wp_generate_password(40, false, false);

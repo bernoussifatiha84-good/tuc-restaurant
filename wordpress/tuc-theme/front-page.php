@@ -186,26 +186,42 @@ $quartiers_geo = array_column($quartiers_geo, null, 'slug');
       <?php if ($sec['type'] === 'promos') : ?>
         <?php foreach ($items as $p) : ?>
           <article class="promo">
-            <div class="im">
-              <?php echo tuc_picture($p['img'], '', ['width'=>440,'height'=>330,'sizes'=>'(max-width:900px) 206px, 300px']); ?>
-              <span class="off"><?php echo esc_html($p['big']); ?></span>
-            </div>
-            <div class="nm"><?php echo esc_html($p['nm']); ?></div>
-            <div class="mt"><b><?php echo esc_html(tuc_rating($p['r'])); ?> <?php echo tuc_icon('star', 10); ?></b><span>•</span><span><?php echo esc_html($p['t']); ?></span></div>
-            <div class="fee"><?php echo esc_html($p['shop']); ?> · <?php echo esc_html(tuc_fee(null)); ?></div>
+            <a class="card-link" href="<?php echo esc_url($p['url']); ?>">
+              <div class="im">
+                <?php if (!empty($p['thumb'])) : ?>
+                  <?php echo $p['thumb']; ?>
+                <?php else : ?>
+                  <?php echo tuc_picture($p['img'], '', ['width'=>440,'height'=>330,'sizes'=>'(max-width:900px) 206px, 300px']); ?>
+                <?php endif; ?>
+                <span class="off"><?php echo esc_html($p['big']); ?></span>
+                <?php if (!empty($p['demo'])) : ?><span class="demo-tag"><?php esc_html_e('Démo', 'tuc'); ?></span><?php endif; ?>
+              </div>
+              <div class="nm"><?php echo esc_html($p['nm']); ?></div>
+              <div class="mt"><b><?php echo esc_html(tuc_rating($p['r'])); ?> <?php echo tuc_icon('star', 10); ?></b><span>•</span><span><?php echo esc_html($p['t']); ?></span></div>
+              <div class="fee"><?php echo esc_html($p['shop']); ?></div>
+            </a>
           </article>
         <?php endforeach; ?>
       <?php else : ?>
         <?php foreach ($items as $x) : ?>
           <article class="card">
-            <div class="im"><?php echo tuc_picture($x['img'], '', ['width'=>440,'height'=>330,'sizes'=>'(max-width:900px) 158px, 232px']); ?></div>
-            <div class="nm"><?php echo esc_html($x['n']); ?></div>
-            <div class="cu"><?php echo esc_html($x['cu']); ?></div>
-            <div class="mt">
-              <b><?php echo esc_html(tuc_rating($x['r'])); ?> <?php echo tuc_icon('star', 10); ?></b>
-              <span>•</span><span><?php echo esc_html($x['t']); ?> min</span>
-            </div>
-            <div class="fee"><?php echo esc_html(tuc_fee($x['fee'])); ?></div>
+            <a class="card-link" href="<?php echo esc_url($x['url']); ?>">
+              <div class="im">
+                <?php if (!empty($x['thumb'])) : ?>
+                  <?php echo $x['thumb']; ?>
+                <?php else : ?>
+                  <?php echo tuc_picture($x['img'], '', ['width'=>440,'height'=>330,'sizes'=>'(max-width:900px) 158px, 232px']); ?>
+                <?php endif; ?>
+                <?php if (!empty($x['demo'])) : ?><span class="demo-tag"><?php esc_html_e('Démo', 'tuc'); ?></span><?php endif; ?>
+              </div>
+              <div class="nm"><?php echo esc_html($x['n']); ?></div>
+              <div class="cu"><?php echo esc_html($x['cu']); ?></div>
+              <div class="mt">
+                <b><?php echo esc_html(tuc_rating($x['r'])); ?> <?php echo tuc_icon('star', 10); ?></b>
+                <span>•</span><span><?php echo esc_html($x['t']); ?> min</span>
+              </div>
+              <div class="fee"><?php echo esc_html(tuc_fee($x['fee'])); ?></div>
+            </a>
           </article>
         <?php endforeach; ?>
       <?php endif; ?>

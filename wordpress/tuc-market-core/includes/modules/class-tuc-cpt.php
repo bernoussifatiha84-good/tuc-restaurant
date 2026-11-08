@@ -105,6 +105,9 @@ final class TUC_CPT
             'tuc_ferme'     => 'boolean',  // pause restaurant
             'tuc_horaires'  => 'array',    // ouverture par jour
             'tuc_tables'    => 'integer',  // nombre de tables (QR par table)
+            'tuc_kind'      => 'string',   // restaurant | mahlaba | snack | cafe | coffee
+            'tuc_demo'      => 'boolean',  // contenu de démonstration, badgé à l'affichage
+            'tuc_img'       => 'string',   // visuel de repli si aucune image mise en avant
         ];
 
         foreach ($champs as $key => $type) {
