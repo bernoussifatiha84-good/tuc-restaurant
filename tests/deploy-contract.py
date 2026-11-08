@@ -202,11 +202,17 @@ def check_operations_behaviour() -> list[tuple[bool, str]]:
         ))
 
         # Le résolveur réel, exécuté : même depuis un tag de release, un outil
-        # manuel ne doit pas résoudre la production.
+        # manuel doit résoudre l'environnement de SON job porteur, jamais prd.
+        #
+        # L'environnement attendu est dérivé du job, pas codé en dur à `uat` :
+        # un outil peut légitiment viser dev (banc d'essai MariaDB de l'hébergeur)
+        # sans que ce contrat ait à être réécrit. Ce qui reste invariant est
+        # l'accord verbe <-> job <-> cible, et l'exclusion de la production.
+        expected_env = environment if isinstance(environment, str) else None
         for ref_type, ref_name in (("branch", "feature/x"), ("tag", "release-0.9.0")):
             ok, detail = run_case(script, (
                 f"{option} depuis {ref_type} {ref_name}",
-                ref_type, ref_name, "workflow_dispatch", option, FAKE_VARS, 0, "uat",
+                ref_type, ref_name, "workflow_dispatch", option, FAKE_VARS, 0, expected_env,
             ))
             results.append((ok, detail))
 
