@@ -266,6 +266,56 @@ jobs:
           fi
           echo "Cible WordPress UAT vérifiée : URL et racine distinctes de la production."
 
+      - name: Vérifier que la cible DEV n'est ni l'UAT ni la production
+        if: needs.cible.outputs.env == 'dev'
+        env:
+          SSH_PORT: ${{ vars.SSH_PORT || '65002' }}
+          SSH_USER: ${{ secrets.SSH_USERNAME || secrets.SSH_USER }}
+          SSH_HOST: ${{ secrets.SSH_HOST }}
+          SSH_ROOT: ${{ needs.cible.outputs.root }}
+          SITE_URL: ${{ needs.cible.outputs.url }}
+          URL_UAT: ${{ vars.URL_UAT }}
+          ROOT_UAT: ${{ vars.ROOT_UAT }}
+          URL_PRD: ${{ vars.URL_PRD }}
+          ROOT_PRD: ${{ vars.ROOT_PRD }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          normalize_path() { printf '%s' "$1" | sed 's:/*$::'; }
+          normalize_url() { printf '%s' "$1" | sed 's:/*$::'; }
+
+          # Le deploiement vise $SSH_ROOT SANS sous-dossier, et ses deux
+          # `rsync --delete` ecrivent dans
+          # $SSH_ROOT/wp-content/{themes,plugins}/{tuc-theme,tuc-market-core}.
+          # Sur l'hebergement reel, ROOT_DEV est la racine du site qui CONTIENT
+          # l'UAT : un workflow_dispatch vise `develop` sur la mauvaise racine
+          # ecraserait donc les fichiers de l'UAT. C'est ce que ce step interdit.
+          dev_root="$(normalize_path "$SSH_ROOT")"
+          dev_url="$(normalize_url "$SITE_URL")"
+          root_uat="$(normalize_path "${{ vars.ROOT_UAT }}")"
+          root_prd="$(normalize_path "${{ vars.ROOT_PRD }}")"
+          url_uat="$(normalize_url "${{ vars.URL_UAT }}")"
+          url_prd="$(normalize_url "${{ vars.URL_PRD }}")"
+
+          refuser() { echo "::error::$1; aucun fichier ne sera envoyé."; exit 1; }
+
+          [[ -n "$root_uat" && "$dev_root" == "$root_uat" ]] && refuser "ROOT_DEV est identique à ROOT_UAT"
+          [[ -n "$root_prd" && "$dev_root" == "$root_prd" ]] && refuser "ROOT_DEV est identique à ROOT_PRD"
+          [[ -n "$url_uat" && "$dev_url" == "$url_uat" ]] && refuser "URL_DEV est identique à URL_UAT"
+          [[ -n "$url_prd" && "$dev_url" == "$url_prd" ]] && refuser "URL_DEV est identique à URL_PRD"
+
+          # ROOT_DEV etant la racine qui contient /uat, une valeur terminant par
+          # /uat designe l'UAT elle-meme et non le banc d'essai.
+          [[ "$dev_root" == */uat ]] && refuser "ROOT_DEV se termine par /uat : c'est la cible de l'UAT"
+
+          printf -v remote_root '%q' "$SSH_ROOT"
+          remote_url="$(ssh -i "$HOME/.ssh/id_deploy" -p "$SSH_PORT" -o StrictHostKeyChecking=yes \
+            "$SSH_USER@$SSH_HOST" "wp option get siteurl --path=$remote_root")"
+          [[ "$(normalize_url "$remote_url")" == "$dev_url" ]] \
+            || refuser "l'URL WordPress lue sur ROOT_DEV ($remote_url) n'est pas URL_DEV ($SITE_URL)"
+
+          echo "Cible dev vérifiée : distincte de l'UAT et de la production."
+
       - name: Sauvegarder les répertoires avant rsync --delete
         env:
           SSH_PORT: ${{ vars.SSH_PORT || '65002' }}
