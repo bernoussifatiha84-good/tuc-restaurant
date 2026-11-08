@@ -31,6 +31,8 @@ jobs:
 
       - name: Vérifier que la branche ne perd pas develop
         shell: bash
+        env:
+          TUC_REQUIRE_ANCESTRY: '1'
         run: |
           set -euo pipefail
           pip install --disable-pip-version-check --quiet pyyaml
@@ -42,6 +44,9 @@ jobs:
             echo "::error title=Lignée develop perdue::$excerpt"
             exit 1
           fi
+          summary="$(printf '%s\n' "$output" | grep -E 'ancêtre de HEAD|'échec' | tr '\n' ' ' | sed 's/%/%25/g')"
+          echo "::notice title=Contrôle de lignée develop::$summary"
+
 
       - name: Vérifier le contrat de déploiement sans déployer
         shell: bash
@@ -55,6 +60,9 @@ jobs:
             echo "::error title=Contrat de déploiement cassé::$excerpt"
             exit 1
           fi
+          summary="$(printf '%s\n' "$output" | tail -n 1 | sed 's/%/%25/g')"
+          echo "::notice title=Contrat de déploiement (sans déployer)::$summary"
+
 
       - name: Créer des identifiants éphémères pour la base locale au runner
         shell: bash

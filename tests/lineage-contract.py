@@ -14,6 +14,7 @@ Deux niveaux :
 
 from __future__ import annotations
 
+import os
 import subprocess
 import sys
 from pathlib import Path
@@ -71,16 +72,24 @@ def main() -> int:
         failures += 0 if ok else 1
 
     print("\n=== Ascendance Git ===")
+    # En CI, un skip silencieux vaudrait faux vert : on exige le contrôle.
+    required = os.environ.get("TUC_REQUIRE_ANCESTRY") == "1"
     shallow = git("rev-parse", "--is-shallow-repository").stdout.strip() == "true"
     develop = git("rev-parse", "--verify", "origin/develop")
-    if shallow:
-        print("SKIP historique shallow : utiliser fetch-depth: 0 pour vérifier l'ascendance")
-    elif develop.returncode != 0:
-        print("SKIP origin/develop non fetché dans ce checkout")
+    if shallow or develop.returncode != 0:
+        reason = "historique shallow" if shallow else "origin/develop non fetché"
+        if required:
+            print(f"FAIL {reason} : ascendance non vérifiable alors que TUC_REQUIRE_ANCESTRY=1")
+            print("      Utiliser fetch-depth: 0 et fetcher develop avant ce test.")
+            failures += 1
+        else:
+            print(f"SKIP {reason} (local uniquement ; la CI exige ce contrôle)")
     else:
         result = git("merge-base", "--is-ancestor", "origin/develop", "HEAD")
         ok = result.returncode == 0
-        print(f"{'PASS' if ok else 'FAIL'} origin/develop est ancêtre de HEAD")
+        head = git("rev-parse", "--short", "HEAD").stdout.strip()
+        tip = git("rev-parse", "--short", "origin/develop").stdout.strip()
+        print(f"{'PASS' if ok else 'FAIL'} origin/develop ({tip}) est ancêtre de HEAD ({head})")
         if not ok:
             missing = git("rev-list", "--count", "HEAD..origin/develop").stdout.strip()
             print(f"      {missing} commits de develop sont absents : merger develop avant de déclarer l'intégration")
