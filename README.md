@@ -1,39 +1,54 @@
 # TUC Market
 
-Marketplace de restaurants au Maroc : livraison par le restaurant, commande à emporter et commande à table par QR. Le dépôt contient le thème public WordPress, le plugin métier et les workflows de déploiement.
+Marketplace de restaurants au Maroc : livraison par le restaurant, commande à emporter et commande à table par QR. Le dépôt contient le thème public WordPress, le plugin métier, les tests et les workflows de déploiement.
 
 ## Contenu
 
 ```text
-wordpress/tuc-theme/          Présentation, accueil et fiche restaurant
-wordpress/tuc-market-core/    Logique métier WordPress (plugin maison)
-.github/workflows/deploy.yml  CI et déploiement SSH vers dev, UAT ou production
-.github/workflows/deploy-ftp.yml  Ancien secours FTP manuel — non recommandé
+wordpress/tuc-theme/              Présentation, accueil et fiche restaurant
+wordpress/tuc-market-core/        Logique métier WordPress (plugin maison)
+tests/                            Régressions WordPress, E2E mobile, checkout, onboarding, NVDA
+compose.yaml                      WordPress + MariaDB + n8n éphémères pour les tests
+.github/workflows/deploy.yml      Déploiement SSH vers dev, UAT ou production
+.github/workflows/wordpress-docker-smoke.yml  CI complète sans déploiement
 ```
 
-Le code du plugin et les assets additionnels ont été intégrés depuis le snapshot de passation du 5 novembre 2026. Voir [`docs/IMPORT-STATUS.md`](docs/IMPORT-STATUS.md) pour la provenance, [`docs/ROADMAP-MARKETPLACE.md`](docs/ROADMAP-MARKETPLACE.md) pour la feuille de route, et [`docs/AUDIT-DESIGN-GLOVO.md`](docs/AUDIT-DESIGN-GLOVO.md) pour l’analyse des captures de référence Glovo.
+Voir [`docs/IMPORT-STATUS.md`](docs/IMPORT-STATUS.md) pour la provenance du snapshot, [`docs/ROADMAP-MARKETPLACE.md`](docs/ROADMAP-MARKETPLACE.md) pour la feuille de route, [`docs/ESPACE-PRO-MVP.md`](docs/ESPACE-PRO-MVP.md) pour le périmètre Pro/panier/suivi, et [`docs/RELEASE-CHECKLIST.md`](docs/RELEASE-CHECKLIST.md) pour les gates avant UAT/public.
 
 ## Fonctionnalités présentes dans le code
 
-Le plugin `tuc-market-core` est en version `0.8.5` dans le snapshot intégré. Il contient notamment :
+Le plugin `tuc-market-core` est en version `0.8.8` dans cette branche d’intégration. Il contient notamment :
 
-- les types de contenu `tuc_resto`, `tuc_menu_item` et `tuc_commande`;
-- les URL de fiches restaurant à la racine du site;
-- l’API de commande, avec recalcul serveur des prix et protections documentées dans le code;
-- la génération de QR pour les tables et les modes de service;
-- les comptes clients par numéro de téléphone et liens de connexion temporaires;
-- la PWA de caisse et le service Web Push;
-- des fonctionnalités de quartiers et une route de santé du site.
+- les types de contenu `tuc_resto`, `tuc_menu_item` et `tuc_commande` ;
+- les fiches restaurant, le menu public, le panier client et la commande cash avec recalcul serveur des prix ;
+- le suivi client par jeton opaque, sans exposition des données personnelles ;
+- les rôles et l’isolation par restaurant (`owner`, `manager`, `cashier`, `server`) ;
+- l’Espace Pro mobile : menu, brouillon/publication, disponibilité, promotion simple, options, photo, commandes et réglages boutique ;
+- la demande restaurateur assistée : formulaire public, photo du menu, relais WhatsApp manuel, vérification humaine et lien magique d’accès ;
+- la génération de QR pour les tables et les modes de service ;
+- les comptes clients par numéro de téléphone et liens de connexion temporaires ;
+- la PWA de caisse, le service Web Push et un contrat sonore de secours ;
+- des fonctionnalités de localisation/quartiers et une route de santé du site.
 
-Le thème fournit l’accueil, le gabarit de fiche restaurant, les helpers de rendu et les images JPG avec variantes WebP/AVIF. Les données de démonstration actuelles comprennent **25 commerces et 8 promotions**.
+Le thème fournit l’accueil, le gabarit de fiche restaurant, les helpers de rendu et les images avec variantes WebP/AVIF. Les données de démonstration restent temporaires : en production, les commerces et menus doivent venir de contenus WordPress vérifiés.
 
 ### Limites connues
 
-- Le panier client n’est pas encore raccordé au flux de commande.
-- La page de suivi de commande côté client reste à faire.
-- L’import OCR des menus n’est pas implémenté.
-- La géolocalisation et le choix de quartier restent à compléter.
-- Les fonctionnalités et tests décrits dans les documents de passation ne sont pas tous rejoués dans cet environnement.
+- L’import OCR automatique des menus n’est pas implémenté ; la photo du menu est un point de départ pour assistance humaine.
+- Aucun fournisseur WhatsApp réel n’est configuré dans la CI : `wa.me` ouvre WhatsApp pour envoi manuel, et n8n est testé avec des événements simulés signés.
+- Les tests manuels sur vrais appareils, lecteurs d’écran, réseau lent et avec restaurateurs consentants restent à faire.
+- Cette branche n’est pas déployée en production et ne vaut pas validation UAT finale.
+
+## CI sans déploiement
+
+Le workflow `WordPress Docker smoke test` installe un WordPress éphémère, active le plugin/thème, puis exécute :
+
+- régressions WordPress/TUC (sécurité, isolation, prix, idempotence, options, suivi) ;
+- parcours E2E mobile, dix scénarios de commande client/restaurant, onboarding restaurateur via n8n simulé ;
+- audit web professionnel (Lighthouse mobile, SEO, WCAG/axe, responsive, REST) ;
+- job Windows NVDA réel avec eSpeak intégré et capture PCM français/arabe sans pilote audio virtuel.
+
+Dernier run d’intégration réussi : <https://github.com/bernoussifatiha84-good/tuc-restaurant/actions/runs/42482683516>.
 
 ## Déploiement
 
@@ -69,8 +84,8 @@ Le fichier [`compose.yaml`](compose.yaml) démarre WordPress + MariaDB localemen
 
 ```bash
 find wordpress -name '*.php' -print0 | while IFS= read -r -d '' f; do php -l "$f"; done
-find wordpress -name '*.js' -print0 | while IFS= read -r -d '' f; do node --check "$f"; done
+find wordpress tests -name '*.js' -not -path '*/node_modules/*' -print0 | while IFS= read -r -d '' f; do node --check "$f"; done
 git diff --check
 ```
 
-Le workflow GitHub Actions de qualité exécute le lint PHP et les contrôles CSS. Le workflow distinct `WordPress Docker smoke test` installe un WordPress éphémère sur un runner GitHub, active le plugin/thème et vérifie HTTP/REST/PHP; il ne déploie rien. Les étapes sont détaillées dans le [guide Docker](docs/LOCAL-WORDPRESS-DOCKER.md).
+Le workflow de déploiement exécute le lint PHP et les contrôles CSS/JS avant transfert. Le workflow `WordPress Docker smoke test` va plus loin : runtime WordPress, régressions métier, navigateur mobile, audit web et NVDA Windows. Il ne déploie rien.

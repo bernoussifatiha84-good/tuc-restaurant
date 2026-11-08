@@ -4,7 +4,7 @@ Dernière consolidation documentaire : 5 novembre 2026. Les informations d’ét
 
 ## Plugin métier livré dans ce dépôt
 
-`wordpress/tuc-market-core/` contient le plugin maison **TUC Market Core**, version `0.8.5` dans le snapshot intégré. Il porte les fonctions qui doivent survivre à un changement de thème : types de contenu, commandes, comptes, QR et caisse.
+`wordpress/tuc-market-core/` contient le plugin maison **TUC Market Core**, version `0.8.8` dans cette branche d’intégration. Il porte les fonctions qui doivent survivre à un changement de thème : types de contenu, commandes, comptes, QR et caisse.
 
 | Module | Fichier principal | État d’après le code intégré |
 |---|---|---|

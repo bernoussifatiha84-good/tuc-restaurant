@@ -41,8 +41,12 @@ sur la révision `492887c33a8093d17164c1669f4aaf9113525f8d` de la PR draft #2 :
 
 L'artefact `nvda-native-espeak-42481128144` contient les WAV, manifeste,
 transcription, rapport clavier, configuration et journal NVDA. Il est publié pour
-7 jours, jusqu'au 15 novembre 2026. La PR #2 reste en brouillon : aucun déploiement
-et aucune fusion n'ont été effectués.
+7 jours, jusqu'au 15 novembre 2026.
+
+Cette preuve est ensuite intégrée au workflow `WordPress Docker smoke test` :
+run [42482683516](https://github.com/bernoussifatiha84-good/tuc-restaurant/actions/runs/42482683516),
+artefact `nvda-native-espeak-42482683516`. Aucun déploiement et aucune fusion
+vers `main` n'ont été effectués.
 
 ## Méthode intégrée au smoke test WordPress
 

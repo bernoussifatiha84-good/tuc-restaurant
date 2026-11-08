@@ -63,4 +63,6 @@ La suite d’intégration WordPress/TUC a ensuite réussi sur le runner Docker G
 
 Cette suite valide le pont n8n→WordPress avec des signatures HMAC de test et un parcours magique côté serveur; elle ne valide pas le format/provider WhatsApp réel, la livraison du message par un fournisseur, la page navigateur `/connexion/`, les rôles multi-commerce, l’arabe/RTL ou les paiements. La PR reste brouillon; le code est déployé uniquement sur l’UAT temporaire via le tag `pre-release-0.8.5-uat.1` (run [42105461215](https://github.com/bernoussifatiha84-good/tuc-restaurant/actions/runs/42105461215)); aucun merge ni déploiement production n’a eu lieu.
 
+Le run d’intégration [42482683516](https://github.com/bernoussifatiha84-good/tuc-restaurant/actions/runs/42482683516) réunit le site de la PR #1 et le job NVDA eSpeak intégré validé. Il passe sans déployer.
+
 Le moteur Docker n’est pas installé dans l’environnement Agent local; l’exécution réelle a donc été faite sur le runner Docker de GitHub, comme demandé.
