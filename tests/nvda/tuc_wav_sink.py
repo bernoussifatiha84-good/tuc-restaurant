@@ -51,18 +51,22 @@ class Capture:
                 "sequence": [repr(item) for item in sequence],
                 "text": "".join(item for item in sequence if isinstance(item, str)),
             }
+            self._open_current()
 
     def attach(self, channels: int, sample_width: int, sample_rate: int):
         with self.lock:
-            if self.current is None:
-                raise RuntimeError("NVDA produced PCM before a speech sequence was registered")
-            item = self.current
-            item.update(channels=channels, sample_width=sample_width, sample_rate=sample_rate)
             self.format = (channels, sample_width, sample_rate)
-            item["wav"] = wave.open(str(item["path"]), "wb")
-            item["wav"].setnchannels(channels)
-            item["wav"].setsampwidth(sample_width)
-            item["wav"].setframerate(sample_rate)
+            if self.current is not None:
+                self._open_current()
+
+    def _open_current(self):
+        item = self.current
+        channels, sample_width, sample_rate = self.format
+        item.update(channels=channels, sample_width=sample_width, sample_rate=sample_rate)
+        item["wav"] = wave.open(str(item["path"]), "wb")
+        item["wav"].setnchannels(channels)
+        item["wav"].setsampwidth(sample_width)
+        item["wav"].setframerate(sample_rate)
 
     def feed(self, data: bytes):
         with self.lock:

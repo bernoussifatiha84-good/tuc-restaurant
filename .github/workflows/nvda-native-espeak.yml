@@ -258,6 +258,24 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw 'NVDA built-in eSpeak proof failed' }
           Add-Content $env:GITHUB_STEP_SUMMARY "### WAV issus du moteur eSpeak intégré à NVDA`n````json`n$(Get-Content (Join-Path $output 'manifest.json') -Raw)`n````"
 
+      - name: Afficher les diagnostics NVDA même en cas d'échec
+        if: always()
+        shell: pwsh
+        run: |
+          $log = Join-Path $env:RUNNER_TEMP 'nvda.log'
+          $detail = ''
+          if (Test-Path $log) {
+            $lines = Get-Content $log -Encoding UTF8
+            $selected = $lines | Select-String -Pattern 'espeak|tuc_wav|Traceback|ERROR|CRITICAL|setSynth|Scratchpad' -Context 2,8 | Out-String
+            $detail = $selected + "`nLOG TAIL:`n" + (($lines | Select-Object -Last 70) -join "`n")
+          } else { $detail = 'NVDA log file absent' }
+          $captureFiles = Get-ChildItem $env:TUC_NVDA_CAPTURE_DIR -ErrorAction SilentlyContinue | Select-Object Name,Length | Out-String
+          $detail += "`nCAPTURE FILES:`n$captureFiles"
+          Add-Content $env:GITHUB_STEP_SUMMARY "### Diagnostic NVDA`n````text`n$detail`n````"
+          $oneLine = ($detail -replace '%','%25' -replace "`r",'%0D' -replace "`n",'%0A')
+          if ($oneLine.Length -gt 28000) { $oneLine = $oneLine.Substring($oneLine.Length - 28000) }
+          Write-Output "::notice title=NVDA startup diagnostic::$oneLine"
+
       - name: Publier les preuves et diagnostics
         if: always()
         uses: actions/upload-artifact@v4
