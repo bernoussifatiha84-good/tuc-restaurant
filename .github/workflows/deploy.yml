@@ -19,6 +19,7 @@ on:
           - deploy
           - inventory-woocommerce
           - seed-demo
+          - seed-demo-uat
         default: deploy
         required: true
 
@@ -135,7 +136,14 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          if [[ "$EVENT_NAME" == workflow_dispatch ]] && [[ "$OPERATION" == inventory-woocommerce || "$OPERATION" == seed-demo ]]; then
+          # Un outil manuel vise l'environnement de SON job porteur. Un seul
+          # resolveur nourrit tous les jobs : coder `uat` ici mentait des qu'un
+          # outil visait dev (banc d'essai MariaDB de l'hebergeur).
+          if [[ "$EVENT_NAME" == workflow_dispatch && "$OPERATION" == "seed-demo" ]]; then
+            ENV_NAME=dev; URL="$URL_DEV"; ROOT="$ROOT_DEV"
+          elif [[ "$EVENT_NAME" == workflow_dispatch && "$OPERATION" == "seed-demo-uat" ]]; then
+            ENV_NAME=uat; URL="$URL_UAT"; ROOT="$ROOT_UAT"
+          elif [[ "$EVENT_NAME" == workflow_dispatch && "$OPERATION" == "inventory-woocommerce" ]]; then
             ENV_NAME=uat; URL="$URL_UAT"; ROOT="$ROOT_UAT"
           elif [[ "$REF_TYPE" == branch && "$REF_NAME" == develop ]]; then
             ENV_NAME=dev; URL="$URL_DEV"; ROOT="$ROOT_DEV"
@@ -485,44 +493,69 @@ jobs:
           } >> "$GITHUB_STEP_SUMMARY"
 
   seed_demo:
-    name: Seed demo UAT (outil, hors production)
-    if: ${{ github.event_name == 'workflow_dispatch' && inputs.operation == 'seed-demo' }}
+    name: Seed demo (outil, hors production)
+    if: ${{ github.event_name == 'workflow_dispatch' && (inputs.operation == 'seed-demo' || inputs.operation == 'seed-demo-uat') }}
     needs: [cible]
     runs-on: ubuntu-latest
-    environment: uat
+    # L'environnement porte les secrets SSH, mais ne doit PAS imposer la cible :
+    # `seed-demo` vise le dev (aucun secret dedie) et `seed-demo-uat` l'UAT.
+    # Le resolveur a deja tranche ; forcer `uat` ici le contredisait.
+    environment: ${{ needs.cible.outputs.env }}
     steps:
       - uses: actions/checkout@v5
 
-      - name: Valider le perimetre UAT et les secrets SSH
+      - name: Valider le perimetre de la cible et les secrets SSH
         env:
           SSH_HOST: ${{ secrets.SSH_HOST }}
           SSH_USER: ${{ secrets.SSH_USERNAME || secrets.SSH_USER }}
           SSH_PRIVATE_KEY: ${{ secrets.SSH_PRIVATE_KEY }}
           SSH_ROOT: ${{ needs.cible.outputs.root }}
           SITE_URL: ${{ needs.cible.outputs.url }}
+          ENV_NAME: ${{ needs.cible.outputs.env }}
           URL_PRD: ${{ vars.URL_PRD }}
           ROOT_PRD: ${{ vars.ROOT_PRD }}
+          ROOT_DEV: ${{ vars.ROOT_DEV }}
+          ROOT_UAT: ${{ vars.ROOT_UAT }}
         shell: bash
         run: |
           set -euo pipefail
           for name in SSH_HOST SSH_USER SSH_PRIVATE_KEY SSH_ROOT SITE_URL; do
             if [[ -z "${!name}" ]]; then
-              echo "::error::Configuration UAT manquante : $name. Aucun acces distant effectue."
+              echo "::error::Configuration manquante pour '$ENV_NAME' : $name. Aucun acces distant effectue."
               exit 1
             fi
           done
           trim_slashes() { printf '%s' "$1" | sed 's:/*$::'; }
           if [[ -n "$URL_PRD" && "$(trim_slashes "$SITE_URL")" == "$(trim_slashes "$URL_PRD")" ]]; then
-            echo "::error::URL_UAT egale a URL_PRD; seed annule. Le contenu de demonstration n'a rien a faire en production."
+            echo "::error::La cible egale URL_PRD; seed annule. Le contenu de demonstration n'a rien a faire en production."
             exit 1
           fi
           if [[ -n "$ROOT_PRD" && "$(trim_slashes "$SSH_ROOT")" == "$(trim_slashes "$ROOT_PRD")" ]]; then
-            echo "::error::ROOT_UAT egale a ROOT_PRD; seed annule."
+            echo "::error::La cible egale ROOT_PRD; seed annule."
             exit 1
           fi
-          case "$(trim_slashes "$SSH_ROOT")" in
-            *"/uat") ;;
-            *) echo "::error::ROOT_UAT ne se termine pas par /uat; seed annule."; exit 1 ;;
+
+          # Deux cibles seulement, chacune avec sa signature de racine. Le refus
+          # est ferme : une racine qui ne correspond a aucun cas connu arrete le
+          # job, elle ne "passe pas par defaut".
+          root="$(trim_slashes "$SSH_ROOT")"
+          root_uat="$(trim_slashes "$ROOT_UAT")"
+          root_dev="$(trim_slashes "$ROOT_DEV")"
+          case "$ENV_NAME" in
+            uat)
+              [[ "$root" == "$root_uat" && "$root" == */uat ]] \
+                || { echo "::error::seed-demo-uat exige ROOT_UAT (termine par /uat). Cible refusee : $root"; exit 1; }
+              ;;
+            dev)
+              [[ "$root" == "$root_dev" ]] \
+                || { echo "::error::seed-demo vise le dev et exige ROOT_DEV. Cible refusee : $root"; exit 1; }
+              [[ "$root" != */uat ]] \
+                || { echo "::error::ROOT_DEV se termine par /uat : c'est l'UAT. Seed dev annule."; exit 1; }
+              ;;
+            *)
+              echo "::error::Environnement '$ENV_NAME' non autorise pour le seed. Attendu : dev ou uat."
+              exit 1
+              ;;
           esac
 
       - name: Linter le script de seed
@@ -541,7 +574,7 @@ jobs:
           chmod 600 ~/.ssh/id_deploy
           ssh-keyscan -p "$SSH_PORT" -H "$SSH_HOST" >> ~/.ssh/known_hosts 2>/dev/null
 
-      - name: Verifier que la cible est bien l'UAT
+      - name: Verifier que la cible se declare hors production
         env:
           SSH_PORT: ${{ vars.SSH_PORT || '65002' }}
           SSH_USER: ${{ secrets.SSH_USERNAME || secrets.SSH_USER }}

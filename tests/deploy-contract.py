@@ -33,7 +33,17 @@ FAKE_VARS = {
 
 # Verbes de dispatch déclarés. Toute évolution de cette liste doit être voulue :
 # `deploy` écrit le code, les autres sont des outils sans écriture de code.
-KNOWN_OPERATIONS = ["deploy", "inventory-woocommerce", "seed-demo"]
+KNOWN_OPERATIONS = ["deploy", "inventory-woocommerce", "seed-demo", "seed-demo-uat"]
+
+# Cible que chaque outil a le DROIT de viser. Liste fermee : un verbe ajoute au
+# YAML sans etre declare ici casse « la liste declaree passe la garde » ; un
+# verbe declare qui vise une autre cible casse son cas de resolution. Aucun
+# outil ne vise prd : la production n'a pas de secrets.
+TOOL_TARGETS = {
+    "inventory-woocommerce": "uat",
+    "seed-demo": "dev",
+    "seed-demo-uat": "uat",
+}
 
 # (libellé, ref_type, ref_name, event, operation, vars, code_attendu, env_attendu)
 CASES = [
@@ -45,10 +55,12 @@ CASES = [
     ("tag quelconque refusé", "tag", "v1.2.3", "push", "", FAKE_VARS, 1, None),
     ("dispatch deploy depuis branche refusée", "branch", "feature/x", "workflow_dispatch", "deploy", FAKE_VARS, 1, None),
     ("dispatch inventaire -> uat", "branch", "feature/x", "workflow_dispatch", "inventory-woocommerce", FAKE_VARS, 0, "uat"),
-    ("dispatch seed-demo -> uat", "branch", "feature/x", "workflow_dispatch", "seed-demo", FAKE_VARS, 0, "uat"),
-    # Un outil manuel ne doit jamais devenir une écriture production, même si le
-    # dispatch est lancé depuis un tag de release.
-    ("dispatch seed-demo sur tag release reste uat", "tag", "release-0.9.0", "workflow_dispatch", "seed-demo", FAKE_VARS, 0, "uat"),
+    ("dispatch seed-demo -> dev", "branch", "feature/x", "workflow_dispatch", "seed-demo", FAKE_VARS, 0, "dev"),
+    ("dispatch seed-demo-uat -> uat", "branch", "feature/x", "workflow_dispatch", "seed-demo-uat", FAKE_VARS, 0, "uat"),
+    # Un outil manuel ne doit jamais devenir une ecriture production, meme si le
+    # dispatch est lance depuis un tag de release.
+    ("dispatch seed-demo sur tag release reste dev", "tag", "release-0.9.0", "workflow_dispatch", "seed-demo", FAKE_VARS, 0, "dev"),
+    ("dispatch seed-demo-uat sur tag release reste uat", "tag", "release-0.9.0", "workflow_dispatch", "seed-demo-uat", FAKE_VARS, 0, "uat"),
     ("dispatch inventaire sur tag release reste uat", "tag", "release-0.9.0", "workflow_dispatch", "inventory-woocommerce", FAKE_VARS, 0, "uat"),
     ("prd non configurée refusée", "tag", "release-0.9.0", "push", "", {**FAKE_VARS, "URL_PRD": "", "ROOT_PRD": ""}, 1, None),
     ("uat non configurée refusée", "tag", "pre-release-0.8.9", "push", "", {**FAKE_VARS, "URL_UAT": "", "ROOT_UAT": ""}, 1, None),
@@ -190,25 +202,37 @@ def check_operations_behaviour() -> list[tuple[bool, str]]:
         if len(carriers) != 1:
             continue
 
-        environment = jobs[carriers[0]].get("environment")
+        # L'environnement du job porte les secrets SSH. Il peut etre litteral
+        # (non-production) ou delegue au resolveur — jamais la production. La
+        # delegation n'est acceptee qu'avec un refus ferme : le job doit fermer
+        # lui-meme la liste des environnements qu'il tolere, sinon le resolveur
+        # deciderait seul de la cible d'un outil.
+        job = jobs[carriers[0]]
+        environment = job.get("environment")
+        delegated = environment == "${{ needs.cible.outputs.env }}"
+        clos = any(
+            'case "$ENV_NAME" in' in str(step.get("run", ""))
+            and "*)" in str(step.get("run", ""))
+            for step in job.get("steps", [])
+        )
+        litteral_non_prod = (
+            isinstance(environment, str)
+            and environment not in ("prd", "production")
+            and "${" not in environment
+        )
         results.append((
-            isinstance(environment, str) and environment not in ("prd", "production")
-            and "${{" not in environment,
-            f"{option} : environnement littéral non-production ({environment!r})",
+            litteral_non_prod or (delegated and clos),
+            f"{option} : environnement non-production, litteral ou delegue avec refus ferme ({environment!r})",
         ))
         results.append((
             "github.event_name == 'workflow_dispatch'" in str(jobs[carriers[0]].get("if", "")),
             f"{option} : déclenchement manuel uniquement, jamais sur push",
         ))
 
-        # Le résolveur réel, exécuté : même depuis un tag de release, un outil
-        # manuel doit résoudre l'environnement de SON job porteur, jamais prd.
-        #
-        # L'environnement attendu est dérivé du job, pas codé en dur à `uat` :
-        # un outil peut légitiment viser dev (banc d'essai MariaDB de l'hébergeur)
-        # sans que ce contrat ait à être réécrit. Ce qui reste invariant est
-        # l'accord verbe <-> job <-> cible, et l'exclusion de la production.
-        expected_env = environment if isinstance(environment, str) else None
+        # La cible attendue vient de TOOL_TARGETS : un outil vise la cible
+        # declaree (seed-demo -> dev, banc d'essai MariaDB de l'hebergeur) et
+        # jamais prd, quel que soit le type de reference du dispatch.
+        expected_env = TOOL_TARGETS[option]
         for ref_type, ref_name in (("branch", "feature/x"), ("tag", "release-0.9.0")):
             ok, detail = run_case(script, (
                 f"{option} depuis {ref_type} {ref_name}",
