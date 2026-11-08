@@ -166,10 +166,68 @@ risque est **`'type' => 'NUMERIC'` dans les `meta_query`**, à quatre endroits :
 | `class-tuc-caisse.php` | 418 | **liste des commandes de la caisse** |
 | `class-tuc-espace-pro.php` | 413, 473, 688 | filtrage par restaurant |
 
-WordPress traduit `type => NUMERIC` en `CAST(meta_value AS SIGNED)`. `SIGNED`
-n'existe pas en SQLite : c'est une syntaxe MySQL, qui dépend de la couche de
-traduction de l'intégration SQLite. Et ce n'est pas un tri cosmétique — c'est le
-**filtre d'isolation par restaurant** (`tuc_resto`). S'il se comporte mal, la
-caisse peut lister les mauvaises commandes, ou aucune.
+WordPress traduit `type => NUMERIC` en `CAST(meta_value AS SIGNED)`, et ce n'est
+pas un tri cosmétique — c'est le **filtre d'isolation par restaurant**
+(`tuc_resto`).
+
+**Correction de ma propre affirmation.** J'avais écrit que `SIGNED` n'existait pas
+en SQLite. **C'est faux**, mesuré sur SQLite 3.40.1 :
+
+```
+CAST('11' AS SIGNED)   -> 11    typeof=integer   aucune erreur
+CAST('11.9' AS SIGNED) -> 11.9  typeof=real      (MySQL donnerait 12)
+```
+
+SQLite applique ses règles d'affinité à un nom de type arbitraire : `SIGNED` ne
+contient aucun des marqueurs `INT`/`CHAR`/`REAL`, donc affinité NUMERIC, donc
+conversion réussie. La session serveur avait raison sur ce point.
+
+**Mais le `type` change bien le SQL.** `WP_Meta_Query` (cœur WordPress,
+`class-wp-meta-query.php:776-782`) :
+
+```php
+if ( 'CHAR' === $meta_type ) {          // défaut quand 'type' est absent
+    "$alias.meta_value $compare $where";
+} else {                                 // 'NUMERIC' -> 'SIGNED'
+    "CAST($alias.meta_value AS $meta_type) $compare $where";
+}
+```
+
+Et les deux ne sélectionnent pas les mêmes lignes. Mesuré sur SQLite :
+
+| Clause | Lignes retenues pour `= '11'` |
+|---|---|
+| avec `type => NUMERIC` → `CAST(… AS SIGNED)` | `11`, `011`, `11 ` |
+| sans `type` → pas de CAST | `11` seulement |
+
+Donc « `type => NUMERIC` n'est jamais appliqué, SQL identique avec et sans » est
+inexact. La conclusion « pas de faille actuelle » reste juste, mais pour une autre
+raison : **les valeurs stockées sont des entiers propres** (`update_post_meta` avec
+un `int`), jamais `011` ni `11 `. C'est la propreté des données qui protège, pas
+l'inertie du paramètre.
+
+Conséquence à retenir : ne pas conclure « `type => NUMERIC` est inoffensif ». Il
+élargit l'égalité. Un jour où un identifiant arrive comme chaîne depuis une
+saisie ou un import, le filtre d'isolation par restaurant devient plus permissif
+que prévu.
 
 C'est là qu'un job CI SQLite aurait de la valeur, pas sur un tri de notes.
+
+### Trou ouvert dans le correctif `021a01b` — archive corrompue acceptée
+
+Le comptage de fichiers utilise `fichiers=$(tar -tzf "$archive" | grep -vc '/$' || true)`.
+Le `|| true` neutralise l'échec du **pipeline entier**, donc celui de `tar`. Avec
+`set -euo pipefail`, une archive tronquée n'arrête plus le step. Mesuré :
+
+| Archive | `tar -tzf` seul | Logique du step |
+|---|---|---|
+| saine, 700 o | exit 0 | code 0 — « 30 fichier(s) » |
+| **tronquée à 350 o** | **exit 2** | **code 0 — « 11 fichier(s) »** |
+
+Une sauvegarde non restaurable est donc acceptée. C'est la classe de faux vert que
+le correctif chasse, réintroduite par le `|| true` — celui-là même qu'il fallait
+éviter. Correctif d'une ligne : laisser `tar` échouer (ou tester sa sortie
+séparément) au lieu d'avaler le code de retour, puis vérifier le nombre de fichiers.
+
+Le trou du sous-dossier vide est en revanche **bien fermé** par `021a01b` : vérifié,
+code 1, et la méta-garde comportementale reste 4/4 sur ce code.
