@@ -23,6 +23,7 @@ class Capture:
         self.counter = 0
         self.current = None
         self.format = (1, 2, 22050)
+        self.pending_byte = None
 
     @staticmethod
     def _write_json(path: Path, value):
@@ -37,6 +38,7 @@ class Capture:
         with self.lock:
             self.finish(complete=False, reason="superseded")
             self.counter += 1
+            self.pending_byte = None
             stem = f"{self.counter:06d}"
             path = self.directory / f"{stem}.wav"
             self.current = {
@@ -74,8 +76,15 @@ class Capture:
                 # eSpeak's background callback can race with cancel(). PCM after
                 # cancellation was not requested speech and must not be recorded.
                 return
-            self.current["wav"].writeframesraw(data)
-            self.current["bytes"] += len(data)
+            if self.pending_byte is not None:
+                data = bytes((self.pending_byte,)) + data
+                self.pending_byte = None
+            if len(data) % 2:
+                self.pending_byte = data[-1]
+                data = data[:-1]
+            if data:
+                self.current["wav"].writeframesraw(data)
+                self.current["bytes"] += len(data)
 
     @property
     def bytes_written(self):
@@ -89,6 +98,10 @@ class Capture:
                 return
             self.current = None
             if item["wav"] is not None:
+                if self.pending_byte is not None:
+                    item["wav"].writeframesraw(bytes((self.pending_byte, 0)))
+                    item["bytes"] += 2
+                    self.pending_byte = None
                 item["wav"].close()
             byte_rate = item["channels"] * item["sample_width"] * item["sample_rate"]
             item["languages"] = [language for language in item["languages"] if language["language"] != "boundary" or language["start_byte"] is not None]
