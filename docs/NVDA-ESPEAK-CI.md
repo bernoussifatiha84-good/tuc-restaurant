@@ -1,4 +1,4 @@
-# Audit NVDA / eSpeak et expérience CI sans carte son
+# Audit NVDA / eSpeak et CI sans carte son
 
 ## État constaté le 8 novembre 2026
 
@@ -44,11 +44,12 @@ transcription, rapport clavier, configuration et journal NVDA. Il est publié po
 7 jours, jusqu'au 15 novembre 2026. La PR #2 reste en brouillon : aucun déploiement
 et aucune fusion n'ont été effectués.
 
-## Expérience de cette session
+## Méthode intégrée au smoke test WordPress
 
-Le workflow `NVDA — eSpeak intégré et capture WAV` est séparé des déploiements.
-Il exporte d'abord le vrai formulaire WordPress de la révision indiquée de la
-PR #1, puis teste ce HTML rendu dans Chromium sur `windows-2025`.
+Le job `nvda-windows` du workflow `WordPress Docker smoke test` réutilise le
+formulaire réellement rendu par WordPress dans le job Linux, puis le teste dans
+Chromium sur `windows-2025`. Il n’y a plus de workflow NVDA séparé ni de pilote
+`espeakWav` appelant un eSpeak externe.
 
 Il n'installe **aucun pilote audio** et n'utilise ni devcon ni pnputil. NVDA est
 installé en portable dans le profil temporaire du runner, avec vérification SHA-256.
@@ -80,7 +81,7 @@ pas un essai humain NVDA/Firefox ou VoiceOver/Safari. Les interruptions de parol
 peuvent produire des utterances partielles : elles sont marquées comme telles et
 ne sont pas utilisées pour la validation des langues.
 
-Le workflow publie les WAV, le manifeste, le texte transmis au moteur, la
+Le job publie les WAV, le manifeste, le texte transmis au moteur, la
 configuration effective et le journal NVDA, même en cas d'échec. Un résultat
 vert doit être confirmé par la présence et le contenu de ces artefacts.
 

@@ -379,6 +379,9 @@ jobs:
         run: |
           set -euo pipefail
           node tests/export-onboarding-nvda-fixture.js
+          git rev-parse HEAD > "$RUNNER_TEMP/tuc-onboarding-nvda-fixture/source-commit.txt"
+          grep -q 'Nom du restaurant' "$RUNNER_TEMP/tuc-onboarding-nvda-fixture/index.html"
+          grep -q 'Demander l’accompagnement' "$RUNNER_TEMP/tuc-onboarding-nvda-fixture/index.html"
 
       - name: Publier le formulaire rendu pour le lecteur d’écran Windows
         uses: actions/upload-artifact@v4
@@ -485,21 +488,26 @@ jobs:
           rm -f .env
 
   nvda-windows:
-    name: Vérifier les annonces avec NVDA sous Windows
-    runs-on: windows-2025
+    name: NVDA réel, eSpeak intégré, sortie WAV sans pilote
     needs: wordpress-docker
+    env:
+      NVDA_VERSION: '2026.3'
+      NVDA_SHA256: a8a87cb823da0c62cfbae4a444ae5ae238d54dc82ad6d46d3fdb3fef082799b2
+    runs-on: windows-2025
     timeout-minutes: 15
     steps:
       - name: Récupérer le dépôt
         uses: actions/checkout@v5
+        with:
+          persist-credentials: false
 
-      - name: Télécharger le formulaire rendu par WordPress
+      - name: Télécharger le formulaire WordPress
         uses: actions/download-artifact@v4
         with:
           name: onboarding-nvda-fixture
           path: ${{ runner.temp }}/tuc-onboarding-nvda-fixture
 
-      - name: Installer Playwright et Chromium
+      - name: Installer Playwright et pywinauto
         shell: pwsh
         run: |
           $prefix = Join-Path $env:RUNNER_TEMP 'tuc-playwright'
@@ -507,49 +515,55 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw 'Playwright installation failed' }
           & (Join-Path $prefix 'node_modules/.bin/playwright.cmd') install chromium
           if ($LASTEXITCODE -ne 0) { throw 'Chromium installation failed' }
-          python -m pip install --disable-pip-version-check pywinauto
+          python -m pip install --disable-pip-version-check pywinauto==0.6.9
           if ($LASTEXITCODE -ne 0) { throw 'pywinauto installation failed' }
 
-      - name: Installer eSpeak NG et préparer la capture WAV sans périphérique audio
-        timeout-minutes: 3
+      - name: Installer NVDA portable vérifié
         shell: pwsh
+        timeout-minutes: 4
         run: |
           $ErrorActionPreference = 'Stop'
-          $msi = Join-Path $env:RUNNER_TEMP 'espeak-ng-1.52.0.msi'
-          Invoke-WebRequest -Uri 'https://github.com/espeak-ng/espeak-ng/releases/download/1.52.0/espeak-ng.msi' -OutFile $msi -TimeoutSec 90
-          $install = Start-Process -FilePath msiexec.exe -ArgumentList @('/i', $msi, '/qn', '/norestart') -PassThru
-          if (-not $install.WaitForExit(60000)) { Stop-Process -Id $install.Id -Force; throw 'eSpeak NG MSI installation timed out' }
-          if ($install.ExitCode -notin @(0, 3010)) { throw "eSpeak NG installation failed: $($install.ExitCode)" }
-          $candidates = @(
-            (Join-Path $env:ProgramFiles 'eSpeak NG/espeak-ng.exe'),
-            (Join-Path ${env:ProgramFiles(x86)} 'eSpeak NG/espeak-ng.exe')
-          )
-          $exe = $candidates | Where-Object { Test-Path $_ } | Select-Object -First 1
-          if (-not $exe) { throw "eSpeak NG executable not found: $($candidates -join '; ')" }
-          $speechDir = Join-Path $env:RUNNER_TEMP 'nvda-espeak-segments'
-          Remove-Item $speechDir -Recurse -Force -ErrorAction SilentlyContinue
-          New-Item -ItemType Directory -Force -Path $speechDir | Out-Null
-          [System.IO.File]::AppendAllText($env:GITHUB_ENV, "TUC_ESPEAK_EXE=$exe`nTUC_NVDA_SPEECH_DIR=$speechDir`n", [System.Text.UTF8Encoding]::new($false))
-          Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value "eSpeak NG installed at $exe; NVDA speech segments will be rendered to WAV files without a kernel audio driver."
+          $installer = Join-Path $env:RUNNER_TEMP 'nvda.exe'
+          $uri = "https://github.com/nvaccess/nvda/releases/download/release-$env:NVDA_VERSION/nvda_$env:NVDA_VERSION.exe"
+          $downloaded = $false
+          for ($attempt = 1; $attempt -le 3; $attempt++) {
+            try {
+              Invoke-WebRequest -Uri $uri -OutFile $installer -TimeoutSec 90
+              $downloaded = $true
+              break
+            } catch {
+              Write-Warning "NVDA download attempt $attempt failed: $($_.Exception.Message)"
+              if ($attempt -lt 3) { Start-Sleep -Seconds (5 * $attempt) }
+            }
+          }
+          if (-not $downloaded) { throw 'NVDA release download failed after three attempts' }
+          $hash = (Get-FileHash $installer -Algorithm SHA256).Hash.ToLowerInvariant()
+          if ($hash -ne $env:NVDA_SHA256) { throw "NVDA checksum mismatch: $hash" }
+          $portable = Join-Path $env:RUNNER_TEMP 'nvda-portable'
+          $process = Start-Process -FilePath $installer -ArgumentList @('--create-portable-silent', "--portable-path=$portable") -PassThru -WindowStyle Hidden
+          if (-not $process.WaitForExit(90000)) { Stop-Process -Id $process.Id -Force; throw 'NVDA portable creation timed out' }
+          if ($process.ExitCode -ne 0) { throw "NVDA portable creation failed: $($process.ExitCode)" }
+          $exe = Get-ChildItem -Path $portable -Filter nvda.exe -Recurse | Select-Object -First 1
+          if (-not $exe) { throw 'Portable nvda.exe not found' }
+          "TUC_NVDA_EXE=$($exe.FullName)" | Out-File $env:GITHUB_ENV -Append -Encoding utf8
+          "NVDA portable $env:NVDA_VERSION verified: $hash" | Add-Content $env:GITHUB_STEP_SUMMARY
 
-      - name: Installer le lecteur d’écran NVDA portable
+      - name: Préparer le profil isolé et le sink PCM
         shell: pwsh
         run: |
-          $installer = Join-Path $env:RUNNER_TEMP 'nvda.exe'
-          $portable = Join-Path $env:RUNNER_TEMP 'nvda-portable'
           $config = Join-Path $env:RUNNER_TEMP 'nvda-config'
-          New-Item -ItemType Directory -Force -Path $config | Out-Null
-          $scratchSynthDir = Join-Path $config 'scratchpad/synthDrivers'
-          New-Item -ItemType Directory -Force -Path $scratchSynthDir | Out-Null
-          Copy-Item tests/nvda-espeak-wav-driver.py (Join-Path $scratchSynthDir 'espeakWav.py') -Force
-          Invoke-WebRequest -Uri 'https://github.com/nvaccess/nvda/releases/download/release-2026.3/nvda_2026.3.exe' -OutFile $installer
-          $process = Start-Process -FilePath $installer -ArgumentList @('--create-portable-silent', "--portable-path=$portable") -Wait -PassThru -WindowStyle Hidden
-          if ($process.ExitCode -ne 0) { throw "NVDA portable creation failed: $($process.ExitCode)" }
+          $synth = Join-Path $config 'scratchpad/synthDrivers'
+          New-Item -ItemType Directory -Force -Path $synth | Out-Null
+          Copy-Item tests/nvda/espeak_capture.py (Join-Path $synth 'espeak.py')
+          Copy-Item tests/nvda/tuc_wav_sink.py (Join-Path $synth 'tuc_wav_sink.py')
           @'
           schemaVersion = 2
           [general]
           language = en
           showWelcomeDialogAtStartup = False
+          askToExit = False
+          playStartAndExitSounds = False
+          loggingLevel = INFO
           [update]
           askedAllowUsageStats = True
           autoCheck = False
@@ -558,115 +572,143 @@ jobs:
           [development]
           enableScratchpadDir = True
           [speech]
-          synth = espeakWav
+          synth = espeak
           autoLanguageSwitching = True
-          [speechViewer]
-          showSpeechViewerAtStartup = True
-          '@ | Set-Content -Path (Join-Path $config 'nvda.ini') -Encoding utf8
-          $nvda = Get-ChildItem -Path $portable -Filter 'nvda.exe' -Recurse | Select-Object -First 1
-          if (-not $nvda) { throw 'Portable NVDA executable not found' }
+          autoDialectSwitching = True
+          reportNotSupportedLanguage = speech
+          [[espeak]]
+          voice = fr-fr
+          rate = 50
+          [audio]
+          outputDevice = default
+          audioAwakeTime = 0
+          audioDuckingMode = 0
+          [virtualBuffers]
+          autoSayAllOnPageLoad = False
+          passThroughAudioIndication = False
+          [braille]
+          display = noBraille
+          '@ | Set-Content (Join-Path $config 'nvda.ini') -Encoding utf8
+          $capture = Join-Path $env:RUNNER_TEMP 'nvda-capture'
+          New-Item -ItemType Directory -Force -Path $capture | Out-Null
+          @"
+          TUC_NVDA_CONFIG=$config
+          TUC_NVDA_CAPTURE_DIR=$capture
+          TUC_NVDA_FIXTURE_DIR=$env:RUNNER_TEMP\tuc-onboarding-nvda-fixture
+          TUC_NVDA_REPORT=$env:RUNNER_TEMP\nvda-report.json
+          NODE_PATH=$env:RUNNER_TEMP\tuc-playwright\node_modules
+          "@ | Out-File $env:GITHUB_ENV -Append -Encoding utf8
+
+      - name: Démarrer NVDA et refuser tout repli sur OneCore
+        shell: pwsh
+        run: |
           $log = Join-Path $env:RUNNER_TEMP 'nvda.log'
-          Start-Process -FilePath $nvda.FullName -ArgumentList @("--config-path=$config", '--debug-logging', "--log-file=$log")
-          Start-Sleep -Seconds 8
-          "NVDA=$($nvda.FullName)" | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Append
-          $configText = Get-Content (Join-Path $config 'nvda.ini') -Raw
-          Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value "`n### NVDA effective config file`n````ini`n$configText`n````"
+          $arguments = @("--config-path=$env:TUC_NVDA_CONFIG", "--log-file=$log", '--debug-logging')
+          $process = Start-Process -FilePath $env:TUC_NVDA_EXE -ArgumentList $arguments -PassThru
+          "TUC_NVDA_PID=$($process.Id)" | Out-File $env:GITHUB_ENV -Append -Encoding utf8
+          $proof = Join-Path $env:TUC_NVDA_CAPTURE_DIR 'native-espeak-initialized.json'
+          $deadline = (Get-Date).AddSeconds(45)
+          while (-not (Test-Path $proof) -and (Get-Date) -lt $deadline) {
+            if ($process.HasExited) { throw "NVDA exited before initialization: $($process.ExitCode)" }
+            Start-Sleep -Milliseconds 500
+          }
+          if (-not (Test-Path $proof)) { throw 'Native eSpeak file sink did not initialize; refusing OneCore fallback' }
+          $evidence = Get-Content $proof -Raw | ConvertFrom-Json
+          if ($evidence.synth -ne 'espeak' -or $evidence.class_module -ne 'nvdaBuiltin.synthDrivers.espeak') { throw 'Wrong synthesizer implementation' }
+          $effective = Get-Content (Join-Path $env:TUC_NVDA_CONFIG 'nvda.ini') -Raw
+          if ($effective -notmatch 'synth\s*=\s*espeak') { throw 'NVDA changed the configured synthesizer' }
+          Add-Content $env:GITHUB_STEP_SUMMARY "### Preuve du moteur`n````json`n$(Get-Content $proof -Raw)`n````"
+          Write-Output 'PASS: NVDA loaded its bundled eSpeak engine with the CI PCM sink.'
+
+      - name: Parcours clavier Windows et annonces NVDA
+        shell: pwsh
+        timeout-minutes: 5
+        run: |
+          node --check tests/nvda/native-espeak-smoke.js
+          if ($LASTEXITCODE -ne 0) { throw 'JavaScript syntax error' }
+          node tests/nvda/native-espeak-smoke.js *> (Join-Path $env:RUNNER_TEMP 'nvda-node.log')
+          $testExit = $LASTEXITCODE
+          Get-Content (Join-Path $env:RUNNER_TEMP 'nvda-node.log') -Encoding UTF8
+          if ($testExit -ne 0) {
+            $detail = Get-Content (Join-Path $env:RUNNER_TEMP 'nvda-node.log') -Raw -Encoding UTF8
+            $oneLine = ($detail -replace '%','%25' -replace "`r",'%0D' -replace "`n",'%0A')
+            if ($oneLine.Length -gt 28000) { $oneLine = $oneLine.Substring(0,28000) }
+            Write-Output "::error title=Native NVDA test failure::$oneLine"
+            throw 'Native NVDA keyboard test failed; see report and NVDA log artifacts'
+          }
+
+      - name: Arrêter proprement NVDA et finaliser les WAV
+        if: always()
+        shell: pwsh
+        run: |
+          if ($env:TUC_NVDA_EXE) {
+            $quit = Start-Process -FilePath $env:TUC_NVDA_EXE -ArgumentList @('--quit', "--config-path=$env:TUC_NVDA_CONFIG") -PassThru -WindowStyle Hidden
+            if (-not $quit.WaitForExit(15000)) { Stop-Process -Id $quit.Id -Force -ErrorAction SilentlyContinue }
+            $native = Get-Process -Name nvda -ErrorAction SilentlyContinue
+            $deadline = (Get-Date).AddSeconds(15)
+            while ($native -and (Get-Date) -lt $deadline) {
+              Start-Sleep -Milliseconds 500
+              $native = Get-Process -Name nvda -ErrorAction SilentlyContinue
+            }
+            if ($native) {
+              Write-Warning 'NVDA did not exit gracefully; partial WAV headers may need recovery.'
+              $native | Stop-Process -Force
+            }
+          }
+
+      - name: Valider les annonces et le PCM français/arabe
+        shell: pwsh
+        run: |
+          $output = Join-Path $env:RUNNER_TEMP 'nvda-audio'
+          python tests/nvda/validate_capture.py --capture $env:TUC_NVDA_CAPTURE_DIR --output $output *> (Join-Path $env:RUNNER_TEMP 'nvda-validation.log')
+          $validationExit = $LASTEXITCODE
+          $detail = Get-Content (Join-Path $env:RUNNER_TEMP 'nvda-validation.log') -Raw -Encoding UTF8
+          Write-Output $detail
+          if ($validationExit -ne 0) {
+            $oneLine = ($detail -replace '%','%25' -replace "`r",'%0D' -replace "`n",'%0A')
+            Write-Output "::error title=NVDA PCM validation::$oneLine"
+            throw 'NVDA built-in eSpeak proof failed'
+          }
+          Add-Content $env:GITHUB_STEP_SUMMARY "### WAV issus du moteur eSpeak intégré à NVDA`n````json`n$(Get-Content (Join-Path $output 'manifest.json') -Raw)`n````"
+
+      - name: Afficher les diagnostics NVDA même en cas d'échec
+        if: always()
+        shell: pwsh
+        run: |
+          $log = Join-Path $env:RUNNER_TEMP 'nvda.log'
+          $detail = ''
           if (Test-Path $log) {
-            $logLines = Get-Content $log
-            $synthLines = $logLines | Select-String -Pattern 'synth|Synth|eSpeak|espeak|OneCore' | ForEach-Object { $_.Line }
-            $audioWarnings = $logLines | Select-String -Pattern "Couldn't open specified or default audio device|WinError -2147023728" | ForEach-Object { $_.Line }
-            $logTail = (Get-Content $log -Tail 50 | Out-String)
-            Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value "`n### NVDA synthesizer log lines`n````text`n$($synthLines -join "`n")`n````"
-            Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value "`n### NVDA audio-device diagnostics`n````text`n$($audioWarnings -join "`n")`n````"
-            Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value "`n### NVDA startup log tail`n````text`n$logTail`n````"
-            $diagnostics = (($synthLines -join ' | ') + ' | audio diagnostics: ' + ($audioWarnings -join ' | ') + ' | ' + $logTail)
-            $diagnosticsOneLine = ($diagnostics -replace '%', '%25' -replace '\r', '%0D' -replace '\n', '%0A')
-            Write-Output "::notice title=NVDA synthesizer diagnostics::$diagnosticsOneLine"
-            if (($synthLines -join "`n") -notmatch 'Loaded synthDriver espeakWav') {
-              Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value '`n**NVDA eSpeak WAV synthesizer failed to load; the test is not allowed to silently fall back.**'
-              throw 'NVDA did not load the CI eSpeakWav scratchpad synthesizer'
-            }
-            Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value '`nNVDA loaded the CI eSpeakWav synthesizer. It captures NVDA speech sequences to files without opening an audio device.'
+            $lines = Get-Content $log -Encoding UTF8
+            $selected = $lines | Select-String -Pattern 'espeak|tuc_wav|Traceback|ERROR|CRITICAL|setSynth|Scratchpad' -Context 2,8 | Out-String
+            $detail = $selected + "`nLOG TAIL:`n" + (($lines | Select-Object -Last 70) -join "`n")
+          } else { $detail = 'NVDA log file absent' }
+          $captureFiles = Get-ChildItem $env:TUC_NVDA_CAPTURE_DIR -ErrorAction SilentlyContinue | Select-Object Name,Length | Out-String
+          $detail += "`nCAPTURE FILES:`n$captureFiles"
+          $report = Join-Path $env:RUNNER_TEMP 'nvda-report.json'
+          if (Test-Path $report) { $detail += "`nTEST REPORT:`n" + (Get-Content $report -Raw -Encoding UTF8) }
+          $detail += "`nCAPTURED UTTERANCES:`n"
+          Get-ChildItem $env:TUC_NVDA_CAPTURE_DIR -Filter '*.json' -ErrorAction SilentlyContinue | Where-Object { $_.Name -match '^\d+' } | ForEach-Object {
+            $item = Get-Content $_.FullName -Raw -Encoding UTF8 | ConvertFrom-Json
+            $detail += "[$($_.Name)] complete=$($item.complete) reason=$($item.reason) text=$($item.text) languages=$($item.languages | ConvertTo-Json -Compress)`n"
+          }
+          Add-Content $env:GITHUB_STEP_SUMMARY "### Diagnostic NVDA`n````text`n$detail`n````"
+          $oneLine = ($detail -replace '%','%25' -replace "`r",'%0D' -replace "`n",'%0A')
+          if ($oneLine.Length -gt 28000) { $oneLine = $oneLine.Substring($oneLine.Length - 28000) }
+          Write-Output "::notice title=NVDA startup diagnostic::$oneLine"
 
-          } else {
-            Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value '`nNVDA startup log was not created.'
-          }
-
-      - name: Parcourir le formulaire avec NVDA Speech Viewer
-        shell: pwsh
-        env:
-          NODE_PATH: ${{ runner.temp }}/tuc-playwright/node_modules
-          TUC_NVDA_FIXTURE_DIR: ${{ runner.temp }}/tuc-onboarding-nvda-fixture
-          TUC_NVDA_TRANSCRIPT: ${{ runner.temp }}/nvda-speech-viewer.txt
-          TUC_NVDA_FAILURE: ${{ runner.temp }}/nvda-failure.txt
-        run: |
-          $nodeLog = Join-Path $env:RUNNER_TEMP 'nvda-smoke-node.log'
-          node --check tests/nvda-smoke.js *> $nodeLog
-          $checkExit = $LASTEXITCODE
-          if ($checkExit -eq 0) {
-            node tests/nvda-smoke.js *> $nodeLog
-            $nodeExit = $LASTEXITCODE
-          } else {
-            $nodeExit = $checkExit
-          }
-          if ($nodeExit -ne 0) {
-            $detail = if (Test-Path $env:TUC_NVDA_FAILURE) { Get-Content $env:TUC_NVDA_FAILURE -Raw } else { 'No diagnostic file was produced' }
-            if (Test-Path $nodeLog) { $detail += "`nNode output:`n" + (Get-Content $nodeLog -Raw) }
-            $speechDir = Join-Path $env:RUNNER_TEMP 'nvda-espeak-segments'
-            $segments = Get-ChildItem $speechDir -Filter '*.wav' -ErrorAction SilentlyContinue | Select-Object -ExpandProperty Name
-            $speechText = Get-ChildItem $speechDir -Filter '*.txt' -ErrorAction SilentlyContinue | ForEach-Object { "[$($_.BaseName)] $(Get-Content $_.FullName -Raw)" }
-            $detail += "`nNVDA eSpeak WAV segment count: $($segments.Count)`n$($segments -join "`n")`nNVDA speech segment text:`n$($speechText -join "`n")"
-            $nvdaLog = Join-Path $env:RUNNER_TEMP 'nvda.log'
-            if (Test-Path $nvdaLog) {
-              $logDiagnostics = Get-Content $nvdaLog | Select-String -Pattern 'espeakWav|Traceback|ERROR|Exception|SynthDriver' -Context 1,3 | Out-String
-              $detail += "`nNVDA driver/error log entries:`n$logDiagnostics"
-            }
-            $oneLine = ($detail -replace '\r?\n', ' ' -replace '%', '%25' -replace ':', '%3A' -replace ',', '%2C')
-            Write-Output "::error title=NVDA Speech Viewer diagnostic::$oneLine"
-            Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value "`n### NVDA test failure`n````text`n$detail`n````"
-            throw 'NVDA screen-reader smoke test failed'
-          }
-          if (Test-Path $env:TUC_NVDA_TRANSCRIPT) {
-            $transcript = Get-Content $env:TUC_NVDA_TRANSCRIPT -Raw
-            Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value "`n### NVDA Speech Viewer output`n````text`n$transcript`n````"
-            $annotation = ($transcript -replace '%', '%25' -replace '\r', '%0D' -replace '\n', '%0A')
-            Write-Output "::notice title=NVDA Speech Viewer transcript::$annotation"
-          }
-
-      - name: Fusionner et vérifier l’audio eSpeak émis par les séquences NVDA
-        shell: pwsh
-        env:
-          TUC_NVDA_SPEECH_DIR: ${{ runner.temp }}/nvda-espeak-segments
-        run: |
-          $outputDir = Join-Path $env:RUNNER_TEMP 'nvda-espeak-audio'
-          $result = python tests/merge-nvda-espeak-audio.py --chunks $env:TUC_NVDA_SPEECH_DIR --output $outputDir 2>&1 | Out-String
-          if ($LASTEXITCODE -ne 0) {
-            Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value "`n### NVDA eSpeak audio capture failed`n````text`n$result`n````"
-            $annotation = ($result -replace '%', '%25' -replace '\r', '%0D' -replace '\n', '%0A')
-            Write-Output "::error title=NVDA eSpeak WAV validation::$annotation"
-            throw 'NVDA did not produce usable French and Arabic eSpeak audio'
-          }
-          Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value "`n### WAV generated from NVDA speech sequences`n````json`n$result`n````"
-          Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value '`nThe WAVs come from NVDA speech sequences passed to the CI eSpeakWav synthesizer. They are not playback captured from NVDA’s built-in eSpeak driver.'
-
-      - name: Publier transcription NVDA, audio eSpeak et journaux
+      - name: Publier les preuves et diagnostics
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: nvda-speech-viewer-${{ github.run_id }}
+          name: nvda-native-espeak-${{ github.run_id }}
           path: |
-            ${{ runner.temp }}/nvda-speech-viewer.txt
-            ${{ runner.temp }}/nvda-failure.txt
+            ${{ runner.temp }}/nvda-capture/
+            ${{ runner.temp }}/nvda-audio/
+            ${{ runner.temp }}/nvda-report.json
+            ${{ runner.temp }}/nvda-node.log
+            ${{ runner.temp }}/nvda-validation.log
             ${{ runner.temp }}/nvda.log
-            ${{ runner.temp }}/nvda-espeak-audio/nvda-espeak-fr.wav
-            ${{ runner.temp }}/nvda-espeak-audio/nvda-espeak-ar.wav
-            ${{ runner.temp }}/nvda-espeak-audio/nvda-espeak-all.wav
-            ${{ runner.temp }}/nvda-espeak-audio/nvda-espeak-manifest.json
+            ${{ runner.temp }}/nvda-config/nvda.ini
+            ${{ runner.temp }}/tuc-onboarding-nvda-fixture/source-commit.txt
           if-no-files-found: warn
           retention-days: 7
-
-      - name: Arrêter NVDA
-        if: always()
-        shell: pwsh
-        run: |
-          Get-Process -Name nvda -ErrorAction SilentlyContinue | Stop-Process -Force

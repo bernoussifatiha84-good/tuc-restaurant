@@ -18,3 +18,8 @@ google_drive/
 Thumbs.db
 .vscode/
 .idea/
+
+# Python / Node local artifacts
+__pycache__/
+*.pyc
+node_modules/

@@ -4,13 +4,11 @@
 
 Le workflow WordPress Docker exécute axe-core sur le composant avant envoi et après apparition du lien WhatsApp, pour les règles WCAG 2.0/2.1/2.2 A et AA. Playwright vérifie aussi l’ordre clavier nom → photo → bouton, la langue `ar` lorsque le nom est saisi en arabe, le rôle de statut, le nom accessible du lien et le déplacement du focus après l’envoi.
 
-Un second job Windows lance le formulaire rendu par WordPress dans Chromium avec **NVDA réellement actif**. Le script parcourt le formulaire par Tab/Shift+Tab/Entrée et lit la transcription de NVDA Speech Viewer pour vérifier les libellés, aides, statut et nom du lien. La transcription est publiée comme artefact du workflow. Cela vérifie les annonces textuelles émises dans NVDA, pas leur rendu audio ni la qualité de prononciation.
+Un second job Windows lance le formulaire rendu par WordPress dans Chromium avec **NVDA réellement actif**. Le script parcourt le formulaire par Tab/Shift+Tab/Entrée par événements clavier Windows. Le moteur utilisé est le pilote eSpeak intégré à NVDA (`nvdaBuiltin.synthDrivers.espeak`), pas un exécutable eSpeak séparé.
 
-Le job Windows lance NVDA et vérifie ses annonces dans le Speech Viewer. Le runner n’a pas de périphérique audio : le pilote eSpeak intégré de NVDA ne peut pas initialiser son `WavePlayer` et retombe sur OneCore (`Couldn't open specified or default audio device`). Les essais d’installation de la carte audio virtuelle Scream avec `devcon` et `pnputil` ont chacun expiré; ils ne sont pas conservés.
+Le runner n’a pas de périphérique audio. Au lieu d’installer une carte son virtuelle, le test remplace uniquement la destination `nvwave.WavePlayer` du pilote intégré par un sink PCM fichier. NVDA doit prouver que le moteur intégré est initialisé ; tout repli sur OneCore fait échouer le job. Les annonces françaises, l’écho arabe, le focus final sur le lien WhatsApp et la présence de PCM français/arabe non silencieux sont validés. Les WAV, le manifeste, la transcription, la configuration effective et le journal NVDA sont publiés comme artefacts.
 
-Pour capturer quand même **les séquences de parole réellement émises par NVDA**, le workflow installe eSpeak NG 1.52.0 et active le Developer Scratchpad temporaire de NVDA, avec un petit pilote de test `espeakWav`. Ce pilote reçoit les textes et changements de langue de NVDA, fait produire les WAV par eSpeak NG, puis ferme le flux sans carte son. Le job exige que NVDA charge ce pilote, et vérifie la présence d’audio français et arabe dans les séquences capturées. Les WAV sont publiés comme artefacts.
-
-Ce contournement valide le parcours NVDA et ses commandes de parole converties par eSpeak, **pas** le pilote eSpeak intégré à NVDA ni l’écoute sur un vrai appareil. Il ne peut pas juger si la prononciation est naturelle : une personne doit écouter les WAV. VoiceOver/Safari sur iOS/macOS nécessite aussi un appareil Apple réel.
+Cette capture avant WASAPI prouve la production audio par NVDA/eSpeak, mais ne remplace pas une écoute humaine sur un vrai périphérique ni un test VoiceOver/Safari sur appareil Apple réel.
 
 ## Test manuel à exécuter avant mise en production
 
