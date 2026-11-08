@@ -34,3 +34,53 @@ La passation décrit les extensions suivantes comme actives sur l’environnemen
 - Le code du thème utilise des conditionnels WooCommerce; ceux-ci sont désormais protégés par `function_exists()` pour éviter une erreur fatale si WooCommerce est désactivé.
 - Le dépôt ne contient pas les extensions tierces. Leur installation, configuration et version doivent être gérées séparément sur WordPress.
 - Aucun identifiant, mot de passe, jeton ou fichier de clé privée ne doit être commité dans ce dépôt.
+
+---
+
+## Historique `develop` — 5 novembre 2026 : WooCommerce désactivé
+
+**Décision** : WooCommerce est **désactivé** sur l'UAT et le restera. Le plugin
+`tuc-market-core` est la seule source de vérité du catalogue.
+
+### Ce qui a été vérifié avant de désactiver
+
+| Contrôle | UAT | dev |
+|---|---|---|
+| produits WooCommerce | **0** | 0 |
+| commandes WooCommerce | **0** | 0 |
+| coupons / variations / remboursements | 0 | 0 |
+| produits TUC dans le catalogue maison | 1 (plat 13) | 0 |
+| pages Woo `shop`, `cart`, `checkout`, `my-account` | vides | vides |
+| contenu réel affiché sur ces pages | **aucun** | aucun |
+
+### Ce qui a été fait
+
+1. `functions.php` : les conditionnels Woo (`is_cart`, `is_checkout`,
+   `is_account_page`, `is_shop`, `is_product_taxonomy`) sont désormais
+   **protégés par `function_exists`**. Sans ça, désactiver Woo provoquait une
+   **erreur fatale sur toutes les pages du site**.
+2. `woocommerce` → **inactive** sur l'UAT.
+3. Les 4 pages vides créées par Woo (`shop`, `cart`, `checkout`, `my-account`)
+   → **brouillon**. Elles répondaient 200 avec zéro contenu, ce qui aurait
+   donné quatre pages vides indexables par Google.
+4. `/sante` annonce désormais `"woocommerce":"absent"` : c'est vérifiable
+   depuis l'extérieur et depuis le fumigène du CI.
+
+### Vérification
+
+```
+GET /uat/wp-json/tuc/v1/sante  → ok:true, woocommerce:"absent"
+/            → 200, aucune erreur fatale
+/kfc/        → 200
+/caisse/     → 200
+/shop        → 404 (dépubliée)
+```
+
+### Ce qu'il ne faut pas faire
+
+- **Ne supprime pas** les fichiers de WooCommerce avant d'avoir vérifié que
+  personne ne réactive le plugin par erreur.
+- **Ne recrée pas** de produits dans WooCommerce : ils ne seraient pas visibles
+  par le catalogue TUC et créeraient une seconde source de vérité.
+- **Ne désactive pas** `sqlite-database-integration` par réflexe : c'est le
+  dropin `db.php` qui fait tourner la base de l'UAT.
