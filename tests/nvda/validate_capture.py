@@ -102,7 +102,12 @@ def main() -> int:
                 continue
             code = language["language"].lower().replace("_", "-")
             family = "fr" if code.startswith("fr") else "ar" if code.startswith("ar") else "en" if code.startswith("en") else "other"
+            frame_bytes = fmt[0] * fmt[1]
+            start -= start % frame_bytes
+            end -= end % frame_bytes
             chunk = pcm[start:end]
+            if not chunk:
+                continue
             chunk_stats = pcm_stats(chunk, fmt[1])
             if chunk_stats["peak"] < 100:
                 raise ValueError(f"NVDA {family} language segment is silent: {metadata['file']} {language}")
