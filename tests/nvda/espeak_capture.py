@@ -86,6 +86,11 @@ class SynthDriver(BuiltinEspeak):
             else:
                 augmented.append(item)
         self._tucLanguages = languages
+        # A final private mark closes the last language even when eSpeak emits
+        # trailing callbacks after the last audible sample.
+        end_id = marker_id + len(languages)
+        languages.append({"id": end_id, "language": "boundary", "start_byte": None, "end_byte": None})
+        augmented.append(IndexCommand(end_id))
         self._tucCapture.begin(languages, speechSequence)
         super().speak(augmented)
 

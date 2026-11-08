@@ -93,8 +93,11 @@ def main() -> int:
         complete.append({"file": metadata["file"], "text": metadata["text"], "bytes": len(pcm), **stats})
         for language in metadata["languages"]:
             start, end = language["start_byte"], language["end_byte"]
-            if start is None or end is None or not 0 <= start < end <= len(pcm):
+            if start is None or end is None or not 0 <= start <= end <= len(pcm):
                 raise ValueError(f"Invalid language PCM range in {metadata['file']}: {language}")
+            if start == end:
+                # A cancelled/empty utterance can contain a marker but no PCM.
+                continue
             code = language["language"].lower().replace("_", "-")
             family = "fr" if code.startswith("fr") else "ar" if code.startswith("ar") else "en" if code.startswith("en") else "other"
             chunk = pcm[start:end]

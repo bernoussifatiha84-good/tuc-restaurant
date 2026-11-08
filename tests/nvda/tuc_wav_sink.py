@@ -91,6 +91,7 @@ class Capture:
             if item["wav"] is not None:
                 item["wav"].close()
             byte_rate = item["channels"] * item["sample_width"] * item["sample_rate"]
+            item["languages"] = [language for language in item["languages"] if language["language"] != "boundary" or language["start_byte"] is not None]
             for position, language in enumerate(item["languages"]):
                 if language["start_byte"] is None:
                     language["start_byte"] = 0
@@ -101,6 +102,7 @@ class Capture:
                         else item["bytes"]
                     )
                 language["duration_seconds"] = (language["end_byte"] - language["start_byte"]) / byte_rate
+            item["languages"] = [language for language in item["languages"] if language["language"] != "boundary"]
             self._write_json(item["metadata_path"], {
                 "file": item["path"].name,
                 "complete": complete,
