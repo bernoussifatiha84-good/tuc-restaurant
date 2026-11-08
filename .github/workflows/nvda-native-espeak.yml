@@ -1,0 +1,274 @@
+name: NVDA — eSpeak intégré et capture WAV
+
+# Isolated CI experiment. No deployment, no kernel driver, no production secret.
+on:
+  workflow_dispatch:
+    inputs:
+      source_ref:
+        description: "Révision du formulaire à tester (PR #1 par défaut)"
+        required: true
+        default: "31f5acf30c84c1880c2019e27cab9757c41b5365"
+  pull_request:
+    branches: [main]
+    paths:
+      - '.github/workflows/nvda-native-espeak.yml'
+      - 'tests/nvda/**'
+      - 'docs/NVDA-ESPEAK-CI.md'
+
+permissions:
+  contents: read
+  actions: read
+
+concurrency:
+  group: nvda-native-espeak-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  NVDA_VERSION: '2026.3'
+  NVDA_SHA256: a8a87cb823da0c62cfbae4a444ae5ae238d54dc82ad6d46d3fdb3fef082799b2
+
+jobs:
+  fixture:
+    name: Exporter le formulaire WordPress de la PR 1
+    runs-on: ubuntu-24.04
+    timeout-minutes: 12
+    defaults:
+      run:
+        working-directory: source
+    steps:
+      - name: Récupérer le code du formulaire
+        uses: actions/checkout@v5
+        with:
+          ref: ${{ github.event_name == 'workflow_dispatch' && inputs.source_ref || '31f5acf30c84c1880c2019e27cab9757c41b5365' }}
+          path: source
+          persist-credentials: false
+
+      - name: Préparer une base locale éphémère
+        shell: bash
+        run: |
+          set -euo pipefail
+          umask 077
+          {
+            printf 'TUC_DB_NAME=tuc_nvda\nTUC_DB_USER=tuc_nvda\n'
+            printf 'TUC_DB_PASSWORD=%s\n' "$(openssl rand -hex 24)"
+            printf 'TUC_DB_ROOT_PASSWORD=%s\n' "$(openssl rand -hex 24)"
+            printf 'TUC_WA_SECRET=%s\n' "$(openssl rand -hex 32)"
+            printf 'TUC_N8N_POLL_SECRET=%s\n' "$(openssl rand -hex 32)"
+            printf 'TUC_N8N_INBOUND_SECRET=%s\n' "$(openssl rand -hex 32)"
+            printf 'N8N_ENCRYPTION_KEY=%s\n' "$(openssl rand -hex 32)"
+          } > .env
+          docker compose config --quiet
+          docker compose up --detach --wait --wait-timeout 180 wordpress
+
+      - name: Installer WordPress et activer TUC
+        shell: bash
+        run: |
+          set -euo pipefail
+          password="$(openssl rand -hex 24)"
+          echo "::add-mask::$password"
+          docker compose run --rm --entrypoint wp wpcli core install \
+            --url=http://127.0.0.1:8080 --title='TUC NVDA CI' \
+            --admin_user=tuc-nvda-admin --admin_password="$password" \
+            --admin_email=tuc-nvda@example.invalid --skip-email
+          docker compose run --rm --entrypoint wp wpcli plugin activate tuc-market-core
+          docker compose run --rm --entrypoint wp wpcli theme activate tuc-theme
+          docker compose run --rm --entrypoint wp wpcli plugin is-active tuc-market-core
+
+      - name: Installer Chromium
+        working-directory: ${{ github.workspace }}
+        run: |
+          set -euo pipefail
+          npm install --prefix "$RUNNER_TEMP/tuc-playwright" --no-audit --no-fund playwright@1.56.1
+          "$RUNNER_TEMP/tuc-playwright/node_modules/.bin/playwright" install --with-deps chromium
+
+      - name: Exporter le HTML réellement rendu
+        env:
+          NODE_PATH: ${{ runner.temp }}/tuc-playwright/node_modules
+          TUC_MOBILE_E2E_URL: http://127.0.0.1:8080
+          TUC_NVDA_FIXTURE_DIR: ${{ runner.temp }}/fixture
+        run: |
+          set -euo pipefail
+          node tests/export-onboarding-nvda-fixture.js
+          git rev-parse HEAD > "$RUNNER_TEMP/fixture/source-commit.txt"
+          grep -q 'Nom du restaurant' "$RUNNER_TEMP/fixture/index.html"
+          grep -q 'Demander l’accompagnement' "$RUNNER_TEMP/fixture/index.html"
+
+      - name: Publier le formulaire
+        uses: actions/upload-artifact@v4
+        with:
+          name: nvda-native-form-${{ github.run_id }}
+          path: ${{ runner.temp }}/fixture/
+          if-no-files-found: error
+          retention-days: 7
+
+      - name: Nettoyer la base éphémère
+        if: always()
+        run: docker compose down --volumes --remove-orphans || true
+
+  windows:
+    name: NVDA réel, eSpeak intégré, sortie WAV sans pilote
+    needs: fixture
+    runs-on: windows-2025
+    timeout-minutes: 15
+    steps:
+      - name: Récupérer les tests de cette session
+        uses: actions/checkout@v5
+        with:
+          persist-credentials: false
+
+      - name: Télécharger le formulaire WordPress
+        uses: actions/download-artifact@v4
+        with:
+          name: nvda-native-form-${{ github.run_id }}
+          path: ${{ runner.temp }}/fixture
+
+      - name: Installer Playwright et pywinauto
+        shell: pwsh
+        run: |
+          $prefix = Join-Path $env:RUNNER_TEMP 'tuc-playwright'
+          npm install --prefix $prefix --no-audit --no-fund playwright@1.56.1
+          if ($LASTEXITCODE -ne 0) { throw 'Playwright installation failed' }
+          & (Join-Path $prefix 'node_modules/.bin/playwright.cmd') install chromium
+          if ($LASTEXITCODE -ne 0) { throw 'Chromium installation failed' }
+          python -m pip install --disable-pip-version-check pywinauto==0.6.9
+          if ($LASTEXITCODE -ne 0) { throw 'pywinauto installation failed' }
+
+      - name: Installer NVDA portable vérifié
+        shell: pwsh
+        timeout-minutes: 4
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $installer = Join-Path $env:RUNNER_TEMP 'nvda.exe'
+          Invoke-WebRequest -Uri "https://github.com/nvaccess/nvda/releases/download/release-$env:NVDA_VERSION/nvda_$env:NVDA_VERSION.exe" -OutFile $installer -TimeoutSec 120
+          $hash = (Get-FileHash $installer -Algorithm SHA256).Hash.ToLowerInvariant()
+          if ($hash -ne $env:NVDA_SHA256) { throw "NVDA checksum mismatch: $hash" }
+          $portable = Join-Path $env:RUNNER_TEMP 'nvda-portable'
+          $process = Start-Process -FilePath $installer -ArgumentList @('--create-portable-silent', "--portable-path=$portable") -Wait -PassThru -WindowStyle Hidden
+          if ($process.ExitCode -ne 0) { throw "NVDA portable creation failed: $($process.ExitCode)" }
+          $exe = Get-ChildItem -Path $portable -Filter nvda.exe -Recurse | Select-Object -First 1
+          if (-not $exe) { throw 'Portable nvda.exe not found' }
+          "TUC_NVDA_EXE=$($exe.FullName)" | Out-File $env:GITHUB_ENV -Append -Encoding utf8
+          "NVDA portable $env:NVDA_VERSION verified: $hash" | Add-Content $env:GITHUB_STEP_SUMMARY
+
+      - name: Préparer le profil isolé et le sink PCM
+        shell: pwsh
+        run: |
+          $config = Join-Path $env:RUNNER_TEMP 'nvda-config'
+          $synth = Join-Path $config 'scratchpad/synthDrivers'
+          New-Item -ItemType Directory -Force -Path $synth | Out-Null
+          Copy-Item tests/nvda/espeak_capture.py (Join-Path $synth 'espeak.py')
+          Copy-Item tests/nvda/tuc_wav_sink.py (Join-Path $synth 'tuc_wav_sink.py')
+          @'
+          schemaVersion = 2
+          [general]
+          language = en
+          showWelcomeDialogAtStartup = False
+          askToExit = False
+          playStartAndExitSounds = False
+          loggingLevel = INFO
+          [update]
+          askedAllowUsageStats = True
+          autoCheck = False
+          startupNotification = False
+          allowUsageStats = False
+          [development]
+          enableScratchpadDir = True
+          [speech]
+          synth = espeak
+          autoLanguageSwitching = True
+          autoDialectSwitching = True
+          reportNotSupportedLanguage = speech
+          [[espeak]]
+          voice = fr-fr
+          rate = 50
+          [audio]
+          outputDevice = default
+          audioAwakeTime = 0
+          audioDuckingMode = 0
+          [virtualBuffers]
+          autoSayAllOnPageLoad = False
+          passThroughAudioIndication = False
+          [braille]
+          display = noBraille
+          '@ | Set-Content (Join-Path $config 'nvda.ini') -Encoding utf8
+          $capture = Join-Path $env:RUNNER_TEMP 'nvda-capture'
+          New-Item -ItemType Directory -Force -Path $capture | Out-Null
+          @"
+          TUC_NVDA_CONFIG=$config
+          TUC_NVDA_CAPTURE_DIR=$capture
+          TUC_NVDA_FIXTURE_DIR=$env:RUNNER_TEMP\fixture
+          TUC_NVDA_REPORT=$env:RUNNER_TEMP\nvda-report.json
+          NODE_PATH=$env:RUNNER_TEMP\tuc-playwright\node_modules
+          "@ | Out-File $env:GITHUB_ENV -Append -Encoding utf8
+
+      - name: Démarrer NVDA et refuser tout repli sur OneCore
+        shell: pwsh
+        run: |
+          $log = Join-Path $env:RUNNER_TEMP 'nvda.log'
+          $arguments = @("--config-path=$env:TUC_NVDA_CONFIG", '--log-file=' + $log, '--debug-logging')
+          $process = Start-Process -FilePath $env:TUC_NVDA_EXE -ArgumentList $arguments -PassThru
+          "TUC_NVDA_PID=$($process.Id)" | Out-File $env:GITHUB_ENV -Append -Encoding utf8
+          $proof = Join-Path $env:TUC_NVDA_CAPTURE_DIR 'native-espeak-initialized.json'
+          $deadline = (Get-Date).AddSeconds(45)
+          while (-not (Test-Path $proof) -and (Get-Date) -lt $deadline) {
+            if ($process.HasExited) { throw "NVDA exited before initialization: $($process.ExitCode)" }
+            Start-Sleep -Milliseconds 500
+          }
+          if (-not (Test-Path $proof)) { throw 'Native eSpeak file sink did not initialize; refusing OneCore fallback' }
+          $evidence = Get-Content $proof -Raw | ConvertFrom-Json
+          if ($evidence.synth -ne 'espeak' -or $evidence.class_module -ne 'nvdaBuiltin.synthDrivers.espeak') { throw 'Wrong synthesizer implementation' }
+          $effective = Get-Content (Join-Path $env:TUC_NVDA_CONFIG 'nvda.ini') -Raw
+          if ($effective -notmatch 'synth\s*=\s*espeak') { throw 'NVDA changed the configured synthesizer' }
+          Add-Content $env:GITHUB_STEP_SUMMARY "### Preuve du moteur`n````json`n$(Get-Content $proof -Raw)`n````"
+          Write-Output 'PASS: NVDA loaded its bundled eSpeak engine with the CI PCM sink.'
+
+      - name: Parcours clavier Windows et annonces NVDA
+        shell: pwsh
+        timeout-minutes: 5
+        run: |
+          node --check tests/nvda/native-espeak-smoke.js
+          if ($LASTEXITCODE -ne 0) { throw 'JavaScript syntax error' }
+          node tests/nvda/native-espeak-smoke.js
+          if ($LASTEXITCODE -ne 0) { throw 'Native NVDA keyboard test failed; see report and NVDA log artifacts' }
+
+      - name: Arrêter proprement NVDA et finaliser les WAV
+        if: always()
+        shell: pwsh
+        run: |
+          if ($env:TUC_NVDA_EXE) {
+            $quit = Start-Process -FilePath $env:TUC_NVDA_EXE -ArgumentList @('--quit', "--config-path=$env:TUC_NVDA_CONFIG") -PassThru -WindowStyle Hidden
+            if (-not $quit.WaitForExit(15000)) { Stop-Process -Id $quit.Id -Force -ErrorAction SilentlyContinue }
+            $native = Get-Process -Name nvda -ErrorAction SilentlyContinue
+            $deadline = (Get-Date).AddSeconds(15)
+            while ($native -and (Get-Date) -lt $deadline) {
+              Start-Sleep -Milliseconds 500
+              $native = Get-Process -Name nvda -ErrorAction SilentlyContinue
+            }
+            if ($native) {
+              Write-Warning 'NVDA did not exit gracefully; partial WAV headers may need recovery.'
+              $native | Stop-Process -Force
+            }
+          }
+
+      - name: Valider les annonces et le PCM français/arabe
+        shell: pwsh
+        run: |
+          $output = Join-Path $env:RUNNER_TEMP 'nvda-audio'
+          python tests/nvda/validate_capture.py --capture $env:TUC_NVDA_CAPTURE_DIR --output $output
+          if ($LASTEXITCODE -ne 0) { throw 'NVDA built-in eSpeak proof failed' }
+          Add-Content $env:GITHUB_STEP_SUMMARY "### WAV issus du moteur eSpeak intégré à NVDA`n````json`n$(Get-Content (Join-Path $output 'manifest.json') -Raw)`n````"
+
+      - name: Publier les preuves et diagnostics
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: nvda-native-espeak-${{ github.run_id }}
+          path: |
+            ${{ runner.temp }}/nvda-capture/
+            ${{ runner.temp }}/nvda-audio/
+            ${{ runner.temp }}/nvda-report.json
+            ${{ runner.temp }}/nvda.log
+            ${{ runner.temp }}/nvda-config/nvda.ini
+            ${{ runner.temp }}/fixture/source-commit.txt
+          if-no-files-found: warn
+          retention-days: 7
