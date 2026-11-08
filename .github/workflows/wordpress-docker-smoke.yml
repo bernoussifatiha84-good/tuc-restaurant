@@ -1,7 +1,12 @@
 name: WordPress Docker smoke test
 
 on:
+  # Filet avant merge : toute PR visant main est verifiee.
   pull_request:
+    branches: [main]
+  # Filet apres merge : sans ce declencheur, le tronc n'est plus couvert des
+  # qu'une PR est fusionnee (une PR ne teste que ses propres changements).
+  push:
     branches: [main]
   workflow_dispatch:
 
