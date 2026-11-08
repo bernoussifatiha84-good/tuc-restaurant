@@ -44,7 +44,7 @@ jobs:
             echo "::error title=Lignée develop perdue::$excerpt"
             exit 1
           fi
-          summary="$(printf '%s\n' "$output" | grep -E 'ancêtre de HEAD|'échec' | tr '\n' ' ' | sed 's/%/%25/g')"
+          summary="$(printf '%s\n' "$output" | grep -E "ancêtre de HEAD|échec\(s\)" | tr '\n' ' ' | sed 's/%/%25/g')"
           echo "::notice title=Contrôle de lignée develop::$summary"
 
 
