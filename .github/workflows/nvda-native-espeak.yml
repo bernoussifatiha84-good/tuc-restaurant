@@ -139,11 +139,24 @@ jobs:
         run: |
           $ErrorActionPreference = 'Stop'
           $installer = Join-Path $env:RUNNER_TEMP 'nvda.exe'
-          Invoke-WebRequest -Uri "https://github.com/nvaccess/nvda/releases/download/release-$env:NVDA_VERSION/nvda_$env:NVDA_VERSION.exe" -OutFile $installer -TimeoutSec 120
+          $uri = "https://github.com/nvaccess/nvda/releases/download/release-$env:NVDA_VERSION/nvda_$env:NVDA_VERSION.exe"
+          $downloaded = $false
+          for ($attempt = 1; $attempt -le 3; $attempt++) {
+            try {
+              Invoke-WebRequest -Uri $uri -OutFile $installer -TimeoutSec 90
+              $downloaded = $true
+              break
+            } catch {
+              Write-Warning "NVDA download attempt $attempt failed: $($_.Exception.Message)"
+              if ($attempt -lt 3) { Start-Sleep -Seconds (5 * $attempt) }
+            }
+          }
+          if (-not $downloaded) { throw 'NVDA release download failed after three attempts' }
           $hash = (Get-FileHash $installer -Algorithm SHA256).Hash.ToLowerInvariant()
           if ($hash -ne $env:NVDA_SHA256) { throw "NVDA checksum mismatch: $hash" }
           $portable = Join-Path $env:RUNNER_TEMP 'nvda-portable'
-          $process = Start-Process -FilePath $installer -ArgumentList @('--create-portable-silent', "--portable-path=$portable") -Wait -PassThru -WindowStyle Hidden
+          $process = Start-Process -FilePath $installer -ArgumentList @('--create-portable-silent', "--portable-path=$portable") -PassThru -WindowStyle Hidden
+          if (-not $process.WaitForExit(90000)) { Stop-Process -Id $process.Id -Force; throw 'NVDA portable creation timed out' }
           if ($process.ExitCode -ne 0) { throw "NVDA portable creation failed: $($process.ExitCode)" }
           $exe = Get-ChildItem -Path $portable -Filter nvda.exe -Recurse | Select-Object -First 1
           if (-not $exe) { throw 'Portable nvda.exe not found' }
