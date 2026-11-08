@@ -205,7 +205,7 @@ jobs:
         shell: pwsh
         run: |
           $log = Join-Path $env:RUNNER_TEMP 'nvda.log'
-          $arguments = @("--config-path=$env:TUC_NVDA_CONFIG", '--log-file=' + $log, '--debug-logging')
+          $arguments = @("--config-path=$env:TUC_NVDA_CONFIG", ''--log-file=' + $log, '--debug-logging')
           $process = Start-Process -FilePath $env:TUC_NVDA_EXE -ArgumentList $arguments -PassThru
           "TUC_NVDA_PID=$($process.Id)" | Out-File $env:GITHUB_ENV -Append -Encoding utf8
           $proof = Join-Path $env:TUC_NVDA_CAPTURE_DIR 'native-espeak-initialized.json'

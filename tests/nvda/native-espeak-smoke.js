@@ -99,14 +99,19 @@ async function main() {
     await waitForSpeech('Nom du restaurant');
     report.phases.push('native Tab and Shift+Tab between name and photo');
 
-    // CDP text insertion is deterministic for Arabic on an English runner. The
-    // subsequent native arrow navigation makes NVDA read the actual edit value.
+    // CDP text insertion is deterministic for Arabic on an English runner.
+    // NVDA may echo individual characters rather than the whole value; require
+    // every distinct character, then select all so NVDA reads the full edit.
     await page.locator('#tuc-onboarding-name').fill(arabicName);
     await page.waitForFunction(() => document.querySelector('#tuc-onboarding-name').lang === 'ar');
     await page.locator('#tuc-onboarding-name').focus();
-    nativeKeys('{HOME}', '{RIGHT 8}');
-    await waitForSpeech('مطعم');
-    report.phases.push('Arabic value present with lang=ar and native caret navigation');
+    nativeKeys('{HOME}', '{RIGHT 12}');
+    for (const character of new Set([...arabicName.replace(/\s/gu, '')])) {
+      await waitForSpeech(character);
+    }
+    nativeKeys('^a');
+    await waitForSpeech(arabicName);
+    report.phases.push('Arabic character echo and native select-all reading with lang=ar');
 
     await page.locator('#tuc-onboarding-name').focus();
     nativeKeys('{TAB 2}');
