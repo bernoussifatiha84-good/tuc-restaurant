@@ -20,6 +20,41 @@ jobs:
     steps:
       - name: Récupérer le dépôt
         uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+
+      - name: Récupérer develop pour le contrôle de lignée
+        shell: bash
+        run: |
+          set -euo pipefail
+          git fetch --no-tags origin develop:refs/remotes/origin/develop
+
+      - name: Vérifier que la branche ne perd pas develop
+        shell: bash
+        run: |
+          set -euo pipefail
+          pip install --disable-pip-version-check --quiet pyyaml
+          if output="$(python3 tests/lineage-contract.py 2>&1)"; then
+            printf '%s\n' "$output"
+          else
+            printf '%s\n' "$output"
+            excerpt="$(printf '%s\n' "$output" | tail -c 1500 | tr '\n' ' ' | sed 's/%/%25/g; s/\r/%0D/g')"
+            echo "::error title=Lignée develop perdue::$excerpt"
+            exit 1
+          fi
+
+      - name: Vérifier le contrat de déploiement sans déployer
+        shell: bash
+        run: |
+          set -euo pipefail
+          if output="$(python3 tests/deploy-contract.py 2>&1)"; then
+            printf '%s\n' "$output"
+          else
+            printf '%s\n' "$output"
+            excerpt="$(printf '%s\n' "$output" | tail -c 1500 | tr '\n' ' ' | sed 's/%/%25/g; s/\r/%0D/g')"
+            echo "::error title=Contrat de déploiement cassé::$excerpt"
+            exit 1
+          fi
 
       - name: Créer des identifiants éphémères pour la base locale au runner
         shell: bash

@@ -1,5 +1,13 @@
 # Vérification des lecteurs d’écran — demande restaurateur
 
+> **Portée exacte : régression automatisée, pas validation d’accessibilité.**
+> Ce qui tourne en CI est une **régression automatisée NVDA + eSpeak** sur un
+> runner Windows, avec NVDA portable et une sortie **PCM fichier**. Il n’y a
+> **ni voix Windows réelle, ni périphérique audio, ni utilisateur réel**. Aucun
+> résultat de ce document ne certify une conformité WCAG ni une accessibilité
+> réellement usable. La validation d’accessibilité exige les tests humains
+> décrits plus bas, sur de vrais appareils.
+
 ## Contrôles automatisés
 
 Le workflow WordPress Docker exécute axe-core sur le composant avant envoi et après apparition du lien WhatsApp, pour les règles WCAG 2.0/2.1/2.2 A et AA. Playwright vérifie aussi l’ordre clavier nom → photo → bouton, la langue `ar` lorsque le nom est saisi en arabe, le rôle de statut, le nom accessible du lien et le déplacement du focus après l’envoi.
@@ -8,7 +16,11 @@ Un second job Windows lance le formulaire rendu par WordPress dans Chromium avec
 
 Le runner n’a pas de périphérique audio. Au lieu d’installer une carte son virtuelle, le test remplace uniquement la destination `nvwave.WavePlayer` du pilote intégré par un sink PCM fichier. NVDA doit prouver que le moteur intégré est initialisé ; tout repli sur OneCore fait échouer le job. Les annonces françaises, l’écho arabe, le focus final sur le lien WhatsApp et la présence de PCM français/arabe non silencieux sont validés. Les WAV, le manifeste, la transcription, la configuration effective et le journal NVDA sont publiés comme artefacts.
 
-Cette capture avant WASAPI prouve la production audio par NVDA/eSpeak, mais ne remplace pas une écoute humaine sur un vrai périphérique ni un test VoiceOver/Safari sur appareil Apple réel.
+Cette capture avant WASAPI prouve que le moteur intégré **produit** du PCM et que
+le parcours clavier émet les annonces attendues. C’est une régression utile contre
+les ruptures de focus, de libellés ou de langue. Elle **ne** mesure **pas**
+l’audibilité réelle, la naturel de la prononciation, ni l’expérience d’une personne
+utilisant un lecteur d’écran. VoiceOver/Safari exige un appareil Apple réel.
 
 ## Test manuel à exécuter avant mise en production
 

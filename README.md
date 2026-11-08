@@ -17,7 +17,7 @@ Voir [`docs/IMPORT-STATUS.md`](docs/IMPORT-STATUS.md) pour la provenance du snap
 
 ## Fonctionnalités présentes dans le code
 
-Le plugin `tuc-market-core` est en version `0.8.8` dans cette branche d’intégration. Il contient notamment :
+Cette branche d’intégration contient `develop` (fusionné, ascendance vérifiée par `tests/lineage-contract.py`), le travail de la PR #1 et la régression NVDA. Plugin `0.8.8`, thème `0.2.0`. Il contient notamment :
 
 - les types de contenu `tuc_resto`, `tuc_menu_item` et `tuc_commande` ;
 - les fiches restaurant, le menu public, le panier client et la commande cash avec recalcul serveur des prix ;
@@ -46,7 +46,8 @@ Le workflow `WordPress Docker smoke test` installe un WordPress éphémère, act
 - régressions WordPress/TUC (sécurité, isolation, prix, idempotence, options, suivi) ;
 - parcours E2E mobile, dix scénarios de commande client/restaurant, onboarding restaurateur via n8n simulé ;
 - audit web professionnel (Lighthouse mobile, SEO, WCAG/axe, responsive, REST) ;
-- job Windows NVDA réel avec eSpeak intégré et capture PCM français/arabe sans pilote audio virtuel.
+- job Windows : **régression automatisée NVDA + eSpeak intégré** avec capture PCM français/arabe sans pilote audio virtuel — ce n’est pas une validation d’accessibilité (pas de voix Windows réelle ni d’utilisateur réel) ;
+- garde-fous de **lignée `develop`** et de **contrat de déploiement** (le script de résolution de cible est exécuté sur 10 cas, sans déployer).
 
 Dernier run d’intégration réussi : <https://github.com/bernoussifatiha84-good/tuc-restaurant/actions/runs/42482683516>.
 

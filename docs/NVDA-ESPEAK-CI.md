@@ -1,5 +1,10 @@
 # Audit NVDA / eSpeak et CI sans carte son
 
+> **Nature de la preuve : régression automatisée NVDA + eSpeak.** NVDA portable
+> sur runner Windows, moteur eSpeak intégré, sortie PCM fichier. Pas de voix
+> Windows réelle, pas de périphérique audio, pas d’utilisateur réel. Ce n’est
+> **pas** une validation d’accessibilité et cela ne certifie rien.
+
 ## État constaté le 8 novembre 2026
 
 Le dépôt `main` ne contient pas le formulaire restaurateur ni les tests NVDA.
@@ -76,7 +81,7 @@ le moteur intégré et la destination WAV. La validation finale exige notamment 
 - parcours Tab, Shift+Tab et Entrée par événements clavier Windows ;
 - focus final sur le lien WhatsApp.
 
-## Limites de la preuve
+## Limites de la preuve (à lire avant de conclure)
 
 Cette méthode capture le PCM avant WASAPI. Elle est plus forte qu'un WAV produit
 par un exécutable eSpeak indépendant, mais ce n'est pas un enregistrement de

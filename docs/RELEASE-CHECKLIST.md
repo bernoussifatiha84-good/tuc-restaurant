@@ -4,7 +4,9 @@ Cette checklist ne remplace pas la revue de code. Elle sert à éviter qu’un r
 
 ## 1. Intégration GitHub
 
-- [x] Le code métier de la PR #1 et la preuve NVDA native sont réunis dans la PR #2.
+- [x] Le code métier de la PR #1 et la régression NVDA automatisée sont réunis dans la PR #2.
+- [x] `develop` est fusionné : `git merge-base --is-ancestor origin/develop HEAD` vrai, 0 commit manquant (garde-fou `tests/lineage-contract.py`).
+- [x] Contrat de déploiement re-testé sans déployer : `tests/deploy-contract.py`, 10 cas de résolution + garde-fous.
 - [x] L’ancien job NVDA `espeakWav` externe est supprimé.
 - [x] Le workflow `WordPress Docker smoke test` passe sur la révision d’intégration.
 - [ ] Revue humaine de la PR d’intégration.
@@ -16,7 +18,7 @@ Run d’intégration de référence : <https://github.com/bernoussifatiha84-good
 
 - [ ] Confirmer `URL_UAT`, `ROOT_UAT`, la version WordPress/PHP/base et l’accès SSH.
 - [ ] Sauvegarde complète vérifiable avant déploiement ; restauration testée.
-- [ ] Déploiement UAT via tag `pre-release-*` uniquement, avec health check et versions.
+- [ ] Déploiement UAT via tag `pre-release-*` uniquement, avec health check et versions, **rejoué sur la branche fusionnée** (le dernier UAT vert date du tag `pre-release-0.8.8`, avant ce merge).
 - [ ] Vérifier que la cible UAT n’est pas la production (`rsync --delete` est destructeur).
 - [ ] Ne pas désactiver/supprimer/migrer WooCommerce sans décision écrite et sauvegarde.
 
@@ -39,7 +41,7 @@ Run d’intégration de référence : <https://github.com/bernoussifatiha84-good
 
 ## 5. Accessibilité et langues
 
-- [x] NVDA Windows automatisé : eSpeak intégré, PCM français/arabe non silencieux, focus lien WhatsApp.
+- [x] Régression automatisée NVDA + eSpeak : PCM français/arabe non silencieux, focus lien WhatsApp. **Ne vaut pas validation d’accessibilité.**
 - [ ] Écoute humaine des WAV publiés.
 - [ ] Test manuel NVDA/Firefox ou Chrome sur vrai périphérique audio.
 - [ ] Test manuel VoiceOver/Safari sur appareil Apple réel.
