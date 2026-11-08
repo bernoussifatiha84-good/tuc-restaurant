@@ -164,27 +164,20 @@ def check_operations_behaviour() -> list[tuple[bool, str]]:
     script = resolve_script()
     results = []
 
+    # Seule la forme POSITIVE est acceptée : `|| inputs.operation == 'deploy'`.
+    # Une énumération des verbes à exclure est ouverte par défaut — un verbe ajouté
+    # au YAML sans être nommé ici ferait déployer le job. Elle est donc refusée
+    # même lorsqu'elle exclut correctement les verbes du jour. Ce contrôle porte
+    # sur le job lui-même, pas sur un verbe : il est fait une seule fois.
+    results.append((
+        "inputs.operation == 'deploy'" in deploy_if,
+        "le job de déploiement n'écrit que pour operation == 'deploy' (forme fail-closed)",
+    ))
+
     for option in KNOWN_OPERATIONS:
         if option == "deploy":
             continue
 
-        # Forme attendue : exclusion POSITIVE (`== 'deploy'`), pas une énumération
-        # des verbes à exclure. Une énumération est ouverte par défaut : un verbe
-        # ajouté au YAML sans être ajouté ici ferait déployer le job. On refuse
-        # donc la forme ouverte, même si elle « exclut » correctement aujourd'hui.
-        #
-        # Les deux formes sont acceptées pour une raison de lisibilité, mais au
-        # moins l'une doit être fail-closed :
-        #   if: ... || inputs.operation == 'deploy'              (positive, préférée)
-        #   if: ... || (inputs.operation != 'x' && != 'y')       (énumération)
-        positive = "inputs.operation == 'deploy'" in deploy_if
-        enumerated = f"inputs.operation != '{option}'" in deploy_if
-        results.append((
-            positive,
-            f"{option} : exclu du job de déploiement par une forme fail-closed (operation == 'deploy')",
-        ))
-        if not positive:
-            results.append((enumerated, f"{option} : exclu du job de déploiement"))
 
         carriers = [
             name for name, job in jobs.items()
