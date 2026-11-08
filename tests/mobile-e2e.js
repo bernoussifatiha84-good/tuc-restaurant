@@ -205,7 +205,7 @@ async function main() {
     assert((await cashierPage.evaluate(() => window.__tucToneStarts || 0)) >= 6, 'la nouvelle commande déclenche réellement les oscillateurs du signal sonore');
     await screenshot(cashierPage, 'caisse-serveur-nouvelle-commande-table-7.png');
 
-    checkpoint = 'notification silencieuse du caissier et accès au même restaurant';
+    checkpoint = 'alerte sonore du caissier rattaché et accès au même restaurant';
     const backupContext = await browser.newContext({
       viewport: { width: 390, height: 844 }, deviceScaleFactor: 1, isMobile: true, hasTouch: true,
     });
@@ -221,7 +221,9 @@ async function main() {
     assert(backupResponse && backupResponse.status() === 200, 'le caissier accède à la caisse du même restaurant');
     const cashierOrder = backupPage.locator('#liste .carte').filter({ hasText: 'Table 7' });
     await cashierOrder.waitFor();
-    assert.equal(await backupPage.locator('#btn-son').isVisible(), false, 'le caissier voit la commande sans commande de bip/vibreur');
+    // Décision propriétaire : le caissier rattaché au restaurant entend la commande.
+    // Le bouton son n'est masqué que pour un compte non rattaché ou hors tenant.
+    assert.equal(await backupPage.locator('#btn-son').isVisible(), true, 'le caissier rattaché dispose du bip/vibreur');
     assert((await cashierOrder.innerText()).includes('Plat initial E2E'), 'le caissier reçoit aussi la commande Table 7');
     await screenshot(backupPage, 'caisse-caissier-commande-table-7.png');
     await cashierPage.bringToFront();
