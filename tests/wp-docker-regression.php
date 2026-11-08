@@ -62,8 +62,6 @@ $rest = static function (string $route, array $params = []) use ($trace): WP_RES
         $result = TUC_Compte::wa_statut($request);
     } elseif ($route === '/tuc/v1/wa-lien') {
         $result = TUC_Compte::wa_lien($request);
-    } elseif ($route === '/tuc/v1/wa-panier') {
-        $result = TUC_Compte::wa_panier($request);
     } elseif (preg_match('~^/tuc/v1/commande/(\d+)/statut$~', $route, $matches)) {
         $request->set_param('id', (int) $matches[1]);
         $result = TUC_Commande::changer_statut($request);
@@ -345,6 +343,10 @@ try {
             'id'      => (int) $itemId,
             'q'       => 2,
             'options' => [['id' => 'extra-fromage']],
+            // Valeurs falsifiées : le serveur doit les ignorer et retenir ses
+            // propres libellés et prix. Assertion portée depuis /wa-panier.
+            'nom'     => 'Libellé falsifié',
+            'pu'      => 0.01,
         ]],
     ];
     $ratePhones[] = $validOrder['tel'];
@@ -433,8 +435,12 @@ try {
         'le lien de suivi expire après sa durée de validité');
     update_post_meta($orderId, 'tuc_suivi_expire', $oldTrackingExpiry);
 
+    $itemTitle = (string) get_post((int) $itemId)->post_title;
     $storedItems = (array) get_post_meta($orderId, 'tuc_items', true);
     $assert(($storedItems[0]['opts'][0] ?? '') === 'Extra fromage +3', 'le libellé et le supplément sont stockés lisiblement');
+    $assert(($storedItems[0]['nom'] ?? '') === $itemTitle
+        && !str_contains(wp_json_encode($storedItems), 'Libellé falsifié'),
+        'la commande stocke les libellés WordPress et ignore nom/prix fournis par le client');
 
     $optionItemId = wp_insert_post([
         'post_type' => 'tuc_menu_item', 'post_status' => 'publish',
@@ -517,6 +523,15 @@ try {
     $tamperedData = $tamperedResponse->get_data();
     $assert($tamperedResponse->get_status() === 409
         && abs((float) ($tamperedData['data']['total_serveur'] ?? 0) - 31.0) < 0.001, 'un total client falsifié est refusé avec le total correct');
+
+    // Report depuis /wa-panier : un mode absent de la configuration est refusé.
+    // tuc_modes vient d'être restreint à ['livraison'] juste au-dessus.
+    $modeRefuse = $validOrder;
+    $modeRefuse['mode'] = 'emporter';
+    $modeRefuse['tel'] = '+212600000002';
+    $modeRefuse['cle'] = 'mode-refuse-' . $suffix;
+    $assert($rest('/tuc/v1/commande', $modeRefuse)->get_status() === 422,
+        'la commande refuse un mode absent de la configuration du commerce');
 
     // Les tentatives invalides ne doivent pas épuiser le quota d’un téléphone tiers.
     $unverifiedPhone = '+212600000011';
@@ -1001,35 +1016,15 @@ try {
     }
     $assert($rest('/tuc/v1/wa-lien', ['but' => 'compte'])->get_status() === 429, 'la 21e demande de lien WhatsApp par IP est limitée');
 
-    // L’aperçu WhatsApp recalcule prix et frais depuis les données WordPress.
-    $waCart = $rest('/tuc/v1/wa-panier', [
-        'resto' => $slug,
-        'mode' => 'livraison',
-        'table' => 0,
-        'frais' => 9999,
-        'items' => [[
-            'id' => (int) $itemId,
-            'q' => 2,
-            'options' => [['id' => 'extra-fromage']],
-            'nom' => 'Prix falsifié',
-            'pu' => 0.01,
-        ]],
-    ]);
-    $waCartData = $waCart->get_data();
-    if ($waCart->get_status() !== 200 || abs((float) ($waCartData['total'] ?? 0) - 31.0) >= 0.001) {
-        fwrite(STDERR, 'WA_CART_DEBUG: ' . wp_json_encode(['status' => $waCart->get_status(), 'data' => $waCartData]) . "\n");
-    }
-    $assert($waCart->get_status() === 200 && abs((float) ($waCartData['total'] ?? 0) - 31.0) < 0.001,
-        'l’aperçu WhatsApp ignore prix et frais fournis par le client');
-    $assert(str_contains((string) ($waCartData['message'] ?? ''), $restaurant->post_title)
-        && !str_contains((string) ($waCartData['message'] ?? ''), 'Prix falsifié'), 'l’aperçu WhatsApp utilise les libellés WordPress, pas ceux du client');
-    $unsupportedWaMode = $rest('/tuc/v1/wa-panier', [
-        'resto' => $slug,
-        'mode' => 'emporter',
-        'table' => 0,
-        'items' => [['id' => (int) $itemId, 'q' => 2]],
-    ]);
-    $assert($unsupportedWaMode->get_status() === 422, 'l’aperçu WhatsApp refuse un mode absent de la configuration du commerce');
+    // L'aperçu WhatsApp du panier a été retiré : les commandes vont au tableau de
+    // bord du restaurant, pas à un numéro de téléphone (décision propriétaire).
+    // Les propriétés de sécurité qu'il testait sont reportées sur /commande, seul
+    // chemin de commande réel. Cette garde empêche une réintroduction silencieuse.
+    $routesRest = rest_get_server()->get_routes();
+    $assert(!isset($routesRest['/tuc/v1/wa-panier']),
+        'la route /wa-panier reste supprimée : aucune commande ne part vers un numéro de téléphone');
+    $assert(isset($routesRest['/tuc/v1/commande']) && isset($routesRest['/tuc/v1/wa-lien']),
+        'le chemin de commande réel et la vérification WhatsApp restent enregistrés');
 
     // La référence WhatsApp seule ne suffit pas à récupérer un lien magique.
     $pollCode = strtoupper(bin2hex(random_bytes(4)));

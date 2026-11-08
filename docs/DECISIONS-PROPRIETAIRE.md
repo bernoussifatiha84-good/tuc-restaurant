@@ -63,15 +63,28 @@ wp option get tuc_wa_numero
 Le message est pré-rempli et envoyé par le client depuis son propre WhatsApp :
 aucun abonnement API, aucun coût par message.
 
-### Point ouvert : l'endpoint `/wa-panier`
+### `/wa-panier` supprimé
 
-`/tuc/v1/wa-panier` est encore enregistré, appelable anonymement, et construit un
-lien `wa.me` contenant **tout le panier** vers le numéro du site. Rien dans le
-front ne l'appelle, mais il est couvert par des tests de régression.
+L'endpoint construissait un lien `wa.me` avec tout le panier vers le numéro du
+site. Il était appelable anonymement et contredisait la décision ci-dessus. Il est
+retiré, avec la méthode `TUC_Compte::wa_panier()` et le formateur
+`TUC_WA_Message::panier()` que plus rien n'appelait. `TUC_WA_Message::wa_url()` est
+conservé : l'onboarding restaurant l'utilise.
 
-Il contredit la décision ci-dessus : il offre un chemin de commande par WhatsApp.
-**À supprimer ou à restreindre**, avec ses tests. Non fait dans ce lot pour ne pas
-mélanger une suppression d'API publique avec un changement d'alerte.
+**Supprimer ne devait pas faire perdre de couverture.** Les deux assertions portées
+par cet endpoint ont été reportées sur `/commande`, seul chemin de commande réel :
+
+| Propriété | Nouvel emplacement |
+|---|---|
+|Prix et libellés fournis par le client ignorés | `$validOrder` envoie `nom` et `pu` falsifiés ; le total serveur reste 31 et le libellé stocké est celui de WordPress |
+| Mode absent de la configuration refusé | `/commande` avec `mode=emporter` alors que `tuc_modes=['livraison']` → 422 |
+
+La protection contre un total falsifié était déjà couverte sur `/commande` (409 avec
+`total_serveur`), elle n'a pas eu besoin d'être reportée.
+
+Une **garde de non-réintroduction** affirme que `/tuc/v1/wa-panier` est absent des
+routes enregistrées, et que `/commande` et `/wa-lien` y sont toujours. Réintroduire
+le chemin WhatsApp ferait échouer la CI.
 
 ### Bouton « appeler » sur la fiche restaurant
 
