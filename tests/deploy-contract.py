@@ -168,10 +168,23 @@ def check_operations_behaviour() -> list[tuple[bool, str]]:
         if option == "deploy":
             continue
 
+        # Forme attendue : exclusion POSITIVE (`== 'deploy'`), pas une énumération
+        # des verbes à exclure. Une énumération est ouverte par défaut : un verbe
+        # ajouté au YAML sans être ajouté ici ferait déployer le job. On refuse
+        # donc la forme ouverte, même si elle « exclut » correctement aujourd'hui.
+        #
+        # Les deux formes sont acceptées pour une raison de lisibilité, mais au
+        # moins l'une doit être fail-closed :
+        #   if: ... || inputs.operation == 'deploy'              (positive, préférée)
+        #   if: ... || (inputs.operation != 'x' && != 'y')       (énumération)
+        positive = "inputs.operation == 'deploy'" in deploy_if
+        enumerated = f"inputs.operation != '{option}'" in deploy_if
         results.append((
-            f"inputs.operation != '{option}'" in deploy_if,
-            f"{option} : explicitement exclu du job de déploiement",
+            positive,
+            f"{option} : exclu du job de déploiement par une forme fail-closed (operation == 'deploy')",
         ))
+        if not positive:
+            results.append((enumerated, f"{option} : exclu du job de déploiement"))
 
         carriers = [
             name for name, job in jobs.items()

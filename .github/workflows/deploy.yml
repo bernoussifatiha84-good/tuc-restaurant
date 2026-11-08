@@ -163,7 +163,9 @@ jobs:
 
   deploiement:
     name: Déploiement vers ${{ needs.cible.outputs.env }}
-    if: ${{ github.event_name != 'workflow_dispatch' || (inputs.operation != 'inventory-woocommerce' && inputs.operation != 'seed-demo') }}
+    # Fail-closed : on n'enumere pas les verbes-outils (une 4e operation ajoutee
+    # sans toucher ici ferait deployer). Seul 'deploy' ecrit du code.
+    if: ${{ github.event_name != 'workflow_dispatch' || inputs.operation == 'deploy' }}
     needs: [qualite, cible]
     runs-on: ubuntu-latest
     environment: ${{ needs.cible.outputs.env }}
