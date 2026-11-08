@@ -217,6 +217,43 @@ def check_backup_behaviour() -> list[tuple[bool, str]]:
                 detail += f" — {sortie[-1][:160]}"
             results.append((ok, detail))
 
+    # Cinquième scénario : injection de panne. Un `tar` qui réussit puis laisse
+    # une archive tronquée (coupure disque, quota) doit être refusé. On ne dépend
+    # ni des droits root ni d'un fichier illisible : on intercepte tar via PATH.
+    with tempfile.TemporaryDirectory() as tmp:
+        racine = Path(tmp) / "root"
+        source = racine / "wp-content" / "themes" / "tuc-theme"
+        source.mkdir(parents=True)
+        for i in range(30):
+            (source / f"f{i}.txt").write_text("x" * 2000, encoding="utf-8")
+
+        reel = subprocess.run(
+            ["bash", "-c", "command -v tar"], capture_output=True, text=True, check=True
+        ).stdout.strip()
+        bin_dir = Path(tmp) / "bin"
+        bin_dir.mkdir()
+        faux = bin_dir / "tar"
+        faux.write_text(
+            f"#!/bin/bash\n{reel} \"$@\"\nrc=$?\n"
+            "for a in \"$@\"; do case \"$a\" in *.tgz)"
+            " [ -f \"$a\" ] && truncate -s $(( $(stat -c%s \"$a\") / 2 )) \"$a\";;"
+            " esac; done\nexit $rc\n",
+            encoding="utf-8",
+        )
+        faux.chmod(0o755)
+        env = {**os.environ, "PATH": f"{bin_dir}{os.pathsep}{os.environ['PATH']}"}
+        proc = subprocess.run(
+            ["bash", "-c", script, "_", str(racine)],
+            capture_output=True, text=True, env=env,
+        )
+        ok = proc.returncode == 1
+        detail = f"archive tronquee -> refus (code {proc.returncode})"
+        if not ok:
+            lignes = (proc.stdout + proc.stderr).strip().splitlines()
+            if lignes:
+                detail += f" — {lignes[-1][:160]}"
+        results.append((ok, detail))
+
     return results
 
 

@@ -231,3 +231,36 @@ séparément) au lieu d'avaler le code de retour, puis vérifier le nombre de fi
 
 Le trou du sous-dossier vide est en revanche **bien fermé** par `021a01b` : vérifié,
 code 1, et la méta-garde comportementale reste 4/4 sur ce code.
+
+### Vérification de l'intégrité des archives (`ec7940d`) — clos
+
+Le `|| true` global est retiré. `tar -czf` est dans un `if`, puis `gzip -t` et
+`tar -tzf` sont testés séparément. Vérifié par **injection de panne** : un `tar`
+intercepté via `PATH` qui tronque l'archive produite est refusé, code 1, message
+`gzip -t echoue : sauvegarde non restaurable`.
+
+`tests/deploy-contract.py` couvre désormais ce cas en cinquième scénario. Confronté
+à `021a01b` (le code au `|| true`), il produit **1 échec** : l'assertion détecte la
+régression, elle ne valide pas seulement le bon code.
+
+### Question MySQL ouverte — non mesurée ici
+
+Une comparaison des sémantiques MySQL / SQLite sur `meta_value = '11'` a été
+avancée sans sortie de commande. **Ce dépôt ne contient pas de mesure MySQL** et
+aucun moteur MySQL/MariaDB n'est disponible dans l'environnement de test utilisé
+pour ces vérifications (`mysql`, `mysqld`, `mariadb`, `docker` tous absents).
+
+Deux points à produire avant de conclure, côté serveur :
+
+1. `WP_Meta_Query` construit la valeur avec `$wpdb->prepare('%s', $meta_value)`
+   (`class-wp-meta-query.php:771`), donc un **littéral chaîne quoté**. La branche
+   sans CAST est donc une comparaison **chaîne contre chaîne**, où les zéros de
+   tête sont signifiants. La coercition numérique s'applique quand on compare à un
+   littéral **numérique** (`= 11`), pas à `'11'`.
+2. L'ignorance des espaces de fin dépend de l'attribut **PAD** de la collation
+   utilisée. Il faut relever la collation réelle de `wp_postmeta.meta_value`, pas
+   la supposer.
+
+Tant que ces deux sorties ne sont pas produites, la conclusion « le CAST réaligne
+les moteurs » reste une hypothèse. Le risque documenté plus haut est mesuré sur
+SQLite uniquement, et c'est précisé comme tel.
