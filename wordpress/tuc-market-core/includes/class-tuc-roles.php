@@ -20,7 +20,7 @@ final class TUC_Roles
     public const CAP_MANAGE_STAFF = 'tuc_manage_staff';
     public const CAP_AUDIBLE_ORDER_ALERTS = 'tuc_audible_order_alerts';
 
-    private const SCHEMA_VERSION = 3;
+    private const SCHEMA_VERSION = 4;
 
     public static function init(): void
     {
@@ -40,7 +40,7 @@ final class TUC_Roles
                 'caps' => [
                     'read', self::CAP_ACCESS_CAISSE, self::CAP_VIEW_ORDERS, self::CAP_UPDATE_ORDERS,
                     self::CAP_MANAGE_RESTAURANT, self::CAP_MANAGE_MENU, self::CAP_MANAGE_PROMOTIONS,
-                    self::CAP_MANAGE_STAFF,
+                    self::CAP_MANAGE_STAFF, self::CAP_AUDIBLE_ORDER_ALERTS,
                 ],
             ],
             'tuc_gestionnaire' => [
@@ -48,11 +48,15 @@ final class TUC_Roles
                 'caps' => [
                     'read', self::CAP_ACCESS_CAISSE, self::CAP_VIEW_ORDERS, self::CAP_UPDATE_ORDERS,
                     self::CAP_MANAGE_RESTAURANT, self::CAP_MANAGE_MENU, self::CAP_MANAGE_PROMOTIONS,
+                    self::CAP_AUDIBLE_ORDER_ALERTS,
                 ],
             ],
             'tuc_caissier' => [
                 'label' => 'Caissier TUC',
-                'caps' => ['read', self::CAP_ACCESS_CAISSE, self::CAP_VIEW_ORDERS, self::CAP_UPDATE_ORDERS],
+                'caps' => [
+                    'read', self::CAP_ACCESS_CAISSE, self::CAP_VIEW_ORDERS, self::CAP_UPDATE_ORDERS,
+                    self::CAP_AUDIBLE_ORDER_ALERTS,
+                ],
             ],
             // Le serveur suit les commandes de son restaurant dans la caisse mobile,
             // sans accès aux réglages du restaurant, au menu ou à la gestion d'équipe.

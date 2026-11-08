@@ -57,26 +57,30 @@ final class TUC_Caisse
     }
 
     /**
-     * Seul un serveur explicitement rattaché au restaurant reçoit le bip et
-     * la vibration d'une commande à table. Caissier et manager restent notifiés
-     * silencieusement comme filet de sécurité.
+     * Bip et vibration pour tout compte de la caisse rattaché au restaurant et
+     * porteur de CAP_AUDIBLE_ORDER_ALERTS : restaurateur, gestionnaire, caissier
+     * et serveur. Tous les modes (table, emporter, livraison) sont couverts.
+     * Un compte non rattaché, ou rattaché à un autre restaurant, reste notifié
+     * silencieusement : l'isolation par restaurant n'est pas négociable.
      *
      * @return array{audible:bool,silent:bool,vibrate:array<int,int>}
      */
     public static function profil_alerte(int $user_id, string $mode, int $restaurant_id): array
     {
-        $user = get_userdata($user_id);
-        $serveur = $mode === 'table'
-            && $user instanceof WP_User
-            && in_array('tuc_serveur', (array) $user->roles, true)
+        // Décision propriétaire : la cuisine et le patron doivent entendre toute
+        // nouvelle commande. Le mode ne filtre plus et le rôle n'est plus codé en
+        // dur : seule la capacité décide, accordée aux rôles caisse par TUC_Roles.
+        // $mode reste dans la signature pour les appelants et le message push.
+        // L'isolation par restaurant est conservée : elle est une exigence de
+        // sécurité, pas un réglage d'alerte.
+        $autorise = $restaurant_id > 0
             && user_can($user_id, TUC_Roles::CAP_AUDIBLE_ORDER_ALERTS)
-            && (int) get_user_meta($user_id, 'tuc_resto_id', true) === $restaurant_id
-            && $restaurant_id > 0;
+            && (int) get_user_meta($user_id, 'tuc_resto_id', true) === $restaurant_id;
 
         return [
-            'audible' => $serveur,
-            'silent' => !$serveur,
-            'vibrate' => $serveur ? [120, 60, 120, 60, 220] : [],
+            'audible' => $autorise,
+            'silent' => !$autorise,
+            'vibrate' => $autorise ? [120, 60, 120, 60, 220] : [],
         ];
     }
 
@@ -542,7 +546,7 @@ final class TUC_Caisse
         $bilan = TUC_Push::envoyer(get_current_user_id(), [
             'titre' => $profil['audible'] ? 'Test sonore TUC' : 'Test de notification TUC',
             'texte' => $profil['audible']
-                ? 'Vérification du bip et de la vibration pour le serveur.'
+                ? 'Vérification du bip et de la vibration pour la caisse.'
                 : 'Notification silencieuse de contrôle pour la caisse.',
             'url'   => self::url(),
             'tag'   => 'tuc-test',
@@ -604,7 +608,7 @@ final class TUC_Caisse
             $chargePourCompte = $charge;
             $chargePourCompte['silent'] = $profil['silent'];
             $chargePourCompte['vibrate'] = $profil['vibrate'];
-            if ($mode === 'table' && !$profil['audible']) {
+            if (!$profil['audible']) {
                 $chargePourCompte['texte'] .= ' · copie silencieuse';
             }
             TUC_Push::envoyer($user_id, $chargePourCompte);

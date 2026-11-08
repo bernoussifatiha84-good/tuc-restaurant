@@ -375,7 +375,7 @@ svg{display:block;flex:none}
     abonne: false,
     minuteur: null,
     minuteurAge: null,
-    dernierNb: null,
+    baseline: false,
     idsConnus: new Set(),
     alerteSonore: false,
     envoi: false,
@@ -610,23 +610,6 @@ svg{display:block;flex:none}
         });
       }
 
-      // Bip/vibration réservés au serveur opt-in pour les commandes à table.
-      const arrivantes = etat.commandes.filter((c) => !etat.idsConnus.has(Number(c.id)));
-      if (etat.dernierNb !== null && etat.statut === 'nouvelle' && arrivantes.length) {
-        const table = arrivantes.find((c) => c.mode === 'table');
-        if (table && etat.alerteSonore && son.actif) {
-          if (navigator.vibrate) navigator.vibrate([120, 60, 120, 60, 220]);
-          jouerSignalSonore();
-          toast('Nouvelle commande · Table ' + table.table);
-        } else if (table && !etat.alerteSonore) {
-          toast('Commande Table ' + table.table + ' — copie silencieuse');
-        } else {
-          toast('Nouvelle commande');
-        }
-      }
-      etat.commandes.forEach((c) => etat.idsConnus.add(Number(c.id)));
-      etat.dernierNb = etat.commandes.length;
-
       rendre();
       direEtat(true);
     } catch (e) {
@@ -645,6 +628,29 @@ svg{display:block;flex:none}
         const el = $('#n-' + k);
         if (el) el.textContent = par[k] || 0;
       });
+
+      // Alerte d'arrivée calculée sur la liste COMPLÈTE, donc quel que soit
+      // l'onglet affiché et quel que soit le mode. Décision propriétaire : la
+      // cuisine et le patron entendent toute nouvelle commande. La baseline est
+      // posée au premier relevé complet pour ne pas sonner sur l'existant.
+      const toutes = d.commandes || [];
+      const arrivantes = toutes.filter((c) => !etat.idsConnus.has(Number(c.id)));
+      if (etat.baseline && arrivantes.length) {
+        const fraiche = arrivantes.find((c) => c.statut === 'nouvelle') || arrivantes[0];
+        const ou = fraiche.mode === 'table'
+          ? 'Table ' + fraiche.table
+          : (fraiche.mode === 'livraison' ? 'Livraison' : 'Emporter');
+        if (etat.alerteSonore && son.actif) {
+          if (navigator.vibrate) navigator.vibrate([120, 60, 120, 60, 220]);
+          jouerSignalSonore();
+          toast('Nouvelle commande · ' + ou);
+        } else {
+          toast('Nouvelle commande · ' + ou + ' — copie silencieuse');
+        }
+      }
+      toutes.forEach((c) => etat.idsConnus.add(Number(c.id)));
+      etat.baseline = true;
+
       if (etat.statut !== 'toutes') {
         const courantes = (d.commandes || []).filter((c) => c.statut === etat.statut);
         etat.commandes = courantes;
@@ -741,7 +747,6 @@ svg{display:block;flex:none}
     if (ong) {
       $$('.ong').forEach((o) => o.setAttribute('aria-selected', String(o === ong)));
       etat.statut = ong.dataset.statut;
-      etat.dernierNb = null;
       charger();
       return;
     }
@@ -897,7 +902,7 @@ svg{display:block;flex:none}
       etat.vapid = moi.vapid;
       etat.alerteSonore = moi.alerte_sonore === true;
       $('#btn-son').hidden = !etat.alerteSonore;
-      if (!etat.alerteSonore) $('#son-status').textContent = 'Les alertes sonores sont réservées au serveur du restaurant.';
+      if (!etat.alerteSonore) $('#son-status').textContent = 'Votre compte n’est pas rattaché à ce restaurant : alertes silencieuses.';
       majService(!(moi.resto && moi.resto.ferme));
       if (moi.resto && moi.resto.nom) $('#nom-resto').textContent = moi.resto.nom;
 

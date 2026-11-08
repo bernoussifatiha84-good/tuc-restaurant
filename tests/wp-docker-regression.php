@@ -662,11 +662,22 @@ try {
     $managerAlert = TUC_Caisse::profil_alerte((int) $managerUserId, 'table', (int) $otherRestaurantId);
     $serverOtherTenantAlert = TUC_Caisse::profil_alerte((int) $serverUserId, 'table', (int) $otherRestaurantId);
     $serverDeliveryAlert = TUC_Caisse::profil_alerte((int) $serverUserId, 'livraison', (int) $restaurantId);
+    $ownerTakeawayAlert = TUC_Caisse::profil_alerte((int) $ownerUserId, 'emporter', (int) $restaurantId);
+    $cashierDeliveryAlert = TUC_Caisse::profil_alerte((int) $cashierUserId, 'livraison', (int) $restaurantId);
+    $unassignedAlert = TUC_Caisse::profil_alerte((int) $unassignedUserId, 'table', (int) $restaurantId);
+    $zeroRestaurantAlert = TUC_Caisse::profil_alerte((int) $ownerUserId, 'table', 0);
+    // Décision propriétaire : le patron et la cuisine entendent toute commande.
+    // Ce qui reste interdit, c'est l'inter-tenant et le compte non rattaché.
     $assert($serverAlert['audible'] && !$serverAlert['silent'] && $serverAlert['vibrate'] !== []
-        && !$cashierAlert['audible'] && $cashierAlert['silent'] && $cashierAlert['vibrate'] === []
-        && !$managerAlert['audible'] && $managerAlert['silent']
-        && !$serverOtherTenantAlert['audible'] && !$serverDeliveryAlert['audible'],
-        'bip/vibreur uniquement pour le serveur assigné à une commande à table; caissier/manager silencieux');
+        && $cashierAlert['audible'] && !$cashierAlert['silent'] && $cashierAlert['vibrate'] !== []
+        && $managerAlert['audible'] && $ownerTakeawayAlert['audible']
+        && $serverDeliveryAlert['audible'] && $cashierDeliveryAlert['audible'],
+        'bip/vibreur pour tous les rôles caisse rattachés, quel que soit le mode (table, emporter, livraison)');
+    $assert(!$serverOtherTenantAlert['audible'] && $serverOtherTenantAlert['silent']
+        && $serverOtherTenantAlert['vibrate'] === []
+        && !$unassignedAlert['audible'] && $unassignedAlert['vibrate'] === []
+        && !$zeroRestaurantAlert['audible'],
+        'alerte sonore refusée hors du restaurant, sans affectation, ou sans restaurant identifié');
     $assert(TUC_Acces::peut(TUC_Roles::CAP_MANAGE_MENU, (int) $restaurantId, (int) $ownerUserId)
         && TUC_Acces::peut(TUC_Roles::CAP_MANAGE_MENU, (int) $otherRestaurantId, (int) $managerUserId)
         && !TUC_Acces::peut(TUC_Roles::CAP_MANAGE_MENU, (int) $restaurantId, (int) $managerUserId)
