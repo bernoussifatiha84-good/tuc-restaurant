@@ -126,14 +126,14 @@ async function main() {
     assert.equal((await responsePromise).status(), 201);
     await page.waitForFunction(() => document.activeElement?.id === 'tuc-onboarding-wa-link');
     await waitForSpeech('Demande enregistrée');
-    await waitForSpeech('Continuer dans WhatsApp');
+    await waitForSpeech('Continuer dans Whats App');
     report.focusTrail = await page.evaluate(() => window.__tucFocusTrail);
     const nameIndex = report.focusTrail.indexOf('tuc-onboarding-name');
     const photoIndex = report.focusTrail.indexOf('tuc-onboarding-menu-photo');
     const submitIndex = report.focusTrail.findIndex((entry) => entry.includes('tuc-onboarding-submit'));
     assert(nameIndex >= 0 && photoIndex > nameIndex && submitIndex > photoIndex, `Unexpected native focus order: ${JSON.stringify(report.focusTrail)}`);
     report.phases.push('native Enter submission, live status and focus on WhatsApp link');
-    report.assertions.push('focus order name -> photo -> submit', 'Arabic input lang=ar', 'NVDA received required French announcements', 'HTTP 201 mocked application response', 'focus moved to WhatsApp link');
+    report.assertions.push('focus order name -> photo -> submit', 'Arabic input lang=ar', 'NVDA received required French announcements (eSpeak pronunciation: Whats App)', 'HTTP 201 mocked application response', 'focus moved to WhatsApp link');
     await page.waitForTimeout(1000);
     await context.close();
   } finally {
