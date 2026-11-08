@@ -8,6 +8,7 @@ import hashlib
 import json
 import math
 import struct
+import sys
 import wave
 from collections import defaultdict
 from pathlib import Path
@@ -63,6 +64,8 @@ def write_wav(path: Path, fmt: tuple, pcm: bytes):
 
 
 def main() -> int:
+    if hasattr(sys.stdout, "reconfigure"):
+        sys.stdout.reconfigure(encoding="utf-8")
     parser = argparse.ArgumentParser()
     parser.add_argument("--capture", type=Path, required=True)
     parser.add_argument("--output", type=Path, required=True)
