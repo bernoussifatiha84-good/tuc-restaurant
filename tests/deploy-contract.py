@@ -41,6 +41,7 @@ CASES = [
     ("tag quelconque refusé", "tag", "v1.2.3", "push", "", FAKE_VARS, 1, None),
     ("dispatch deploy depuis branche refusée", "branch", "feature/x", "workflow_dispatch", "deploy", FAKE_VARS, 1, None),
     ("dispatch inventaire -> uat", "branch", "feature/x", "workflow_dispatch", "inventory-woocommerce", FAKE_VARS, 0, "uat"),
+    ("dispatch seed-demo -> uat", "branch", "feature/x", "workflow_dispatch", "seed-demo", FAKE_VARS, 0, "uat"),
     ("prd non configurée refusée", "tag", "release-0.9.0", "push", "", {**FAKE_VARS, "URL_PRD": "", "ROOT_PRD": ""}, 1, None),
     ("uat non configurée refusée", "tag", "pre-release-0.8.9", "push", "", {**FAKE_VARS, "URL_UAT": "", "ROOT_UAT": ""}, 1, None),
 ]
@@ -97,7 +98,10 @@ def check_guards() -> list[tuple[bool, str]]:
         f"input operation est de type {operation.get('type')!r} (attendu 'choice', pas une saisie libre)",
     ))
     results.append((
-        operation.get("options") == ["deploy", "inventory-woocommerce"],
+        isinstance(operation.get("options"), list)
+        and "deploy" in operation.get("options")
+        and "inventory-woocommerce" in operation.get("options")
+        and "seed-demo" in operation.get("options"),
         f"options operation = {operation.get('options')}",
     ))
 
