@@ -80,6 +80,10 @@ class SynthDriver(BuiltinEspeak):
                 if pending_marker or not languages:
                     identifier = marker_id + len(languages)
                     languages.append({"id": identifier, "language": current_language, "start_byte": None, "end_byte": None})
+                    # eSpeak indexes have 10 ms resolution. Without a tiny break,
+                    # language markers can share a callback and odd byte offsets.
+                    from speech.commands import BreakCommand
+                    augmented.append(BreakCommand(20))
                     augmented.append(IndexCommand(identifier))
                     pending_marker = False
                 augmented.append(item)
@@ -90,6 +94,8 @@ class SynthDriver(BuiltinEspeak):
         # trailing callbacks after the last audible sample.
         end_id = marker_id + len(languages)
         languages.append({"id": end_id, "language": "boundary", "start_byte": None, "end_byte": None})
+        from speech.commands import BreakCommand
+        augmented.append(BreakCommand(20))
         augmented.append(IndexCommand(end_id))
         self._tucCapture.begin(languages, speechSequence)
         super().speak(augmented)

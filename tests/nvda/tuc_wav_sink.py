@@ -101,6 +101,9 @@ class Capture:
                         if position + 1 < len(item["languages"]) and item["languages"][position + 1]["start_byte"] is not None
                         else item["bytes"]
                     )
+                frame_bytes = item["channels"] * item["sample_width"]
+                language["start_byte"] -= language["start_byte"] % frame_bytes
+                language["end_byte"] -= language["end_byte"] % frame_bytes
                 language["duration_seconds"] = (language["end_byte"] - language["start_byte"]) / byte_rate
             item["languages"] = [language for language in item["languages"] if language["language"] != "boundary"]
             self._write_json(item["metadata_path"], {
