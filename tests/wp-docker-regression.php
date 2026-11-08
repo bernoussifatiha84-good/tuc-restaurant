@@ -1067,10 +1067,21 @@ try {
             'un commerce qui ne livre pas n\'apparaît pas dans « Livraison offerte »');
 
         $promos = tuc_promos();
-        $promosDuResto = array_values(array_filter($promos, fn($x) => ($x['shop'] ?? '') === $restaurant->post_title));
-        $assert($promosDuResto !== [] && ($promosDuResto[0]['url'] ?? '') !== ''
-            && ($promosDuResto[0]['big'] ?? '') === '−25 %',
-            'les promotions viennent des articles en remise et pointent vers la boutique');
+        // Cibler CE plat par son titre : deux autres plats du même restaurant
+        // portent déjà une remise (10 % et 15 %) et sont plus récents, donc
+        // renvoyés avant lui par get_posts. Prendre le premier du restaurant
+        // testait le mauvais plat.
+        $maPromo = array_values(array_filter($promos, fn($x) => ($x['nm'] ?? '') === $itemTitle));
+        $assert($maPromo !== [] && ($maPromo[0]['big'] ?? '') === '−25 %'
+            && ($maPromo[0]['shop'] ?? '') === $restaurant->post_title,
+            'une promotion vient de l\'article en remise et nomme sa boutique');
+        $toutesAvecUrl = $promos !== [];
+        foreach ($promos as $promo) {
+            if (($promo['url'] ?? '') === '' || !str_starts_with((string) $promo['url'], 'http')) {
+                $toutesAvecUrl = false;
+            }
+        }
+        $assert($toutesAvecUrl, 'chaque promotion est cliquable vers sa boutique');
         update_post_meta((int) $itemId, 'tuc_promo_pct', 0);
     } else {
         $assert(false, 'le thème expose tuc_restos() et tuc_promos() : catalogue testable');
