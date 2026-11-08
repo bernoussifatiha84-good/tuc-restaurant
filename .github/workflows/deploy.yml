@@ -279,13 +279,37 @@ jobs:
           cd "$1"
           backup="wp-content/upgrade/tuc-predeploy-$(date -u +%Y%m%dT%H%M%SZ)"
           mkdir -p "$backup"
-          if [ -d wp-content/themes/tuc-theme ]; then
-            tar -czf "$backup/theme.tgz" -C wp-content themes/tuc-theme
+
+          # Chaque archive est verifiee APRES creation. Un `if` autour du tar
+          # laissait le step reussir avec 0 fichier produit : c'est precisement
+          # le faux vert que ce garde-fou doit rendre impossible.
+          faits=0
+          ranger() { # $1 = dossier source, $2 = nom d'archive
+            if [ ! -d "$1" ]; then
+              echo "  $1 absent : rien a sauvegarder a cet emplacement."
+              return 0
+            fi
+            tar -czf "$backup/$2" -C "$(dirname "$1")" "$(basename "$1")"
+            if [ ! -s "$backup/$2" ]; then
+              echo "::error::$2 absent ou vide alors que $1 existe. Arret avant toute ecriture."
+              exit 1
+            fi
+            entrees=$(tar -tzf "$backup/$2" | wc -l)
+            if [ "$entrees" -lt 2 ]; then
+              echo "::error::$2 ne contient que $entrees entree(s) : $1 semble vide. Arret avant toute ecriture."
+              exit 1
+            fi
+            echo "  $2 : $entrees entrees, $(du -h "$backup/$2" | cut -f1)"
+            faits=$((faits + 1))
+          }
+          ranger wp-content/themes/tuc-theme theme.tgz
+          ranger wp-content/plugins/tuc-market-core plugin.tgz
+
+          if [ "$faits" -eq 0 ]; then
+            echo "::warning::Aucune archive produite (premier deploiement ?). Rien a proteger du rsync --delete."
+          else
+            echo "Sauvegarde verifiee : $faits archive(s) non vides dans $backup"
           fi
-          if [ -d wp-content/plugins/tuc-market-core ]; then
-            tar -czf "$backup/plugin.tgz" -C wp-content plugins/tuc-market-core
-          fi
-          echo "Sauvegarde créée dans $backup"
           REMOTE
 
       - name: Envoyer le thème
