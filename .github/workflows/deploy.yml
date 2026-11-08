@@ -289,15 +289,30 @@ jobs:
               echo "  $1 absent : rien a sauvegarder a cet emplacement."
               return 0
             fi
-            tar -czf "$backup/$2" -C "$(dirname "$1")" "$(basename "$1")"
+            if ! tar -czf "$backup/$2" -C "$(dirname "$1")" "$(basename "$1")"; then
+              echo "::error::tar a echoue sur $1. Arret avant toute ecriture."
+              exit 1
+            fi
             if [ ! -s "$backup/$2" ]; then
               echo "::error::$2 absent ou vide alors que $1 existe. Arret avant toute ecriture."
               exit 1
             fi
+
+            # Integrite : une archive tronquee se tar -t partiellement (exit 2)
+            # mais produit quand meme une liste, donc un comptage reussi.
+            # Aucun `|| true` global ici : il avalerait l'echec de tar lui-meme.
+            if ! gzip -t "$backup/$2" 2>/dev/null; then
+              echo "::error::$2 est corrompue (gzip -t echoue) : sauvegarde non restaurable. Arret avant toute ecriture."
+              exit 1
+            fi
+            if ! listing=$(tar -tzf "$backup/$2"); then
+              echo "::error::$2 illisible (tar -t echoue) : sauvegarde non restaurable. Arret avant toute ecriture."
+              exit 1
+            fi
+
             # On compte les FICHIERS, pas les entrees : un dossier ne contenant
-            # qu'un sous-dossier vide fait 2 entrees et 0 fichier. Compter les
-            # entrees laissait donc passer une sauvegarde inutile.
-            fichiers=$(tar -tzf "$backup/$2" | grep -vc '/$' || true)
+            # qu'un sous-dossier vide fait 2 entrees et 0 fichier.
+            fichiers=$(printf '%s\n' "$listing" | grep -vc '/$' || true)
             if [ -z "$fichiers" ] || [ "$fichiers" -lt 1 ]; then
               echo "::error::$2 ne contient aucun fichier ($1 n'a que des dossiers vides). Arret avant toute ecriture."
               exit 1
