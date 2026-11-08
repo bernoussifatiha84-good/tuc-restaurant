@@ -31,6 +31,10 @@ FAKE_VARS = {
     "ROOT_PRD": "sites/prd/public_html",
 }
 
+# Verbes de dispatch déclarés. Toute évolution de cette liste doit être voulue :
+# `deploy` écrit le code, les autres sont des outils sans écriture de code.
+KNOWN_OPERATIONS = ["deploy", "inventory-woocommerce", "seed-demo"]
+
 # (libellé, ref_type, ref_name, event, operation, vars, code_attendu, env_attendu)
 CASES = [
     ("branche develop -> dev", "branch", "develop", "push", "", FAKE_VARS, 0, "dev"),
@@ -42,6 +46,10 @@ CASES = [
     ("dispatch deploy depuis branche refusée", "branch", "feature/x", "workflow_dispatch", "deploy", FAKE_VARS, 1, None),
     ("dispatch inventaire -> uat", "branch", "feature/x", "workflow_dispatch", "inventory-woocommerce", FAKE_VARS, 0, "uat"),
     ("dispatch seed-demo -> uat", "branch", "feature/x", "workflow_dispatch", "seed-demo", FAKE_VARS, 0, "uat"),
+    # Un outil manuel ne doit jamais devenir une écriture production, même si le
+    # dispatch est lancé depuis un tag de release.
+    ("dispatch seed-demo sur tag release reste uat", "tag", "release-0.9.0", "workflow_dispatch", "seed-demo", FAKE_VARS, 0, "uat"),
+    ("dispatch inventaire sur tag release reste uat", "tag", "release-0.9.0", "workflow_dispatch", "inventory-woocommerce", FAKE_VARS, 0, "uat"),
     ("prd non configurée refusée", "tag", "release-0.9.0", "push", "", {**FAKE_VARS, "URL_PRD": "", "ROOT_PRD": ""}, 1, None),
     ("uat non configurée refusée", "tag", "pre-release-0.8.9", "push", "", {**FAKE_VARS, "URL_UAT": "", "ROOT_UAT": ""}, 1, None),
 ]
@@ -85,9 +93,14 @@ def run_case(script: str, case) -> tuple[bool, str]:
         return True, f"{label} : {expected_env} (code {result.returncode})"
 
 
-def check_guards() -> list[tuple[bool, str]]:
-    """Garde-fous structurels du workflow, indépendants du script de résolution."""
-    text = WORKFLOW.read_text(encoding="utf-8")
+def check_guards(text: str | None = None) -> list[tuple[bool, str]]:
+    """Garde-fous structurels du workflow, indépendants du script de résolution.
+
+    `text` est injectable pour permettre à `check_option_list_is_closed()` de
+    prouver que la garde refuse réellement une option non déclarée.
+    """
+    if text is None:
+        text = WORKFLOW.read_text(encoding="utf-8")
     document = yaml.safe_load(text)
     results = []
 
@@ -97,12 +110,14 @@ def check_guards() -> list[tuple[bool, str]]:
         operation.get("type") == "choice",
         f"input operation est de type {operation.get('type')!r} (attendu 'choice', pas une saisie libre)",
     ))
+    # Liste exacte, volontairement. Une liste « au moins celles-ci » laisserait
+    # ajouter un verbe sans le déclarer ici : le résolveur retomberait alors sur
+    # le routage par référence et le job `deploiement`, qui n'exclut que les
+    # verbes nommés, se mettrait à DÉPLOYER pour ce nouveau verbe. Déclarer une
+    # nouvelle opération coûte une ligne : c'est le prix du fail-closed.
     results.append((
-        isinstance(operation.get("options"), list)
-        and "deploy" in operation.get("options")
-        and "inventory-woocommerce" in operation.get("options")
-        and "seed-demo" in operation.get("options"),
-        f"options operation = {operation.get('options')}",
+        operation.get("options") == KNOWN_OPERATIONS,
+        f"options operation = {operation.get('options')} (attendu {KNOWN_OPERATIONS})",
     ))
 
     deploy_job = document["jobs"]["deploiement"]
@@ -132,6 +147,103 @@ def check_guards() -> list[tuple[bool, str]]:
         "Incohérence de version::en-tête" in text
         and "Tag et version divergents::" in text,
         "verrou en-tête/constante et tag/version présent avant le rsync",
+    ))
+    return results
+
+
+def check_operations_behaviour() -> list[tuple[bool, str]]:
+    """Chaque verbe de dispatch doit être porté et cantonné, pas seulement listé.
+
+    La liste fermée dit « rien de nouveau sans le déclarer ». Ce contrôle-ci dit
+    ce qu'un verbe déclaré a le droit de faire : exclu du déploiement, porté par
+    un job à environnement littéral non-production, et résolu hors production.
+    """
+    document = yaml.safe_load(WORKFLOW.read_text(encoding="utf-8"))
+    jobs = document["jobs"]
+    deploy_if = str(jobs["deploiement"].get("if", ""))
+    script = resolve_script()
+    results = []
+
+    for option in KNOWN_OPERATIONS:
+        if option == "deploy":
+            continue
+
+        results.append((
+            f"inputs.operation != '{option}'" in deploy_if,
+            f"{option} : explicitement exclu du job de déploiement",
+        ))
+
+        carriers = [
+            name for name, job in jobs.items()
+            if f"inputs.operation == '{option}'" in str(job.get("if", ""))
+        ]
+        results.append((
+            len(carriers) == 1,
+            f"{option} : porté par un job dédié et un seul {carriers}",
+        ))
+        if len(carriers) != 1:
+            continue
+
+        environment = jobs[carriers[0]].get("environment")
+        results.append((
+            isinstance(environment, str) and environment not in ("prd", "production")
+            and "${{" not in environment,
+            f"{option} : environnement littéral non-production ({environment!r})",
+        ))
+        results.append((
+            "github.event_name == 'workflow_dispatch'" in str(jobs[carriers[0]].get("if", "")),
+            f"{option} : déclenchement manuel uniquement, jamais sur push",
+        ))
+
+        # Le résolveur réel, exécuté : même depuis un tag de release, un outil
+        # manuel ne doit pas résoudre la production.
+        for ref_type, ref_name in (("branch", "feature/x"), ("tag", "release-0.9.0")):
+            ok, detail = run_case(script, (
+                f"{option} depuis {ref_type} {ref_name}",
+                ref_type, ref_name, "workflow_dispatch", option, FAKE_VARS, 0, "uat",
+            ))
+            results.append((ok, detail))
+
+    return results
+
+
+def check_option_list_is_closed() -> list[tuple[bool, str]]:
+    """Prouve que la garde refuse une 4e opération, au lieu de le supposer.
+
+    Sans ce test, « liste exacte » pourrait redevenir « liste ouverte » sans que
+    rien ne rougisse — exactement la régression que ce contrôle empêche.
+    """
+    original = WORKFLOW.read_text(encoding="utf-8")
+    document = yaml.safe_load(original)
+    options = document[True]["workflow_dispatch"]["inputs"]["operation"]["options"]
+    results = []
+
+    def guard_passes(text: str) -> bool:
+        return all(ok for ok, detail in check_guards(text) if "options operation" in detail)
+
+    results.append((
+        guard_passes(original),
+        "la liste déclarée passe la garde",
+    ))
+
+    # Ajout d'un verbe non déclaré, à l'identique de ce que ferait un commit.
+    intrus = original.replace(
+        "\n".join(f"          - {o}" for o in options),
+        "\n".join(f"          - {o}" for o in [*options, "reset-db"]),
+        1,
+    )
+    if intrus == original:
+        results.append((False, "injection d'une 4e opération impossible : format YAML inattendu"))
+        return results
+
+    injected = yaml.safe_load(intrus)[True]["workflow_dispatch"]["inputs"]["operation"]["options"]
+    results.append((
+        injected == [*options, "reset-db"],
+        f"4e opération injectée dans le YAML {injected}",
+    ))
+    results.append((
+        not guard_passes(intrus),
+        "une 4e opération non déclarée est REFUSÉE par la garde",
     ))
     return results
 
@@ -272,6 +384,16 @@ def main() -> int:
 
     print("\n=== Garde-fous structurels ===")
     for ok, detail in check_guards():
+        print(f"{'PASS' if ok else 'FAIL'} {detail}")
+        failures += 0 if ok else 1
+
+    print("\n=== Cantonnement des verbes de dispatch (résolveur réel exécuté) ===")
+    for ok, detail in check_operations_behaviour():
+        print(f"{'PASS' if ok else 'FAIL'} {detail}")
+        failures += 0 if ok else 1
+
+    print("\n=== La liste des verbes est-elle réellement fermée ? (mutation testée) ===")
+    for ok, detail in check_option_list_is_closed():
         print(f"{'PASS' if ok else 'FAIL'} {detail}")
         failures += 0 if ok else 1
 
