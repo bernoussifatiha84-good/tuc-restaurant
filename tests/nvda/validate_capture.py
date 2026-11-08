@@ -115,7 +115,8 @@ def main() -> int:
             if len(language_pcm[family]) % frame_bytes or len(chunk) % frame_bytes:
                 raise ValueError(f"Unaligned concatenated PCM: {metadata['file']} {language}, prefix={len(language_pcm[family])}, chunk={len(chunk)}")
             if language_pcm[family]:
-                language_pcm[family].extend(b"\x00" * (fmt[0] * fmt[1] * fmt[2] // 20))
+                silence_bytes = fmt[0] * fmt[1] * (fmt[2] // 20)
+                language_pcm[family].extend(b"\x00" * silence_bytes)
             language_pcm[family].extend(chunk)
             language_chunks[family] += 1
 
