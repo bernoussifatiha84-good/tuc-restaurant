@@ -26,6 +26,24 @@ Liens de diagnostic :
 - https://github.com/bernoussifatiha84-good/tuc-restaurant/pull/1
 - https://github.com/bernoussifatiha84-good/tuc-restaurant/actions/runs/42408754556
 
+## Résultat exécuté sur GitHub
+
+**Succès le 8 novembre 2026**, run
+https://github.com/bernoussifatiha84-good/tuc-restaurant/actions/runs/42481128144
+sur la révision `492887c33a8093d17164c1669f4aaf9113525f8d` de la PR draft #2 :
+
+- export WordPress : réussi ;
+- installation NVDA portable avec contrôle SHA-256 : réussie ;
+- chargement du moteur `nvdaBuiltin.synthDrivers.espeak` : réussi ;
+- parcours clavier Windows et annonces : réussis ;
+- validation du PCM français et arabe : réussie ;
+- aucun pilote audio virtuel installé.
+
+L'artefact `nvda-native-espeak-42481128144` contient les WAV, manifeste,
+transcription, rapport clavier, configuration et journal NVDA. Il est publié pour
+7 jours, jusqu'au 15 novembre 2026. La PR #2 reste en brouillon : aucun déploiement
+et aucune fusion n'ont été effectués.
+
 ## Expérience de cette session
 
 Le workflow `NVDA — eSpeak intégré et capture WAV` est séparé des déploiements.
