@@ -177,6 +177,28 @@ async function main() {
     await replayPage.close();
     assert(errors.length === 0, `aucune erreur JavaScript navigateur : ${errors.join('\n')}`);
     await adminContext.close();
+
+    // ---------------------------------------------------------------------
+    // Contrat d'import CSV — critères d'acceptation 1 à 6.
+    //
+    // Appelé depuis ce runner DÉJÀ câblé plutôt que par un step dédié : le
+    // dépôt a un précédent (scripts/preuve-garde-dev.py appelé via
+    // tests/deploy-contract.py), et le jeton de la session n'a pas le scope
+    // `workflow`. Copie du patron admin ci-dessus, pas réinvention.
+    // ---------------------------------------------------------------------
+    const contratImport = require('./import-csv-admin-e2e.js');
+    const etapesImport = await contratImport.parcoursImportCsv({
+      browser,
+      baseUrl,
+      adminUser,
+      adminPassword,
+    });
+    assert.equal(
+      etapesImport.join(','),
+      'modeles,categories,refus,dryrun,import,reimport',
+      `contrat import CSV : étapes exécutées = ${etapesImport.join(',')}`
+    );
+    console.log(`PASS import CSV admin : ${etapesImport.length} étapes (modèles, catégories, refus, dry-run, import brouillon, réimport sans doublon).`);
     await applicantContext.close();
     console.log('PASS onboarding restaurateur mobile: formulaire 2 champs (nom arabe + photo), wa.me, webhook n8n, provisionnement équipe, accès WhatsApp par lien magique à usage unique et redirection Espace Pro.');
   } finally {

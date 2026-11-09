@@ -151,4 +151,41 @@ $order = TUC_Commande::creer($orderRequest);
 if (is_wp_error($order) || !$order instanceof WP_REST_Response || $order->get_status() !== 201) {
     WP_CLI::error('Impossible de créer la commande E2E : ' . (is_wp_error($order) ? $order->get_error_message() : 'réponse inattendue'));
 }
+
+// ---------------------------------------------------------------------------
+// Restaurant cible du parcours d'import CSV (tests/import-csv-admin-e2e.js).
+//
+// Il est créé ici, dans la fixture DÉJÀ câblée, plutôt que par un step dédié :
+// le jeton n'a pas le scope `workflow`, et un second mécanisme aurait doublé la
+// maintenance. Le nom est celui que le parcours sélectionne dans la liste.
+// ---------------------------------------------------------------------------
+$importRestoSlug = 'resto-import-contrat';
+$importRestoExistant = get_page_by_path($importRestoSlug, OBJECT, TUC_CPT::RESTO);
+if ($importRestoExistant instanceof WP_Post) {
+    wp_delete_post($importRestoExistant->ID, true);
+}
+// On repart d'un menu vide : un reste d'exécution précédente ferait passer un
+// import pour une mise à jour, et le parcours lirait « mettre à jour » là où il
+// attend « créer ». C'est le genre de faux vert qu'on veut éviter.
+$staleItems = get_posts([
+    'post_type' => TUC_CPT::ITEM, 'post_status' => 'any', 'posts_per_page' => -1, 'fields' => 'ids',
+    'meta_query' => [['key' => 'tuc_import_ref', 'value' => 'plafond-poulet']],
+]);
+foreach ($staleItems as $staleId) {
+    wp_delete_post((int) $staleId, true);
+}
+$importRestoId = wp_insert_post([
+    'post_type'   => TUC_CPT::RESTO,
+    'post_title'  => 'Resto import contrat',
+    'post_name'   => $importRestoSlug,
+    'post_status' => 'publish',
+]);
+if (!is_int($importRestoId) || $importRestoId <= 0) {
+    WP_CLI::error('Impossible de créer le restaurant du contrat d’import CSV.');
+}
+update_post_meta($importRestoId, 'tuc_modes', ['emporter']);
+update_post_meta($importRestoId, 'tuc_tables', 3);
+update_post_meta($importRestoId, 'tuc_frais', 0);
+WP_CLI::log('Restaurant du contrat import CSV prêt : #' . $importRestoId . ' (menu vide).');
+
 WP_CLI::log('Fixtures synthétiques prêtes : restaurant=tuc-mobile-e2e, compte=tuc-mobile-e2e, commande=' . (int) $order->get_data()['commande']);
