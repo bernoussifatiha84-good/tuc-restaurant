@@ -377,14 +377,12 @@ svg{display:block;flex:none}
     minuteurAge: null,
     baseline: false,
     idsConnus: new Set(),
-    // instant SERVEUR du premier releve abouti, et fenetre couverte par la
-    // reprise. Une commande 'nouvelle' creee apres (t0 - FENETRE_DE_REPRISE)
-    // doit sonner meme si ce premier releve est le tout premier.
-    t0: 0,
+    // commandes deja signalees sur cet appareil, persistees en sessionStorage :
+    // un rechargement ne resonne pas sur ce qui a deja sonne.
+    vues: chargerVues(),
     alerteSonore: false,
     envoi: false,
   };
-  const FENETRE_DE_REPRISE = 120; // secondes
   const son = { context: null, actif: false };
 
   /* ---------------- outils ---------------- */
@@ -628,24 +626,52 @@ svg{display:block;flex:none}
    * La decision d'alerte, isolee et pure : c'est la seule regle qui compte
    * pour ne pas rater une commande, et elle doit etre verifiable sans DOM.
    *
-   * Regles, dans cet ordre :
-   *  1. jamais presentee dans cette session (idsConnus) ;
-   *  2. creee dans la fenetre de reprise — c'est ce qui rattrape une commande
-   *     tombee pendant un rechargement, y compris au tout premier releve ;
-   *  3. encore a prendre (statut 'nouvelle'). Une commande deja acceptee ne
-   *     sonne pas, meme si la page ne l'a jamais vue.
+   * LE STATUT EST L'ACQUITTEMENT. LE TEMPS N'EN EST QU'UN SUBSTITUT.
    *
-   * Fail-closed : si le serveur ne fournit pas 'cree' (version anterieure), on
-   * n'invente pas une alerte sur une horloge locale — on ne signale rien.
+   * `nouvelle -> acceptee` est un geste humain : une commande encore
+   * "nouvelle" n'a ete prise par personne, qu'elle ait 10 secondes ou 3 heures.
+   * Toute borne temporelle laisse donc un trou definitif : les commandes
+   * arrivees pendant que la page etait FERMEE plus longtemps que la borne ne
+   * sonneraient plus jamais. Une premiere version bornait a 120 s ; ce test a
+   * reproduit le trou (commande non prise depuis 3 h, jamais signalee).
+   *
+   * Deux regles, aucune borne de duree :
+   *  1. encore a prendre — statut 'nouvelle' ;
+   *  2. jamais presentee sur CET appareil — 'vues' est persiste en
+   *     sessionStorage, donc un rechargement de l'onglet ne resonne pas sur ce
+   *     qui a deja sonne, alors qu'un nouvel onglet ou un autre appareil de
+   *     caisse resonne : c'est voulu, il n'a peut-etre pas vu la commande.
    */
-  function commandesASignaler(toutes, idsConnus, t0, fenetre) {
-    const debut = Number(t0) - Number(fenetre);
+  /**
+   * Memoire des commandes deja signalees sur CET appareil.
+   * sessionStorage et non localStorage : perdre la memoire a la fermeture de
+   * l'onglet est sans danger (on resonnera sur les commandes encore non
+   * prises, ce qui est le bon comportement). En revanche on ne perd rien au
+   * rechargement, qui etait le defaut d'origine.
+   */
+  const CLE_VUES = 'tuc_caisse_vues';
+  function chargerVues() {
+    try {
+      const brut = sessionStorage.getItem(CLE_VUES);
+      if (!brut) return new Set();
+      const ids = JSON.parse(brut);
+      return new Set(Array.isArray(ids) ? ids.map(String) : []);
+    } catch (_) {
+      return new Set();   // navigation privee, quota, JSON casse : on repart a vide
+    }
+  }
+  function memoriserVues() {
+    try {
+      // on ne garde que les 200 derniers : au-dela, les commandes sont closes
+      const ids = Array.from(etat.vues).slice(-200);
+      sessionStorage.setItem(CLE_VUES, JSON.stringify(ids));
+    } catch (_) { /* stockage indisponible : on continue, sans memoire */ }
+  }
+
+  function commandesASignaler(toutes, vues) {
     return (toutes || []).filter((c) => {
-      if (idsConnus && idsConnus.has(Number(c.id))) return false;
-      if (String(c.statut) !== 'nouvelle') return false;
-      const cree = Number(c.cree);
-      if (!cree) return false;
-      return cree >= debut;
+      if (vues && vues.has(String(c.id))) return false;
+      return String(c.statut) === 'nouvelle';
     });
   }
 
@@ -667,10 +693,11 @@ svg{display:block;flex:none}
 
       // Instant serveur : l'horloge d'une tablette de comptoir peut deriver de
       // plusieurs minutes. On ne compare qu'avec la reference du serveur.
-      const maintenant = Number(d.maintenant) || Math.floor(Date.now() / 1000);
-      if (!etat.t0) etat.t0 = maintenant;
-
-      const aSignaler = commandesASignaler(toutes, etat.idsConnus, etat.t0, FENETRE_DE_REPRISE);
+      const aSignaler = commandesASignaler(toutes, etat.vues);
+      if (aSignaler.length) {
+        aSignaler.forEach((c) => etat.vues.add(String(c.id)));
+        memoriserVues();
+      }
 
       if (aSignaler.length) {
         const fraiche = aSignaler[0];
@@ -685,7 +712,12 @@ svg{display:block;flex:none}
           toast('Nouvelle commande · ' + ou + ' — copie silencieuse');
         }
         if (aSignaler.length > 1) {
-          toast(aSignaler.length + ' nouvelles commandes · ' + ou);
+          // un seul toast, pas deux : le second ecrasait le premier
+          const t = $('#toast');
+          t.textContent = aSignaler.length + ' nouvelles commandes · ' + ou;
+          t.classList.add('on');
+          clearTimeout(t._h);
+          t._h = setTimeout(() => t.classList.remove('on'), 2600);
         }
       }
       toutes.forEach((c) => etat.idsConnus.add(Number(c.id)));
