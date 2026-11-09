@@ -16,7 +16,7 @@
 
 declare(strict_types=1);
 
-function tuc_reglages_contrat(string $assertExterne = null): int
+function tuc_reglages_contrat(?callable $assertExterne = null): int
 {
     $assert = $assertExterne ?? static function (bool $ok, string $message): void {
         if (!$ok) {
