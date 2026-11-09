@@ -63,13 +63,40 @@ $crees = ['restos' => [], 'items' => [], 'users' => [], 'transients' => []];
 // Inventaire AVANT. Le contrôle d'après ne dit rien s'il n'a pas de point de
 // comparaison : « le même nombre qu'avant » exige de compter avant.
 $inventaire = static function (): array {
-    $compter = static function (string $type): int {
-        $ids = get_posts(['post_type' => $type, 'post_status' => 'any', 'posts_per_page' => -1,
-                          'fields' => 'ids', 'suppress_filters' => true]);
-        return count($ids);
+    $ids = static function (string $type): array {
+        return array_map('intval', get_posts(['post_type' => $type, 'post_status' => 'any',
+            'posts_per_page' => -1, 'fields' => 'ids', 'suppress_filters' => true]));
     };
-    return ['resto' => $compter(TUC_CPT::RESTO), 'item' => $compter(TUC_CPT::ITEM),
-            'users' => count(get_users(['fields' => 'ID']))];
+    $users = get_users(['fields' => 'ID']);
+    return [
+        'resto' => $ids(TUC_CPT::RESTO),
+        'item'  => $ids(TUC_CPT::ITEM),
+        'users' => array_map('intval', $users),
+    ];
+};
+// Un diff, pas seulement un compte : « il en manque un » ne dit pas lequel, et
+// c'est le nom qui permet de trancher entre fuite du contrat et compteur faux.
+$diffInventaire = static function (array $avant, array $apres): string {
+    $ecarts = [];
+    foreach (['resto', 'item', 'users'] as $cle) {
+        if (count($avant[$cle]) === count($apres[$cle])) {
+            continue;
+        }
+        $nouveaux = array_values(array_diff($apres[$cle], $avant[$cle]));
+        $disparus = array_values(array_diff($avant[$cle], $apres[$cle]));
+        $libelle = static function (string $cle, array $ids): array {
+            return array_map(static function (int $id) use ($cle): string {
+                if ($cle === 'users') {
+                    $u = get_userdata($id);
+                    return '#' . $id . ':' . ($u ? $u->user_login . ' [' . implode(',', $u->roles) . ']' : '?');
+                }
+                return '#' . $id . ':' . get_post_type($id) . '/' . get_post_status($id);
+            }, $ids);
+        };
+        $ecarts[] = sprintf('%s %d→%d (+[%s] -[%s])', $cle, count($avant[$cle]), count($apres[$cle]),
+            implode(' ', $libelle($cle, $nouveaux)), implode(' ', $libelle($cle, $disparus)));
+    }
+    return $ecarts === [] ? 'aucun écart' : implode(' ; ', $ecarts);
 };
 $avant = $inventaire();
 
@@ -470,10 +497,7 @@ try {
     $apres = $inventaire();
     $assert(
         $apres === $avant,
-        sprintf(
-            'D. aucune fixture ne survit : resto %d→%d, item %d→%d, users %d→%d (toutes statuts confondus)',
-            $avant['resto'], $apres['resto'], $avant['item'], $apres['item'], $avant['users'], $apres['users']
-        )
+        'D. aucune fixture ne survit (toutes statuts confondus) — ' . $diffInventaire($avant, $apres)
     );
     wp_set_current_user(0);
 }
