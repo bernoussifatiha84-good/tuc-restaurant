@@ -212,7 +212,7 @@ jobs:
           # Pour deployer pendant le gel, on passe par workflow_dispatch, qui
           # laisse une trace de qui a gele et pourquoi.
           if [ "$GITHUB_REF_NAME" = "develop" ] && [ "$GITHUB_EVENT_NAME" = "push" ] && [ -f .deploy-gel ]; then
-            echo "::error title=Deploiement gele::$(cat .deploy-gel)"
+            echo "::error title=Deploiement gele::develop est gele (voir .deploy-gel) ; rien n'a ete envoye. Utilisez workflow_dispatch pour deployer volontairement."
             exit 1
           fi
           printf 'theme=%s\nplugin=%s\n' "$THEME_VERSION" "$PLUGIN_VERSION" >> "$GITHUB_OUTPUT"
