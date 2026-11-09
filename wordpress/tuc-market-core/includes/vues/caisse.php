@@ -624,6 +624,31 @@ svg{display:block;flex:none}
     }
   }
 
+  /**
+   * La decision d'alerte, isolee et pure : c'est la seule regle qui compte
+   * pour ne pas rater une commande, et elle doit etre verifiable sans DOM.
+   *
+   * Regles, dans cet ordre :
+   *  1. jamais presentee dans cette session (idsConnus) ;
+   *  2. creee dans la fenetre de reprise — c'est ce qui rattrape une commande
+   *     tombee pendant un rechargement, y compris au tout premier releve ;
+   *  3. encore a prendre (statut 'nouvelle'). Une commande deja acceptee ne
+   *     sonne pas, meme si la page ne l'a jamais vue.
+   *
+   * Fail-closed : si le serveur ne fournit pas 'cree' (version anterieure), on
+   * n'invente pas une alerte sur une horloge locale — on ne signale rien.
+   */
+  function commandesASignaler(toutes, idsConnus, t0, fenetre) {
+    const debut = Number(t0) - Number(fenetre);
+    return (toutes || []).filter((c) => {
+      if (idsConnus && idsConnus.has(Number(c.id))) return false;
+      if (String(c.statut) !== 'nouvelle') return false;
+      const cree = Number(c.cree);
+      if (!cree) return false;
+      return cree >= debut;
+    });
+  }
+
   async function chargerCompteurs() {
     try {
       const d = await api('caisse/commandes?statut=toutes');
@@ -645,22 +670,7 @@ svg{display:block;flex:none}
       const maintenant = Number(d.maintenant) || Math.floor(Date.now() / 1000);
       if (!etat.t0) etat.t0 = maintenant;
 
-      // Une commande "arrivante" = jamais presentee ET creee dans la fenetre
-      // que couvre cette session. C'est ce qui rattrape les commandes tombees
-      // pendant un rechargement : au tout premier releve, la baseline n'est
-      // pas encore posee, mais la fenetre, si.
-      const fenetreDebut = etat.t0 - FENETRE_DE_REPRISE;
-      const dansFenetre = (c) => {
-        const cree = Number(c.cree);
-        if (!cree) return false;                 // serveur ancien : pas de 'cree'
-        return cree >= fenetreDebut;
-      };
-      const arrivantes = toutes.filter(
-        (c) => !etat.idsConnus.has(Number(c.id)) && dansFenetre(c)
-      );
-      // On n'alerte que sur des commandes encore a prendre : une commande deja
-      // acceptee ne doit pas sonner, meme si la page ne l'a jamais vue.
-      const aSignaler = arrivantes.filter((c) => c.statut === 'nouvelle');
+      const aSignaler = commandesASignaler(toutes, etat.idsConnus, etat.t0, FENETRE_DE_REPRISE);
 
       if (aSignaler.length) {
         const fraiche = aSignaler[0];
