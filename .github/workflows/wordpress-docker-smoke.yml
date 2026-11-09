@@ -6,8 +6,11 @@ on:
     branches: [main]
   # Filet apres merge : sans ce declencheur, le tronc n'est plus couvert des
   # qu'une PR est fusionnee (une PR ne teste que ses propres changements).
+  # develop y figure parce que c'est la branche QUI DEPLOIE : la verifier
+  # seulement apres passage dans main reviendrait a tester ce qui est deja
+  # parti sur le serveur. (Les jobs Windows/NVDA restent filtres sur main.)
   push:
-    branches: [main]
+    branches: [main, develop]
   workflow_dispatch:
 
 permissions:
@@ -588,6 +591,10 @@ jobs:
   nvda-windows:
     name: NVDA réel, eSpeak intégré, sortie WAV sans pilote
     needs: wordpress-docker
+    # Le job Windows coute 15 min de runner ; il n'a de sens que pour le tronc
+    # (PR vers main et push sur main). Une poussee sur develop le saute : ce qui
+    # compte la-bas, c'est de savoir si ce qui va etre DEPLOYE tient debout.
+    if: github.ref != 'refs/heads/develop'
     env:
       NVDA_VERSION: '2026.3'
       NVDA_SHA256: a8a87cb823da0c62cfbae4a444ae5ae238d54dc82ad6d46d3fdb3fef082799b2
