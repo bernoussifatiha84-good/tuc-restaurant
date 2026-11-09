@@ -753,11 +753,16 @@ final class TUC_Import_CSV
         foreach ($plats as $reference => $ligne) {
             // Le CSV n'a pas de colonne de statut, et `construire_payload()` ne lit
             // que nom/description/prix/promo_pct/disponible : une colonne `status`
-            // injectée n'atteint donc JAMAIS le payload. C'est un fait MESURÉ, pas
-            // supposé : retirer les deux couches de défense ensemble (mutation
-            // combinée, run 42647597365) fait toujours tomber 13b. Cette ligne est
-            // de la défense en profondeur — aucune mutation ne peut la prouver
-            // seule, et c'est écrit ici pour que personne ne la croie testée.
+            // injectée n'atteint donc jamais le payload AUJOURD'HUI.
+            //
+            // Cette ligne n'est pas prouvable seule (la retirer ne change rien,
+            // run 42646286780 : vert). Elle protège la refactorisation future qui
+            // ferait passer la ligne entière dans le payload. On la mute donc en
+            // simulant ce futur, pas en la retirant dans le monde actuel :
+            //   A. refacto simulée, garde en place  → VERT  (42651380361)
+            //   B. refacto simulée, garde retirée    → ROUGE, cas 13f (42652468223)
+            // La paire est la preuve. Rejouer A et B après tout changement de
+            // construire_payload(), sinon cette garde redevient « assumed ».
             unset($ligne['status'], $ligne['post_status'], $ligne['statut']);
             $payload = self::construire_payload($ligne, $options);
             $existant = isset($existants[$reference]) ? get_post($existants[$reference]) : null;
