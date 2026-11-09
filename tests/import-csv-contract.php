@@ -533,11 +533,20 @@ try {
     foreach ($crees['restos'] as $resto) {
         wp_delete_post((int) $resto, true);
     }
-    // Termes d'abord : un terme ne peut être supprimé qu'une fois détaché de ses
-    // posts, et les posts partent juste au-dessus. wp_delete_term(0) = tout
-    // supprimer signifie « forcer », c'est ce qu'on veut : le terme est à nous.
-    foreach ($crees['termes'] as $termId) {
-        wp_delete_term((int) $termId, 'tuc_categorie');
+    // Les termes APRÈS les posts : un terme ne se détache proprement qu'une fois
+    // ses posts partis. L'import crée la catégorie du CSV si elle n'existe pas
+    // (module l.838-844) et wp_delete_post ne la supprime pas — mesuré, cas D :
+    // « termes 0→1 (+[#2:tacos]) », première fois que ce comptage existait.
+    //
+    // On ne supprime que ce qui n'existait pas avant l'inventaire : une catégorie
+    // préexistante n'est jamais à nous.
+    $termesFinaux = get_terms(['taxonomy' => 'tuc_categorie', 'hide_empty' => false, 'fields' => 'ids']);
+    $termesFinaux = is_wp_error($termesFinaux) ? [] : array_map('intval', $termesFinaux);
+    foreach ($termesFinaux as $termId) {
+        if (in_array($termId, $inventaireAvant['termes'], true)) {
+            continue;
+        }
+        wp_delete_term($termId, 'tuc_categorie');
     }
     foreach ($crees['users'] as $userId) {
         if (!function_exists('wp_delete_user')) {
