@@ -577,7 +577,12 @@ final class TUC_Espace_Pro
         return rest_ensure_response(['ok' => true, 'status' => 'draft']);
     }
 
-    private static function valider_payload(array $payload, ?WP_Post $existing): array|WP_Error
+    /**
+     * Public depuis l import CSV : un seul validateur pour la saisie manuelle
+     * et pour l import. Dupliquer cette logique aurait fait diverger les deux
+     * chemins — et c'est toujours l'import qu'on aurait oublié de corriger.
+     */
+    public static function valider_payload(array $payload, ?WP_Post $existing): array|WP_Error
     {
         $oldOptions = $existing ? get_post_meta($existing->ID, 'tuc_options', true) : [];
         $titleValue = $payload['title'] ?? ($existing ? $existing->post_title : '');
