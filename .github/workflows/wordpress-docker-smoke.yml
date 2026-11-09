@@ -69,13 +69,20 @@ jobs:
           summary="$(printf '%s\n' "$output" | grep -E 'En-tête plugin|Constante|Thème' | tr '\n' ' ' | sed 's/%/%25/g')"
           echo "::notice title=Cohérence des versions::$summary"
 
+      - name: Vérifier l'horloge serveur (vrai epoch UTC)
+        shell: bash
+        run: |
+          set -euo pipefail
+          # 'age' marchait par accident (current_time + strtotime derivent tous
+          # deux de gmt_offset). Cette garde refuse le retour de la paire
+          # accidentelle, y compris quand gmt_offset vaut 0 — c'est-a-dire
+          # toujours, sur la CI comme sur le dev.
+          python3 scripts/verif-horloge.py
+
       - name: Vérifier la décision d'alerte de la caisse (A3)
         shell: bash
         run: |
           set -euo pipefail
-          # Un harnais correct que personne n'appelle ne prouve rien :
-          # c'est exactement ce qui etait arrive a scripts/preuve-garde-dev.py.
-          # Node est deja sur le runner, aucune dependance a installer.
           node scripts/verif-a3.mjs
 
       - name: Vérifier le contrat de déploiement sans déployer
