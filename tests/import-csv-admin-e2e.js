@@ -73,16 +73,21 @@ async function parcoursImportCsv({ browser, baseUrl, adminUser, adminPassword })
   const entetePlats = plats.toString('utf8', 3).split(/\r?\n/)[0];
   assert.equal(entetePlats, 'reference;nom;description;prix;categorie;promo_pct;disponible', '1b. en-têtes exactes de plats.csv');
   assert.ok(!entetePlats.includes('image'), '1c. aucune colonne image (elle serait une promesse creuse)');
-  assert.ok(plats.toString('utf8').includes('é'), '1d. les accents sont là — Excel les ouvrira correctement');
+  // On ne cherche pas une lettre précise : le modèle dit « fromagère » (è), pas
+  // « é ». La première version de ce test cherchait « é » et rougissait pour une
+  // faute de ma part, pas du produit (run 42630093676).
+  const textePlats = plats.toString('utf8');
+  assert.match(textePlats, /[àâäéèêëîïôöùûüç]/i, '1d. les accents sont là — Excel les ouvrira correctement');
+  assert.ok(Buffer.from(textePlats, 'utf8').equals(plats), '1e. le fichier est de l’UTF-8 valide de bout en bout');
   resultats.push('modeles');
 
   const options = await telecharger('options.csv');
-  assert.ok(options.subarray(0, 3).equals(Buffer.from([0xEF, 0xBB, 0xBF])), '1e. options.csv a aussi son BOM');
-  assert.ok(options.toString('utf8').includes('supplement_prix'), '1f. en-têtes de options.csv');
+  assert.ok(options.subarray(0, 3).equals(Buffer.from([0xEF, 0xBB, 0xBF])), '1f. options.csv a aussi son BOM');
+  assert.ok(options.toString('utf8').includes('supplement_prix'), '1g. en-têtes de options.csv');
 
   const consigne = (await telecharger('consigne-ia.txt')).toString('utf8');
-  assert.ok(consigne.includes('200 caractères maximum'), '1g. la consigne porte la limite réelle (octets → caractères)');
-  assert.ok(!consigne.includes('- image :'), '1h. la consigne ne promet aucune colonne image');
+  assert.ok(consigne.includes('200 caractères maximum'), '1h. la consigne porte la limite réelle (octets → caractères)');
+  assert.ok(!consigne.includes('- image :'), '1i. la consigne ne promet aucune colonne image');
 
   // ---- 2. les catégories proposées viennent du site ----
   const listeAffichee = await admin.locator('.wrap p').filter({ hasText: 'Les catégories proposées' }).first().innerText();
