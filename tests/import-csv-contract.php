@@ -58,7 +58,7 @@ $erreurAttendue = static function ($resultat, string $code, string $message) use
     $assert($resultat->get_error_code() === $code, $message . ' — code ' . $resultat->get_error_code());
 };
 
-$crees = ['restos' => [], 'items' => [], 'users' => [], 'transients' => []];
+$crees = ['restos' => [], 'items' => [], 'users' => [], 'transients' => [], 'termes' => []];
 
 // Inventaire AVANT. Le contrôle d'après ne dit rien s'il n'a pas de point de
 // comparaison : « le même nombre qu'avant » exige de compter avant.
@@ -68,17 +68,22 @@ $inventaire = static function (): array {
             'posts_per_page' => -1, 'fields' => 'ids', 'suppress_filters' => true]));
     };
     $users = get_users(['fields' => 'ID']);
+    // Les termes : wp_delete_post ne les supprime PAS. L'import en crée (ligne
+    // categorie du CSV) et le finally du runner ne les nettoie pas non plus —
+    // aucune fuite de catégories n'était visible avant ce comptage.
+    $termes = get_terms(['taxonomy' => 'tuc_categorie', 'hide_empty' => false, 'fields' => 'ids']);
     return [
         'resto' => $ids(TUC_CPT::RESTO),
         'item'  => $ids(TUC_CPT::ITEM),
         'users' => array_map('intval', $users),
+        'termes' => array_map('intval', is_wp_error($termes) ? [] : $termes),
     ];
 };
 // Un diff, pas seulement un compte : « il en manque un » ne dit pas lequel, et
 // c'est le nom qui permet de trancher entre fuite du contrat et compteur faux.
 $diffInventaire = static function (array $avant, array $apres): string {
     $ecarts = [];
-    foreach (['resto', 'item', 'users'] as $cle) {
+    foreach (['resto', 'item', 'users', 'termes'] as $cle) {
         if (count($avant[$cle]) === count($apres[$cle])) {
             continue;
         }
@@ -89,6 +94,10 @@ $diffInventaire = static function (array $avant, array $apres): string {
                 if ($cle === 'users') {
                     $u = get_userdata($id);
                     return '#' . $id . ':' . ($u ? $u->user_login . ' [' . implode(',', $u->roles) . ']' : '?');
+                }
+                if ($cle === 'termes') {
+                    $t = get_term($id, 'tuc_categorie');
+                    return '#' . $id . ':' . (is_wp_error($t) || !$t ? '?' : $t->slug);
                 }
                 return '#' . $id . ':' . get_post_type($id) . '/' . get_post_status($id);
             }, $ids);
@@ -406,6 +415,35 @@ try {
     $assert($idDirect > 0 && get_post_status($idDirect) === 'draft',
         '13d. importer() force le brouillon par lui-même — pas seulement construire_payload()');
 
+    // ---- 13e/f/g. le CSV ne peut PAS choisir le statut ----
+    // valider_payload() (espace-pro l.607) retombe sur $existing->post_status
+    // quand `status` manque, et accepte 'publish' tel quel quand il est là. Si le
+    // forçage du payload sautait un jour, un plat publié se republierait tout
+    // seul. On injecte donc la valeur interdite par la ligne CSV elle-même.
+    $injection = ['reference' => 'inject-status', 'nom' => 'Plat injecté', 'description' => '',
+                  'prix' => '15', 'categorie' => '', 'promo_pct' => '0', 'disponible' => 'oui',
+                  'status' => 'publish', 'post_status' => 'publish', 'statut' => 'publish'];
+    $injecte = TUC_Import_CSV::importer(['inject-status' => $injection], [], $resto_id);
+    $assert(!is_wp_error($injecte), '13e. un CSV qui réclame status=publish importe quand même');
+    $idInjecte = 0;
+    foreach (get_posts(['post_type' => TUC_CPT::ITEM, 'post_status' => 'any', 'posts_per_page' => -1,
+                        'fields' => 'ids', 'suppress_filters' => true]) as $candidat) {
+        if ((string) get_post_meta((int) $candidat, 'tuc_import_ref', true) === 'inject-status') {
+            $idInjecte = (int) $candidat;
+        }
+    }
+    $crees['items'][] = $idInjecte;
+    $assert($idInjecte > 0 && get_post_status($idInjecte) === 'draft',
+        '13f. et il ressort en BROUILLON : le CSV ne choisit pas le statut');
+
+    // Le cas qui compte vraiment : un plat DÉJÀ PUBLIÉ, réimporté avec la même
+    // ligne piégée. Sans le forçage, valider_payload() relit l'ancien statut et
+    // le remet en ligne en silence.
+    wp_update_post(['ID' => $idInjecte, 'post_status' => 'publish']);
+    $rejoue = TUC_Import_CSV::importer(['inject-status' => $injection], [], $resto_id);
+    $assert(!is_wp_error($rejoue) && get_post_status($idInjecte) === 'draft',
+        '13g. un plat publié réimporté avec status=publish dans le CSV repasse en brouillon');
+
     // =====================================================================
     // 14. Un plat DÉJÀ PUBLIÉ redevient brouillon, et le dry-run le DIT
     // =====================================================================
@@ -494,6 +532,12 @@ try {
     }
     foreach ($crees['restos'] as $resto) {
         wp_delete_post((int) $resto, true);
+    }
+    // Termes d'abord : un terme ne peut être supprimé qu'une fois détaché de ses
+    // posts, et les posts partent juste au-dessus. wp_delete_term(0) = tout
+    // supprimer signifie « forcer », c'est ce qu'on veut : le terme est à nous.
+    foreach ($crees['termes'] as $termId) {
+        wp_delete_term((int) $termId, 'tuc_categorie');
     }
     foreach ($crees['users'] as $userId) {
         if (!function_exists('wp_delete_user')) {

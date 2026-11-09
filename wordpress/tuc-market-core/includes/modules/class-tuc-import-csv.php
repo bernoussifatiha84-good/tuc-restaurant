@@ -675,7 +675,12 @@ final class TUC_Import_CSV
             'price'       => is_wp_error($prix) ? 0 : $prix,
             'promo_pct'   => $promo === '' ? 0 : (int) $promo,
             'available'   => !in_array($dispo, ['non', '0', 'false'], true),
-            // Forcé, jamais lu du CSV : un prix non relu ne doit pas être public.
+            // LE point de garde du statut. Forcé, jamais lu du CSV : un prix non
+            // relu ne doit pas être public. Les deux écritures ci-dessous lisent
+            // cette valeur et n'en inventent pas une seconde — un garde dupliqué
+            // n'est tenu que par le test qui vise celui qui écrit.
+            // valider_payload() laisse passer 'publish' si le payload le porte :
+            // c'est ici, et seulement ici, qu'on décide.
             'status'      => 'draft',
             'options'     => self::construire_options((string) ($ligne['reference'] ?? ''), $lignesOptions),
         ];
@@ -746,6 +751,10 @@ final class TUC_Import_CSV
         $existants = self::indexer_existants($resto_id);
 
         foreach ($plats as $reference => $ligne) {
+            // Le CSV n'a pas de colonne de statut, mais un fichier bricolé peut en
+            // porter une. On la retire AVANT tout : c'est la garde anti-injection
+            // demandée en revue (valider_payload() accepte 'publish' tel quel).
+            unset($ligne['status'], $ligne['post_status'], $ligne['statut']);
             $payload = self::construire_payload($ligne, $options);
             $existant = isset($existants[$reference]) ? get_post($existants[$reference]) : null;
             if ($existant instanceof WP_Post && $existant->post_type !== TUC_CPT::ITEM) {
@@ -788,7 +797,7 @@ final class TUC_Import_CSV
                     'ID'           => $existant->ID,
                     'post_title'   => $champs['title'],
                     'post_content' => $champs['description'],
-                    'post_status'  => 'draft', // forcé, jamais celui du CSV ni l'ancien
+                    'post_status'  => $champs['status'], // forcé en amont (payload)
                 ], true);
                 if (is_wp_error($resultat)) {
                     self::compenser($journal);
@@ -801,7 +810,7 @@ final class TUC_Import_CSV
                     'post_type'    => TUC_CPT::ITEM,
                     'post_title'   => $champs['title'],
                     'post_content' => $champs['description'],
-                    'post_status'  => 'draft',
+                    'post_status'  => $champs['status'],
                 ], true);
                 if (is_wp_error($resultat) || (int) $resultat <= 0) {
                     self::compenser($journal);
