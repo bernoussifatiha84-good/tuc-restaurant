@@ -1,68 +1,131 @@
 <?php
 /**
- * Données de démonstration — site provisoire.
+ * Lecture du catalogue depuis la base WordPress.
  *
- * ⚠️ Ce fichier est TEMPORAIRE. En production, les restaurants viennent de la
- * base WordPress (custom post type `tuc_resto`) remplie par l'OCR des menus.
- * La structure des champs est identique : c'est ce qui permet de basculer
- * sans toucher aux templates.
+ * Auparavant ce fichier contenait 25 restaurants codés en dur. Ils n'avaient
+ * aucun article WordPress derrière eux, donc aucune URL : les cartes n'étaient
+ * pas cliquables et aucune boutique n'était consultable. Le catalogue vit
+ * désormais dans le custom post type `tuc_resto`.
+ *
+ * Le contenu de démonstration est créé par `tools/seed-demo.php` sous forme de
+ * VRAIS articles marqués `tuc_demo = 1`. Ils ont donc un permalien, une fiche
+ * restaurant et un menu, et ils portent un badge « Démo » à l'affichage. Aucun
+ * faux restaurant n'est plus présenté comme réel, et rien n'est codé en dur ici.
+ *
+ * La forme du tableau renvoyé est inchangée par rapport à l'ancienne version
+ * (n, cu, k, r, t, fee, img) pour ne pas casser les gabarits ; s'y ajoutent
+ * `id`, `url`, `demo`, `thumb` et `livraison`.
  */
 
 defined('ABSPATH') || exit;
 
+/**
+ * Catalogue des restaurants publiés.
+ *
+ * @return array<int,array<string,mixed>>
+ */
 function tuc_restos(): array
 {
     static $cache = null;
-    if ($cache !== null) return $cache;
+    if ($cache !== null) {
+        return $cache;
+    }
 
-    $cache = [
-        // ---------------------------------------------------- restaurants
-        ['n' => 'Restaurant Alhayba', 'cu' => 'Marocain · Libanais', 'k' => 'restaurant', 'r' => 4.9, 't' => '20–35', 'd' => 2.1, 'fee' => null, 'img' => 'tagine'],
-        ['n' => 'Bouchaib Grillades', 'cu' => 'Grillades · Brochettes', 'k' => 'restaurant', 'r' => 4.9, 't' => '20–30', 'd' => 1.4, 'fee' => 12, 'img' => 'grillades'],
-        ['n' => 'Dar Zitoun', 'cu' => 'Marocain · Couscous', 'k' => 'restaurant', 'r' => 4.8, 't' => '25–40', 'd' => 3.2, 'fee' => null, 'img' => 'p-couscous'],
-        ['n' => 'La Sqala', 'cu' => 'Marocain · Poisson', 'k' => 'restaurant', 'r' => 4.8, 't' => '25–40', 'd' => 4.0, 'fee' => 20, 'img' => 'p-friture'],
-        ['n' => 'Océan Marina', 'cu' => 'Poisson frais · Friture', 'k' => 'restaurant', 'r' => 4.7, 't' => '20–35', 'd' => 2.8, 'fee' => 18, 'img' => 'fish'],
-        ['n' => 'Sushi Club Anfa', 'cu' => 'Japonais · Sushi', 'k' => 'restaurant', 'r' => 4.7, 't' => '30–45', 'd' => 3.6, 'fee' => 25, 'img' => 'sushi'],
-        // ---------------------------------------------------- mahlabas
-        ['n' => 'Mahlaba Al Baraka', 'cu' => 'Jben · Raib · Lait cru', 'k' => 'mahlaba', 'r' => 4.9, 't' => '10–20', 'd' => 0.8, 'fee' => null, 'img' => 'p-jben'],
-        ['n' => 'Mahlaba Sidi Maârouf', 'cu' => 'Fromage frais · Beurre', 'k' => 'mahlaba', 'r' => 4.8, 't' => '15–25', 'd' => 2.4, 'fee' => 10, 'img' => 'p-raib'],
-        ['n' => 'Mahlaba Lalla Zahra', 'cu' => 'Raib · Amlou · Miel', 'k' => 'mahlaba', 'r' => 4.8, 't' => '10–20', 'd' => 1.1, 'fee' => null, 'img' => 'p-amlou'],
-        ['n' => 'Mahlaba Al Amal', 'cu' => 'Jben · Msemen · Briouat', 'k' => 'mahlaba', 'r' => 4.7, 't' => '10–20', 'd' => 2.0, 'fee' => null, 'img' => 'p-briouat'],
-        ['n' => 'Laiterie Chaabi', 'cu' => 'Lait · Œufs · Yaourt', 'k' => 'mahlaba', 'r' => 4.7, 't' => '15–25', 'd' => 1.6, 'fee' => 10, 'img' => 'p-raib'],
-        // ---------------------------------------------------- snacks
-        ['n' => "O'Tacos Maârif", 'cu' => 'Tacos · Fast food', 'k' => 'snack', 'r' => 4.8, 't' => '15–25', 'd' => 1.2, 'fee' => null, 'img' => 'tacos'],
-        ['n' => 'Snack Benna', 'cu' => 'Tacos · Burger', 'k' => 'snack', 'r' => 4.8, 't' => '15–25', 'd' => 1.8, 'fee' => null, 'img' => 'sandwich'],
-        ['n' => 'Snack Rialto', 'cu' => 'Sandwichs · Panini', 'k' => 'snack', 'r' => 4.7, 't' => '10–20', 'd' => 0.6, 'fee' => 8, 'img' => 'sandwich'],
-        ['n' => 'Cucina Napoli', 'cu' => 'Pizza napolitaine', 'k' => 'snack', 'r' => 4.7, 't' => '20–35', 'd' => 2.6, 'fee' => 15, 'img' => 'pizza'],
-        ['n' => 'Ctr Chicken', 'cu' => 'Poulet frit', 'k' => 'snack', 'r' => 4.7, 't' => '15–30', 'd' => 2.2, 'fee' => 12, 'img' => 'chicken'],
-        ['n' => 'Burger King', 'cu' => 'Burgers', 'k' => 'snack', 'r' => 4.6, 't' => '15–25', 'd' => 2.0, 'fee' => 15, 'img' => 'burger'],
-        // ---------------------------------------------------- cafés
-        ['n' => 'Café Al Boustane', 'cu' => 'Café · Thé · Petit-déj', 'k' => 'cafe', 'r' => 4.8, 't' => '10–20', 'd' => 0.9, 'fee' => null, 'img' => 'p-the'],
-        ['n' => 'Café Riche', 'cu' => 'Café · Snacks', 'k' => 'cafe', 'r' => 4.7, 't' => '10–20', 'd' => 1.3, 'fee' => 8, 'img' => 'p-nousnous'],
-        ['n' => 'Café Al Manar', 'cu' => 'Thé à la menthe · Ghriba', 'k' => 'cafe', 'r' => 4.7, 't' => '10–25', 'd' => 2.1, 'fee' => null, 'img' => 'p-the'],
-        ['n' => 'Café Atlas', 'cu' => 'Café · Jus pressés', 'k' => 'cafe', 'r' => 4.6, 't' => '10–20', 'd' => 1.7, 'fee' => 8, 'img' => 'p-nousnous'],
-        // ---------------------------------------------------- coffee shops
-        ['n' => 'Patti & Co', 'cu' => 'Pâtisserie · Café', 'k' => 'coffee', 'r' => 4.9, 't' => '20–35', 'd' => 2.4, 'fee' => null, 'img' => 'p-croissant'],
-        ['n' => 'Bloom Coffee', 'cu' => 'Specialty · Brunch', 'k' => 'coffee', 'r' => 4.8, 't' => '20–35', 'd' => 3.0, 'fee' => 15, 'img' => 'p-latte'],
-        ['n' => 'Blacksmith Coffee', 'cu' => 'Torréfaction locale', 'k' => 'coffee', 'r' => 4.8, 't' => '15–30', 'd' => 2.2, 'fee' => 12, 'img' => 'p-latte'],
-        ['n' => "L'Atelier Café", 'cu' => 'Brunch · Matcha', 'k' => 'coffee', 'r' => 4.7, 't' => '20–35', 'd' => 3.4, 'fee' => 15, 'img' => 'p-croissant'],
-    ];
+    $articles = get_posts([
+        'post_type'        => 'tuc_resto',
+        'post_status'      => 'publish',
+        'posts_per_page'   => 200,
+        'no_found_rows'    => true,
+        'orderby'          => 'title',
+        'order'            => 'ASC',
+        'suppress_filters' => false,
+    ]);
+
+    $cache = [];
+    foreach ($articles as $article) {
+        $id       = (int) $article->ID;
+        $tmin     = (int) get_post_meta($id, 'tuc_temps_min', true);
+        $tmax     = (int) get_post_meta($id, 'tuc_temps_max', true);
+        $frais    = (int) get_post_meta($id, 'tuc_frais', true);
+        $modes    = (array) get_post_meta($id, 'tuc_modes', true);
+        $livre    = in_array('livraison', $modes, true);
+        $kind     = (string) get_post_meta($id, 'tuc_kind', true);
+        $image    = (string) get_post_meta($id, 'tuc_img', true);
+
+        $cache[] = [
+            'id'        => $id,
+            'url'       => (string) get_permalink($article),
+            'demo'      => get_post_meta($id, 'tuc_demo', true) === '1',
+            'n'         => (string) $article->post_title,
+            'cu'        => (string) get_post_meta($id, 'tuc_cuisine', true),
+            'k'         => $kind !== '' ? $kind : 'restaurant',
+            'r'         => (float) get_post_meta($id, 'tuc_note', true),
+            't'         => $tmin . '–' . max($tmax, $tmin),
+            // null = livraison offerte. Un commerce qui ne livre pas ne doit pas
+            // remonter dans « Livraison offerte » : drapeau séparé.
+            'fee'       => $frais > 0 ? $frais : null,
+            'livraison' => $livre,
+            'img'       => $image !== '' ? $image : 'hero-banner',
+            'thumb'     => has_post_thumbnail($id)
+                ? (string) get_the_post_thumbnail($id, 'tuc-card', ['loading' => 'lazy', 'alt' => ''])
+                : '',
+        ];
+    }
 
     return $cache;
 }
 
+/**
+ * Promotions réelles : articles publiés avec un pourcentage de remise, rattachés
+ * à un restaurant publié. Chaque promotion pointe vers la boutique.
+ *
+ * @return array<int,array<string,mixed>>
+ */
 function tuc_promos(): array
 {
-    return [
-        ['big' => '−44 %', 'nm' => '2 tacos + 2 boissons + 2 frites', 'shop' => "O'Tacos Maârif", 'r' => 4.8, 't' => '15–25 min', 'img' => 'tacos'],
-        ['big' => '−50 %', 'nm' => 'Benna Épicé, 2e à moitié prix', 'shop' => 'Snack Benna', 'r' => 4.8, 't' => '15–25 min', 'img' => 'sandwich'],
-        ['big' => '−25 %', 'nm' => '6 en 1 Box, 2 sauces offertes', 'shop' => 'Ctr Chicken', 'r' => 4.7, 't' => '15–30 min', 'img' => 'chicken'],
-        ['big' => '−15 %', 'nm' => 'Toute la carte pizza', 'shop' => 'Cucina Napoli', 'r' => 4.7, 't' => '20–35 min', 'img' => 'pizza'],
-        ['big' => '1+1', 'nm' => 'Whopper acheté = Whopper offert', 'shop' => 'Burger King', 'r' => 4.6, 't' => '15–25 min', 'img' => 'burger'],
-        ['big' => '−30 %', 'nm' => '1 kg de jben frais du jour', 'shop' => 'Mahlaba Al Baraka', 'r' => 4.9, 't' => '10–20 min', 'img' => 'p-jben'],
-        ['big' => '1+1', 'nm' => 'Brochettes de kefta', 'shop' => 'Bouchaib Grillades', 'r' => 4.9, 't' => '20–30 min', 'img' => 'grillades'],
-        ['big' => '−20 %', 'nm' => 'Sur tous les cakes et tartes', 'shop' => 'Patti & Co', 'r' => 4.9, 't' => '20–35 min', 'img' => 'p-croissant'],
-    ];
+    static $cache = null;
+    if ($cache !== null) {
+        return $cache;
+    }
+
+    $articles = get_posts([
+        'post_type'      => 'tuc_menu_item',
+        'post_status'    => 'publish',
+        'posts_per_page' => 24,
+        'no_found_rows'  => true,
+        'meta_query'     => [
+            ['key' => 'tuc_promo_pct', 'value' => 0, 'compare' => '>', 'type' => 'NUMERIC'],
+            ['key' => 'tuc_dispo', 'value' => '0', 'compare' => '!='],
+        ],
+    ]);
+
+    $cache = [];
+    foreach ($articles as $article) {
+        $resto_id = (int) get_post_meta($article->ID, 'tuc_resto_id', true);
+        $resto    = $resto_id > 0 ? get_post($resto_id) : null;
+        if (!$resto instanceof WP_Post || $resto->post_status !== 'publish') {
+            continue;
+        }
+        $pct  = (int) get_post_meta($article->ID, 'tuc_promo_pct', true);
+        $tmin = (int) get_post_meta($resto_id, 'tuc_temps_min', true);
+        $tmax = (int) get_post_meta($resto_id, 'tuc_temps_max', true);
+
+        $cache[] = [
+            'big'  => '−' . $pct . ' %',
+            'nm'   => (string) $article->post_title,
+            'shop' => (string) $resto->post_title,
+            'r'    => (float) get_post_meta($resto_id, 'tuc_note', true),
+            't'    => $tmin . '–' . max($tmax, $tmin) . ' min',
+            'url'  => (string) get_permalink($resto),
+            'demo' => get_post_meta($resto_id, 'tuc_demo', true) === '1',
+            'img'  => (string) get_post_meta($resto_id, 'tuc_img', true) ?: 'hero-banner',
+            'thumb'=> has_post_thumbnail($article->ID)
+                ? (string) get_the_post_thumbnail($article->ID, 'tuc-card', ['loading' => 'lazy', 'alt' => ''])
+                : '',
+        ];
+    }
+
+    return $cache;
 }
 
 /** Les sections de la page d'accueil, dans l'ordre. */
@@ -77,7 +140,6 @@ function tuc_sections(): array
         ['id' => 'coffee', 'fr' => 'Coffee shops les mieux notés', 'ar' => 'الكافي شوب الأعلى تقييماً', 'type' => 'k', 'k' => 'coffee'],
         ['id' => 'free',   'fr' => 'Livraison offerte', 'ar' => 'التوصيل مجاني', 'type' => 'free'],
         ['id' => 'fast',   'fr' => 'Les plus rapides', 'ar' => 'الأسرع', 'type' => 'fast'],
-        ['id' => 'near',   'fr' => 'À moins de 2 km', 'ar' => 'أقل من 2 كم', 'type' => 'near'],
     ];
 }
 
@@ -90,16 +152,16 @@ function tuc_pick(array $all, array $sec): array
             usort($out, fn($a, $b) => $b['r'] <=> $a['r']);
             return $out;
         case 'free':
-            $out = array_values(array_filter($all, fn($x) => $x['fee'] === null));
+            // Ne livrer pas du tout n'est pas « livraison offerte ».
+            $out = array_values(array_filter(
+                $all,
+                fn($x) => ($x['livraison'] ?? false) && $x['fee'] === null
+            ));
             usort($out, fn($a, $b) => $b['r'] <=> $a['r']);
             return array_slice($out, 0, 8);
         case 'fast':
             $out = $all;
-            usort($out, fn($a, $b) => (int)$a['t'] <=> (int)$b['t']);
-            return array_slice($out, 0, 8);
-        case 'near':
-            $out = array_values(array_filter($all, fn($x) => $x['d'] <= 2));
-            usort($out, fn($a, $b) => $a['d'] <=> $b['d']);
+            usort($out, fn($a, $b) => (int) $a['t'] <=> (int) $b['t']);
             return array_slice($out, 0, 8);
         default:
             return array_slice($all, 0, 8);

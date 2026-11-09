@@ -1,63 +1,26 @@
-# Pousser le repo depuis ton Mac
+# Publier les changements
 
-L'environnement d'Arena a été réinitialisé : **je n'ai plus accès à ton GitHub**
-(pas de `gh`, pas de token, pas de remote). Voici la commande exacte.
+Ce dépôt est géré par Git. Ne pas recréer le remote, renommer la branche par défaut ou forcer une mise à jour de `main` pour publier des changements.
 
-## 1. Récupérer les fichiers
+## Publier une branche de travail
 
-Télécharge le dossier `tuc-restaurant/` depuis l'espace de travail, puis :
-
-```bash
-cd tuc-restaurant
-git remote add origin git@github.com:bernoussifatiha84-good/tuc-restaurant.git
-git branch -M main
-git push -u origin main --force
-```
-
-> `--force` écrase le commit initial vide. Il n'y a rien à perdre : le repo ne contient qu'un README d'une ligne.
-
-## 2. Créer les environnements GitHub
-
-`Settings → Environments` → **New environment** → crée `dev` puis `prd`.
-
-Dans chacun, ajoute les 6 secrets :
-
-| Secret | Valeur |
-|---|---|
-| `SSH_HOST` | ton hôte SSH Hostinger |
-| `SSH_USER` | ton identifiant hPanel (`u…`) |
-| `SSH_PORT` | `65002` |
-| `SSH_PRIVATE_KEY` | la clé privée ed25519 complète |
-| `WP_ROOT` | `domains/tuc.ma/public_html` |
-| `SITE_URL` | `https://dev.tuc.ma` |
-
-## 3. Autoriser la clé sur Hostinger
-
-`hPanel → Avancé → Accès SSH → Gérer les clés SSH` → colle le contenu de la clé **publique**.
-
-## 4. Tester
+Vérifier d’abord la branche courante et l’état des fichiers, puis pousser cette branche sans réécrire l’historique :
 
 ```bash
-git checkout -b develop
-git commit --allow-empty -m "test: premier déploiement"
-git push origin develop
+git status --short --branch
+git push -u origin <branche-de-travail>
 ```
 
-`Actions` doit afficher : PHP OK → CSS OK → JS OK → rsync → `/sante` vert.
+Ne pas renommer la branche par défaut et ne pas utiliser `git push --force` pour publier ces changements. L’intégration dans `develop` et la création de tags de release se font séparément, selon le processus du propriétaire du projet.
 
-## 5. Installer le thème
+## Déclencheurs de déploiement
 
-Si le `WP_ROOT` est bon, le thème arrive tout seul dans `wp-content/themes/tuc-theme`.
-Il reste **à l'activer une fois** :
+- `develop` déclenche l’environnement `dev`.
+- Un tag `pre-release-x.y.z` déclenche `uat`.
+- Un tag `release-x.y.z` déclenche `prd`, sous réserve des protections et approbations GitHub.
 
-`Apparence → Thèmes → TUC Market → Activer`
+Les tags `pre-release-*` et `release-*` ne sont pas des branches. Avant une release, vérifier les tests, les variables GitHub Actions et la sauvegarde de la cible.
 
----
+## Secrets
 
-## En cas d'échec
-
-| Message | Cause |
-|---|---|
-| `Permission denied (publickey)` | clé publique non autorisée sur hPanel |
-| `rsync: change_dir failed` | `WP_ROOT` faux (vérifie avec `pwd` en SSH) |
-| `/sante ne répond pas` | le thème n'est pas activé, donc la route REST n'existe pas |
+Ne jamais télécharger ou copier les secrets de la passation dans les fichiers suivis par Git. Les clés privées, jetons, mots de passe et secrets applicatifs restent dans un gestionnaire de secrets ou dans les secrets GitHub Actions. Ne pas les imprimer dans le terminal, les journaux ou les commits.
