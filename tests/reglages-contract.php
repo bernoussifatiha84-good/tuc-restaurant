@@ -220,9 +220,13 @@ function tuc_reglages_contrat(?callable $assertExterne = null): int
             TUC_Reglages::apercu_lien('212600000099') === 'https://wa.me/212600000099',
             '8. l’aperçu affiché est exactement le lien que produit le site'
         );
+        // 8b ne mordait pas (mutation R3, run 42703427463 : VERT). La raison est
+        // instructive : sur une entrée déjà numérique, ne rien nettoyer et tout
+        // nettoyer donnent le MÊME résultat. Il faut une entrée qui porte des
+        // caractères à retirer, sinon le cas ne prouve rien.
         $compter(
-            TUC_Reglages::apercu_lien('00212600000099') === 'https://wa.me/00212600000099',
-            '8b. et il montre la casse d’une valeur non normalisée, au lieu de la masquer'
+            TUC_Reglages::apercu_lien('+212 600-000000') === 'https://wa.me/212600000000',
+            '8b. l’aperçu retire aussi les +, espaces et tirets — pas seulement sur une entrée déjà propre'
         );
 
         return (int) $casExecutees;
