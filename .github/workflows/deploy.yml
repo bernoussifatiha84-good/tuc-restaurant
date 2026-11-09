@@ -206,6 +206,15 @@ jobs:
               fi
               ;;
           esac
+          # GEL : `develop` est la branche qui DEPLOIE. Chaque commit pousse fait
+          # partir un rsync --delete vers le dev. Pendant un pilote, une poussee
+          # anodine peut donc changer le site sous les pieds du restaurateur.
+          # Pour deployer pendant le gel, on passe par workflow_dispatch, qui
+          # laisse une trace de qui a gele et pourquoi.
+          if [ "$GITHUB_REF_NAME" = "develop" ] && [ "$GITHUB_EVENT_NAME" = "push" ] && [ -f .deploy-gel ]; then
+            echo "::error title=Deploiement gele::$(cat .deploy-gel)"
+            exit 1
+          fi
           printf 'theme=%s\nplugin=%s\n' "$THEME_VERSION" "$PLUGIN_VERSION" >> "$GITHUB_OUTPUT"
           echo "Thème $THEME_VERSION · plugin $PLUGIN_VERSION (en-tête et constante alignés)"
 
