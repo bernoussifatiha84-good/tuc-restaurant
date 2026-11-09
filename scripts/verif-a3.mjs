@@ -3,9 +3,8 @@
  * Preuve executable de A3 : la decision d'alerte de la caisse.
  *
  * On n'imite pas le DOM. On extrait la fonction PURE `commandesASignaler` du
- * vrai fichier `includes/vues/caisse.php`, puis on la confronte aux cas qui ont
- * produit le defaut. Si la fonction disparait ou change de signature, la preuve
- * casse — c'est voulu.
+ * vrai fichier `includes/vues/caisse.php`, puis on la confronte aux cas reels.
+ * Si la fonction disparait ou change de signature, la preuve casse — c'est voulu.
  *
  * Aucun acces reseau, aucun navigateur.
  */
@@ -16,78 +15,94 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
-
 const VUE = path.join(__dirname, '..', 'wordpress', 'tuc-market-core', 'includes', 'vues', 'caisse.php');
 
-function extraireFonction() {
+function blocSource() {
   const html = fs.readFileSync(VUE, 'utf8');
   const debut = html.indexOf('function commandesASignaler');
   if (debut === -1) throw new Error('commandesASignaler introuvable dans la vue caisse');
-  // on prend jusqu'a la fermeture de la fonction (accolade equilibree)
+
+  // la marge est declaree juste avant : on la remonte avec la fonction
+  const marque = html.lastIndexOf('const MARGE_DE_REPRISE', debut);
+  const debutBloc = marque === -1 ? debut : marque;
+
   let i = html.indexOf('{', debut);
   let profondeur = 0;
   for (let j = i; j < html.length; j++) {
     if (html[j] === '{') profondeur++;
     else if (html[j] === '}') {
       profondeur--;
-      if (profondeur === 0) return html.slice(html.indexOf('function commandesASignaler'), j + 1);
+      if (profondeur === 0) return html.slice(debutBloc, j + 1);
     }
   }
   throw new Error('accolade de fermeture introuvable');
 }
 
-const source = extraireFonction();
+const source = blocSource();
 // eslint-disable-next-line no-new-func
-const commandesASignaler = new Function(source + '\nreturn commandesASignaler;')();
+const charge = new Function(source + '\nreturn commandesASignaler;');
+const commandesASignaler = charge();
 
-const T0 = 1_762_730_000; // instant serveur du premier releve
-const FENETRE = 120;
+if (typeof commandesASignaler !== 'function') {
+  console.error('FAIL commandesASignaler non extraite');
+  process.exit(1);
+}
 
+const T0 = 1_762_730_000; // peu importe : A3 ne compare plus d'horloge
 let echecs = 0;
-function cas(label, commandes, ids, attendu) {
-  const obtenu = commandesASignaler(commandes, new Set(ids), T0, FENETRE).map((c) => c.id);
+function cas(label, commandes, vues, attendu) {
+  const obtenu = commandesASignaler(commandes, new Set(vues)).map((c) => c.id);
   const ok = JSON.stringify(obtenu) === JSON.stringify(attendu);
   console.log((ok ? 'PASS ' : 'FAIL ') + label + ' : [' + obtenu.join(',') + ']' +
     (ok ? '' : ` (attendu [${attendu.join(',')}])`));
   if (!ok) echecs++;
 }
 
-// ---- le defaut d'origine ----
-// Une commande tombee pendant le rechargement, 30 s avant le premier releve.
-// Avant A3 : baseline=false => aucune alerte, identifiant absorbe. Jamais sonnee.
-cas('LE DEFAUT : commande recente au tout premier releve',
-  [{ id: 1, statut: 'nouvelle', cree: T0 - 30 }], [], [1]);
+// ---- le defaut d'origine : 1er relevé, commande recente, jamais sonnee ----
+cas('LE DEFAUT : commande recente au tout premier relevé',
+  [{ id: 1, statut: 'nouvelle', cree: T0 - 5 }], [], [1]);
 
-// Une commande de la fenetre et une de la journee : seule la recente sonne.
-cas('l\'existant ne sonne pas, la recente oui',
-  [{ id: 1, statut: 'nouvelle', cree: T0 - 3600 },
-   { id: 2, statut: 'nouvelle', cree: T0 - 10 }], [], [2]);
+// ---- LE POINT SIGNALE PAR LA REVUE : aucun trou residuel ----
+// Une commande encore "nouvelle" 3 h apres : personne ne l'a prise.
+// Avec une fenetre de 120 s elle ne sonnait plus jamais. Ici, elle sonne.
+cas('commande non prise depuis 3 h : elle sonne encore',
+  [{ id: 40, statut: 'nouvelle', cree: T0 - 3 * 3600 }], [], [40]);
 
-// Deja presentee : plus de son, meme recente (deduplication intra-session).
-cas('deja presentee ne resonne pas',
-  [{ id: 3, statut: 'nouvelle', cree: T0 - 5 }], [3], []);
+// et une commande d'hier, non prise : elle sonne aussi. Le temps n'est pas
+// l'acquittement — le statut l'est.
+cas('commande non prise depuis hier : elle sonne',
+  [{ id: 42, statut: 'nouvelle', cree: T0 - 86400 }], [], [42]);
 
-// Deja acceptee : pas de son, meme jamais vue par cette page.
-cas('deja acceptee ne sonne pas',
-  [{ id: 4, statut: 'acceptee', cree: T0 - 5 }], [], []);
+// ---- l'acquittement reel coupe le son ----
+cas('deja acceptee : plus de son, meme tres recente',
+  [{ id: 41, statut: 'acceptee', cree: T0 - 3 }], [], []);
+cas('deja prete : plus de son',
+  [{ id: 43, statut: 'prete', cree: T0 - 3 }], [], []);
 
-// Limite exacte de la fenetre.
-cas('exactement a la limite de la fenetre',
-  [{ id: 5, statut: 'nouvelle', cree: T0 - FENETRE }], [], [5]);
-cas('une seconde hors fenetre',
-  [{ id: 6, statut: 'nouvelle', cree: T0 - FENETRE - 1 }], [], []);
+// ---- deduplication par appareil (sessionStorage) ----
+cas('deja signalee sur cet appareil : ne resonne pas',
+  [{ id: 3, statut: 'nouvelle', cree: T0 - 5 }], ['3'], []);
 
-// Plusieurs commandes en attente : toutes signalees, dans l'ordre du serveur.
-cas('trois commandes recentes',
+// un AUTRE appareil de caisse n'a rien vu : il doit sonner. C'est le
+// comportement voulu (patron + caisse), pas un doublon.
+cas('autre appareil : il sonne sur la meme commande',
+  [{ id: 3, statut: 'nouvelle', cree: T0 - 5 }], [], [3]);
+
+// ---- plusieurs commandes ----
+cas('trois commandes en attente',
   [{ id: 7, statut: 'nouvelle', cree: T0 - 3 },
    { id: 8, statut: 'nouvelle', cree: T0 - 2 },
    { id: 9, statut: 'nouvelle', cree: T0 - 1 }], [], [7, 8, 9]);
 
-// Fail-closed : serveur qui n'expose pas 'cree' (deploiement mixte).
-cas('sans champ cree : rien ne sonne (fail-closed)',
-  [{ id: 10, statut: 'nouvelle' }], [], []);
+cas('melange : seules les non prises sont signalees',
+  [{ id: 50, statut: 'nouvelle', cree: T0 - 900 },
+   { id: 51, statut: 'acceptee', cree: T0 - 800 },
+   { id: 52, statut: 'nouvelle', cree: T0 - 700 }], [], [50, 52]);
 
-// Liste vide / nulle : pas d'exception.
+// les identifiants sont compares en chaine (sessionStorage serialise en JSON)
+cas('identifiant numerique vs chaine : deduplication quand meme',
+  [{ id: 60, statut: 'nouvelle' }], ['60'], []);
+
 cas('liste vide', [], [], []);
 cas('liste nulle', null, [], []);
 

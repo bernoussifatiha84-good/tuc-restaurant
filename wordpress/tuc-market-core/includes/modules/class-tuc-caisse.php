@@ -424,12 +424,15 @@ final class TUC_Caisse
             ),
         ]);
 
-        $maintenant = (int) current_time('timestamp');
-
-        // 'cree' n'est pas un doublon de 'age' : la page a besoin d'un instant
-        // ABSOLU pour decider si une commande appartient a la fenetre qu'elle
-        // n'a pas vue. Un age relatif recalcule a chaque reponse ne le permet
-        // pas (il derive avec l'heure du navigateur et l'aller-retour reseau).
+        // Deux conventions d'horloge cohabitent dans WordPress et les melanger
+        // produit des ecarts d'un fuseau entier :
+        //   time()                    -> vrai epoch UTC
+        //   current_time('timestamp') -> epoch decale de gmt_offset
+        //   strtotime($post->post_date) -> heure locale lue comme UTC
+        // 'age' marchait par ACCIDENT : les deux decalages s'annulaient. On ne
+        // garde pas un accident. Ici tout est en vrai epoch UTC, donc independant
+        // du fuseau du site et insensible a un gmt_offset mal configure.
+        $maintenant = time();
         $sortie = [];
 
         foreach ($posts as $p) {
@@ -458,9 +461,11 @@ final class TUC_Caisse
                 'frais'     => (float) get_post_meta($p->ID, 'tuc_frais', true),
                 'total'     => (float) get_post_meta($p->ID, 'tuc_total', true),
                 'statut'    => (string) get_post_meta($p->ID, 'tuc_statut', true),
-                'heure'     => get_the_date('H:i', $p),
-                'cree'      => (int) strtotime($p->post_date),
-                'age'       => max(0, $maintenant - strtotime($p->post_date)),
+                'heure'     => get_the_date('H:i', $p), // heure locale du site, pour l'affichage
+                // get_post_time('U', true) = vrai epoch UTC, quelle que soit
+                // la valeur de gmt_offset. strtotime($p->post_date) ne l'est pas.
+                'cree'      => (int) get_post_time('U', true, $p),
+                'age'       => max(0, $maintenant - (int) get_post_time('U', true, $p)),
             ];
         }
 
