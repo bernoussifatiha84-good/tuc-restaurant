@@ -54,6 +54,34 @@ async function parcoursImportCsv({ browser, baseUrl, adminUser, adminPassword })
 
   try {
 
+  // Après chaque aller-retour, WordPress recharge la page : les <input type=file>
+  // repartent VIDES (seul le select est restauré par `selected()`). Il faut donc
+  // reposer les deux fichiers avant CHAQUE soumission — les oublier fait bloquer
+  // le formulaire par `required`, sans aucune requête, et le waitForResponse
+  // expire au lieu de dire pourquoi (run 42630764235, ligne 118).
+  const preparer = async ({ plats, options, resto = 'Resto import contrat' }) => {
+    await admin.locator('#csv_plats').setInputFiles({ name: 'plats.csv', mimeType: 'text/csv', buffer: Buffer.from(plats) });
+    await admin.locator('#csv_options').setInputFiles({ name: 'options.csv', mimeType: 'text/csv', buffer: Buffer.from(options) });
+    await admin.locator('#restaurant_id').selectOption({ label: resto });
+    assert.notEqual(await admin.locator('#restaurant_id').inputValue(), '', `restaurant cible « ${resto} » présent dans la liste`);
+  };
+  const verifier = async () => {
+    const [reponse] = await Promise.all([
+      admin.waitForResponse((r) => r.url().includes('admin-post.php') && r.request().method() === 'POST'),
+      admin.getByRole('button', { name: 'Vérifier (aucune écriture)' }).click(),
+    ]);
+    await admin.waitForLoadState('domcontentloaded');
+    return reponse;
+  };
+  const importer = async () => {
+    const [reponse] = await Promise.all([
+      admin.waitForResponse((r) => r.url().includes('admin-post.php') && r.request().method() === 'POST'),
+      admin.getByRole('button', { name: 'Importer', exact: true }).click(),
+    ]);
+    await admin.waitForLoadState('domcontentloaded');
+    return reponse;
+  };
+
   // ---- 1. les trois modèles ----
   await admin.goto(`${baseUrl}${ADMIN_PATH}`, { waitUntil: 'domcontentloaded' });
   await admin.locator('h1').filter({ hasText: 'Importer un menu par CSV' }).waitFor({ state: 'visible' });
@@ -95,66 +123,42 @@ async function parcoursImportCsv({ browser, baseUrl, adminUser, adminPassword })
   assert.ok(listeAffichee.trim().length > 40, '2b. la liste est affichée, pas résumée');
   resultats.push('categories');
 
-  // ---- 4. un CSV fauté est refusé, et rien n'est écrit ----
-  await admin.locator('#csv_plats').setInputFiles({ name: 'plats.csv', mimeType: 'text/csv', buffer: Buffer.from(PLAFOND_CSV) });
-  await admin.locator('#csv_options').setInputFiles({ name: 'options.csv', mimeType: 'text/csv', buffer: Buffer.from(OPTIONS_FAUTEUSES) });
-  await admin.locator('#restaurant_id').selectOption({ label: 'Resto import contrat' });
-  const [verification] = await Promise.all([
-    admin.waitForResponse((r) => r.url().includes('admin-post.php') && r.request().method() === 'POST'),
-    admin.getByRole('button', { name: 'Vérifier (aucune écriture)' }).click(),
-  ]);
-  assert.equal(verification.status(), 302, '4a. la vérification passe par admin-post.php');
-  await admin.waitForLoadState('domcontentloaded');
+  // ---- 3. un CSV fauté est refusé, et rien n'est écrit ----
+  await preparer({ plats: PLAFOND_CSV, options: OPTIONS_FAUTEUSES });
+  const verification = await verifier();
+  assert.equal(verification.status(), 302, '3a. la vérification passe par admin-post.php');
   const refus = await admin.locator('.wrap').innerText();
-  assert.match(refus, /Import impossible/i, '4b. l’import est bloqué');
-  assert.match(refus, /obligatoire=oui avec min=0/i, '4c. le motif exact est affiché, pas un « erreur » générique');
-  assert.match(refus, /Rien n’a été écrit|Rien n'a été écrit/i, '4d. l’écran dit que rien n’a été écrit');
-  assert.equal(await admin.getByRole('button', { name: 'Importer', exact: true }).count(), 0, '4e. aucun bouton Importer : l’écriture est impossible');
+  assert.match(refus, /Import impossible/i, '3b. l’import est bloqué');
+  assert.match(refus, /obligatoire=oui avec min=0/i, '3c. le motif exact est affiché, pas un « erreur » générique');
+  assert.match(refus, /Rien n’a été écrit|Rien n'a été écrit/i, '3d. l’écran dit que rien n’a été écrit');
+  assert.equal(await admin.getByRole('button', { name: 'Importer', exact: true }).count(), 0, '3e. aucun bouton Importer : l’écriture est impossible');
   resultats.push('refus');
 
-  // ---- 3. un CSV valide affiche chaque ligne, le prix et le résumé ----
-  await admin.locator('#csv_options').setInputFiles({ name: 'options.csv', mimeType: 'text/csv', buffer: Buffer.from(OPTIONS_VALIDES) });
-  const [verification2] = await Promise.all([
-    admin.waitForResponse((r) => r.url().includes('admin-post.php') && r.request().method() === 'POST'),
-    admin.getByRole('button', { name: 'Vérifier (aucune écriture)' }).click(),
-  ]);
-  assert.equal(verification2.status(), 302, '3a. seconde vérification acceptée');
-  await admin.waitForLoadState('domcontentloaded');
+  // ---- 4. un CSV valide affiche chaque ligne, le prix et le résumé ----
+  await preparer({ plats: PLAFOND_CSV, options: OPTIONS_VALIDES });
+  const verification2 = await verifier();
+  assert.equal(verification2.status(), 302, '4a. seconde vérification acceptée');
   const tableau = await admin.locator('table.widefat').innerText();
-  assert.match(tableau, /plafond-poulet/, '3b. la ligne est nommée');
-  assert.match(tableau, /45,00/, '3c. le prix interprété est affiché avec la virgule française');
-  assert.match(tableau, /créer/, '3d. l’action prévue est dite');
+  assert.match(tableau, /plafond-poulet/, '4b. la ligne est nommée');
+  assert.match(tableau, /45,00/, '4c. le prix interprété est affiché avec la virgule française');
+  assert.match(tableau, /créer/, '4d. l’action prévue est dite');
   const resume = await admin.locator('.wrap').innerText();
-  assert.match(resume, /Prix de\s+45,00\s+à\s+45,00\s+MAD/, '3e. le résumé min/max est affiché');
+  assert.match(resume, /Prix de\s+45,00\s+à\s+45,00\s+MAD/, '4e. le résumé min/max est affiché');
   resultats.push('dryrun');
 
   // ---- 5. import : les plats arrivent en brouillon ----
-  const [execution] = await Promise.all([
-    admin.waitForResponse((r) => r.url().includes('admin-post.php') && r.request().method() === 'POST'),
-    admin.getByRole('button', { name: 'Importer', exact: true }).click(),
-  ]);
+  const execution = await importer();
   assert.equal(execution.status(), 302, '5a. l’import passe');
-  await admin.waitForLoadState('domcontentloaded');
   await admin.locator('.notice-success').filter({ hasText: 'brouillon' }).waitFor({ state: 'visible' });
   resultats.push('import');
 
   // ---- 6. réimport : aucun doublon ----
-  await admin.locator('#csv_plats').setInputFiles({ name: 'plats.csv', mimeType: 'text/csv', buffer: Buffer.from(PLAFOND_CSV) });
-  await admin.locator('#csv_options').setInputFiles({ name: 'options.csv', mimeType: 'text/csv', buffer: Buffer.from(OPTIONS_VALIDES) });
-  await admin.locator('#restaurant_id').selectOption({ label: 'Resto import contrat' });
-  await Promise.all([
-    admin.waitForResponse((r) => r.url().includes('admin-post.php') && r.request().method() === 'POST'),
-    admin.getByRole('button', { name: 'Vérifier (aucune écriture)' }).click(),
-  ]);
-  await admin.waitForLoadState('domcontentloaded');
+  await preparer({ plats: PLAFOND_CSV, options: OPTIONS_VALIDES });
+  await verifier();
   const secondPassage = await admin.locator('table.widefat').innerText();
   assert.match(secondPassage, /mettre à jour/, '6a. le second passage annonce une mise à jour, pas une création');
-  const [execution2] = await Promise.all([
-    admin.waitForResponse((r) => r.url().includes('admin-post.php') && r.request().method() === 'POST'),
-    admin.getByRole('button', { name: 'Importer', exact: true }).click(),
-  ]);
+  const execution2 = await importer();
   assert.equal(execution2.status(), 302, '6b. le réimport passe');
-  await admin.waitForLoadState('domcontentloaded');
   const bilan = await admin.locator('.notice-success').innerText();
   assert.match(bilan, /0 créé\(s\), 1 mis à jour/, '6c. AUCUN doublon créé');
   resultats.push('reimport');
