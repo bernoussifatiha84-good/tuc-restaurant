@@ -734,7 +734,7 @@ final class TUC_Import_CSV
      * @param array<int, array<string,string>> $options
      * @return array{crees:int, maj:int, journal:list<string>}|WP_Error
      */
-    public static function importer(array $plats, array $options, int $resto_id): array|WP_Error
+    public static function importer(array $plats, array $options, int $resto_id, bool $ecraserOptions = false): array|WP_Error
     {
         if (!get_post($resto_id) instanceof WP_Post) {
             return new WP_Error('tuc_import_resto', 'Restaurant cible introuvable.');
@@ -750,6 +750,20 @@ final class TUC_Import_CSV
             $existant = isset($existants[$reference]) ? get_post($existants[$reference]) : null;
             if ($existant instanceof WP_Post && $existant->post_type !== TUC_CPT::ITEM) {
                 $existant = null;
+            }
+
+            // Le dry-run bloquait déjà ces plats, mais un import direct (CLI,
+            // appel programmatique, ou dry-run contourné) ne vérifiait RIEN :
+            // le garde n'existait qu'à l'affichage. Constaté par le cas 15c.
+            if ($existant instanceof WP_Post && self::a_options_conditionnelles($existant->ID) && !$ecraserOptions) {
+                self::compenser($journal);
+                return new WP_Error(
+                    'tuc_import_condition',
+                    sprintf(
+                        '%s : ce plat a des options conditionnelles saisies à la main. Le format CSV v1 ne sait pas les représenter ; import interrompu plutôt que de les écraser en silence.',
+                        $reference
+                    )
+                );
             }
 
             $champs = TUC_Espace_Pro::valider_payload($payload, $existant instanceof WP_Post ? $existant : null);
