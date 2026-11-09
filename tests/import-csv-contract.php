@@ -257,14 +257,31 @@ try {
     // =====================================================================
     // 12. Handlers : sans nonce, sans capacité → 403
     // =====================================================================
-    wp_set_current_user(0);
+    // `wp_die()` n'est PAS une exception : sous WP-CLI il termine le processus.
+    // L'appeler tel quel ferait tomber toute la suite au premier refus — c'est
+    // exactement ce qui est arrivé au premier passage en CI (run 42628947718 :
+    // « Error: Accès réservé à l'équipe TUC. » puis sortie 1, cas 12a).
+    // On intercepte donc le gestionnaire de mort pour le transformer en
+    // exception : le handler appelle bien wp_die, on constate le refus, et la
+    // suite continue.
+    $intercepterMort = static function (): callable {
+        return static function ($message = ''): void {
+            throw new RuntimeException('WP_DIE:' . (is_scalar($message) ? (string) $message : ''));
+        };
+    };
+    add_filter('wp_die_handler', $intercepterMort);
+    add_filter('wp_die_ajax_handler', $intercepterMort);
+    add_filter('wp_die_json_handler', $intercepterMort);
+
     $refus = null;
+    wp_set_current_user(0);
     try {
         TUC_Import_CSV::telecharger_admin();
     } catch (Throwable $e) {
         $refus = $e;
     }
-    $assert($refus !== null, '12a. un visiteur non connecté n’atteint pas le handler (wp_die)');
+    $assert($refus !== null && str_contains($refus->getMessage(), 'WP_DIE'), '12a. un visiteur non connecté est arrêté par wp_die');
+
     wp_set_current_user((int) $admin[0]);
     $_REQUEST['_wpnonce'] = 'faux-nonce';
     $refus = null;
@@ -275,6 +292,27 @@ try {
     }
     $assert($refus !== null, '12b. un nonce invalide est refusé');
     unset($_REQUEST['_wpnonce']);
+
+    // Et avec un compte SANS manage_options (rôle abonné) : la capacité prime
+    // sur le nonce, sinon un nonce volé suffirait.
+    $abonne = wp_insert_user(['user_login' => 'tuc_contrat_abonne_' . wp_generate_password(6, false),
+                              'user_pass' => wp_generate_password(24), 'role' => 'subscriber']);
+    wp_set_current_user((int) $abonne);
+    $_REQUEST['_wpnonce'] = 'faux-nonce';
+    $refus = null;
+    try {
+        TUC_Import_CSV::telecharger_admin();
+    } catch (Throwable $e) {
+        $refus = $e;
+    }
+    $assert($refus !== null, '12c. un compte sans manage_options est refusé, même avec un nonce');
+    unset($_REQUEST['_wpnonce']);
+    wp_delete_user((int) $abonne);
+    wp_set_current_user((int) $admin[0]);
+
+    remove_filter('wp_die_handler', $intercepterMort);
+    remove_filter('wp_die_ajax_handler', $intercepterMort);
+    remove_filter('wp_die_json_handler', $intercepterMort);
 
     // =====================================================================
     // 13. Les plats importés arrivent en BROUILLON

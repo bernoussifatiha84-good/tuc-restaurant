@@ -1275,14 +1275,14 @@ try {
     //
     // Le nombre de cas est VÉRIFIÉ : un require qui ne charge rien, ou une
     // fonction qui sortirait avant la fin, donnerait sinon un faux vert.
-    // 17 cas au moment de l'écriture ; si ce chiffre bouge, c'est soit un ajout
+    // 42 cas au moment de l'écriture ; si ce chiffre bouge, c'est soit un ajout
     // assumé, soit une régression — dans les deux cas on veut le voir.
     // -----------------------------------------------------------------
     require_once '/opt/tuc-tests/import-csv-contract.php';
     $casImport = tuc_importer_contrat_csv($assert);
     $assert(
-        $casImport === 17,
-        sprintf('contrat import CSV : 17 cas attendus, %d exécutés', $casImport)
+        $casImport === 42,
+        sprintf('contrat import CSV : 42 cas attendus, %d exécutés', $casImport)
     );
     WP_CLI::log(sprintf('Contrat import CSV : %d cas verts.', $casImport));
 }
