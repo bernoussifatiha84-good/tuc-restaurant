@@ -459,10 +459,6 @@ try {
     $assert(get_post_meta($id, 'tuc_resto', true) === '', '17b. et PAS tuc_resto (sinon : menu fantôme)');
     $assert((int) get_post_meta($id, 'tuc_resto_id', true) !== $autre_resto, '17c. le plat n’est pas rattaché au restaurant voisin');
 
-    // Si le nettoyage ci-dessous est cassé, ce cas le dit AVANT les assertions
-    // métier : la fuite est le défaut, pas un détail de fin de suite.
-    // ---- D. nettoyage vérifié par comptage ----
-    return (int) $casExecutees;
 } finally {
     // ---- restauration d'abord : la mutation globale avant tout le reste ----
     // `wp_die` doit redevenir mortel pour tout ce qui tourne après ce contrat,
@@ -502,4 +498,7 @@ try {
     wp_set_current_user(0);
 }
 
+// Le compte est lu ICI, après le finally : un `return` placé dans le `try` est
+// évalué AVANT que le `finally` s'exécute, et perdrait donc le cas D.
+return (int) $casExecutees;
 }
