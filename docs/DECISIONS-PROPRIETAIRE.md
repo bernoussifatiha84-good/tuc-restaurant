@@ -71,8 +71,19 @@ deux endpoints refusent de nouveau en 503.
 **Solution de secours, si l'écran n'est pas disponible** (par exemple avant
 déploiement, ou sur un environnement sans administration) :
 
-**À régler sur chaque environnement**, hors dépôt — le dépôt est public, aucune
-valeur réelle n'y est committée :
+**À régler sur chaque environnement**, hors dépôt.
+
+Le motif n'est **pas** le secret : ce numéro est le contact **public** de TUC.
+`/wa-lien` est déclaré `permission_callback => '__return_true'`
+(`class-tuc-compte.php:177-181`) et renvoie `https://wa.me/<numéro>` dans sa
+réponse (l.318) — n'importe quel visiteur obtient ce numéro, c'est même le but.
+
+Le motif est qu'une **valeur de configuration propre à un environnement** n'a
+rien à faire dans du code versionné : elle diffère entre dev, uat et production,
+elle change sans qu'on touche au code, et la mettre en dur ferait qu'un
+environnement hériterait silencieusement du numéro d'un autre. Le dépôt étant
+public, la règle a en plus l'avantage d'éviter d'y publier une donnée
+d'exploitation — mais ce n'est pas une question de confidentialité :
 
 ```bash
 wp option update tuc_wa_numero '<indicatif><numéro, chiffres seuls>'
