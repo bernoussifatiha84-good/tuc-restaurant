@@ -377,9 +377,14 @@ svg{display:block;flex:none}
     minuteurAge: null,
     baseline: false,
     idsConnus: new Set(),
+    // instant SERVEUR du premier releve abouti, et fenetre couverte par la
+    // reprise. Une commande 'nouvelle' creee apres (t0 - FENETRE_DE_REPRISE)
+    // doit sonner meme si ce premier releve est le tout premier.
+    t0: 0,
     alerteSonore: false,
     envoi: false,
   };
+  const FENETRE_DE_REPRISE = 120; // secondes
   const son = { context: null, actif: false };
 
   /* ---------------- outils ---------------- */
@@ -634,9 +639,31 @@ svg{display:block;flex:none}
       // cuisine et le patron entendent toute nouvelle commande. La baseline est
       // posée au premier relevé complet pour ne pas sonner sur l'existant.
       const toutes = d.commandes || [];
-      const arrivantes = toutes.filter((c) => !etat.idsConnus.has(Number(c.id)));
-      if (etat.baseline && arrivantes.length) {
-        const fraiche = arrivantes.find((c) => c.statut === 'nouvelle') || arrivantes[0];
+
+      // Instant serveur : l'horloge d'une tablette de comptoir peut deriver de
+      // plusieurs minutes. On ne compare qu'avec la reference du serveur.
+      const maintenant = Number(d.maintenant) || Math.floor(Date.now() / 1000);
+      if (!etat.t0) etat.t0 = maintenant;
+
+      // Une commande "arrivante" = jamais presentee ET creee dans la fenetre
+      // que couvre cette session. C'est ce qui rattrape les commandes tombees
+      // pendant un rechargement : au tout premier releve, la baseline n'est
+      // pas encore posee, mais la fenetre, si.
+      const fenetreDebut = etat.t0 - FENETRE_DE_REPRISE;
+      const dansFenetre = (c) => {
+        const cree = Number(c.cree);
+        if (!cree) return false;                 // serveur ancien : pas de 'cree'
+        return cree >= fenetreDebut;
+      };
+      const arrivantes = toutes.filter(
+        (c) => !etat.idsConnus.has(Number(c.id)) && dansFenetre(c)
+      );
+      // On n'alerte que sur des commandes encore a prendre : une commande deja
+      // acceptee ne doit pas sonner, meme si la page ne l'a jamais vue.
+      const aSignaler = arrivantes.filter((c) => c.statut === 'nouvelle');
+
+      if (aSignaler.length) {
+        const fraiche = aSignaler[0];
         const ou = fraiche.mode === 'table'
           ? 'Table ' + fraiche.table
           : (fraiche.mode === 'livraison' ? 'Livraison' : 'Emporter');
@@ -646,6 +673,9 @@ svg{display:block;flex:none}
           toast('Nouvelle commande · ' + ou);
         } else {
           toast('Nouvelle commande · ' + ou + ' — copie silencieuse');
+        }
+        if (aSignaler.length > 1) {
+          toast(aSignaler.length + ' nouvelles commandes · ' + ou);
         }
       }
       toutes.forEach((c) => etat.idsConnus.add(Number(c.id)));
