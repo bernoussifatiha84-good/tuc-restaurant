@@ -751,9 +751,13 @@ final class TUC_Import_CSV
         $existants = self::indexer_existants($resto_id);
 
         foreach ($plats as $reference => $ligne) {
-            // Le CSV n'a pas de colonne de statut, mais un fichier bricolé peut en
-            // porter une. On la retire AVANT tout : c'est la garde anti-injection
-            // demandée en revue (valider_payload() accepte 'publish' tel quel).
+            // Le CSV n'a pas de colonne de statut, et `construire_payload()` ne lit
+            // que nom/description/prix/promo_pct/disponible : une colonne `status`
+            // injectée n'atteint donc JAMAIS le payload. C'est un fait MESURÉ, pas
+            // supposé : retirer les deux couches de défense ensemble (mutation
+            // combinée, run 42647597365) fait toujours tomber 13b. Cette ligne est
+            // de la défense en profondeur — aucune mutation ne peut la prouver
+            // seule, et c'est écrit ici pour que personne ne la croie testée.
             unset($ligne['status'], $ligne['post_status'], $ligne['statut']);
             $payload = self::construire_payload($ligne, $options);
             $existant = isset($existants[$reference]) ? get_post($existants[$reference]) : null;
