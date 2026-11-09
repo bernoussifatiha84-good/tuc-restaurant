@@ -212,6 +212,53 @@ function tuc_reglages_contrat(?callable $assertExterne = null): int
         $compter($notice() === '', '7b. la notice disparaît dès qu’un numéro est configuré');
 
         // =================================================================
+        // 7c-7f. DIAGNOSTIC du chemin WP-CLI : une valeur mal formée posée
+        //        directement en base (comme le fait `wp option update`) ne
+        //        déclenche aucun 503 — elle produit un lien mort, silencieux.
+        // =================================================================
+        // On écrit SANS passer par preparer(), exactement comme le terminal.
+        update_option(TUC_Reglages::OPTION_WA, '0600000000', false);
+
+        // a. la valeur n'est pas vide → les lectures ne refusent pas
+        $reqCli = new WP_REST_Request('POST', '/tuc/v1/wa-lien');
+        $reqCli->set_param('but', 'compte');
+        $reponseCli = TUC_Compte::wa_lien($reqCli);
+        $urlCli = $reponseCli instanceof WP_REST_Response ? (string) ($reponseCli->get_data()['url'] ?? '') : '';
+        $compter(
+            $reponseCli instanceof WP_REST_Response,
+            '7c. une valeur mal formée en base ne déclenche AUCUN 503 (le test est « vide ou non »)'
+        );
+        $compter(
+            str_starts_with($urlCli, 'https://wa.me/0600000000'),
+            '7d. et elle produit bel et bien un lien cassé — wa.me/0600000000, sans erreur'
+        );
+
+        // b. le diagnostic la voit, l'écran la signale
+        $diag = TUC_Reglages::diagnostic();
+        $compter(
+            is_array($diag) && $diag['valide'] === false && $diag['fautive'] === '0600000000',
+            '7e. le diagnostic repère la valeur fautive et la nomme'
+        );
+        $compter(
+            is_array($diag) && $diag['normalisee'] === '212600000000',
+            '7f. et il donne la forme correcte, pour que l’humain la recopie au lieu de la deviner'
+        );
+
+        // c. la notice d'admin n'est plus muette
+        $texteCli = $notice();
+        $compter(
+            str_contains($texteCli, 'mal formé') && str_contains($texteCli, '212600000000'),
+            '7g. la notice d’admin signale le numéro mal formé et propose la forme correcte'
+        );
+
+        // d. et un numéro PROPRE ne déclenche ni diagnostic ni notice
+        update_option(TUC_Reglages::OPTION_WA, '212600000099', false);
+        $compter(
+            TUC_Reglages::diagnostic()['valide'] === true,
+            '7h. une valeur déjà normalisée est déclarée valide — pas de faux positif'
+        );
+
+        // =================================================================
         // 8. l'aperçu de lien est celui des deux lectures, pas un autre
         //     (mutation : si l'écran affichait la valeur brute, l'aperçu
         //      montrerait « wa.me/0… » et l'humain pourrait le croire valide)
