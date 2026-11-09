@@ -425,6 +425,11 @@ final class TUC_Caisse
         ]);
 
         $maintenant = (int) current_time('timestamp');
+
+        // 'cree' n'est pas un doublon de 'age' : la page a besoin d'un instant
+        // ABSOLU pour decider si une commande appartient a la fenetre qu'elle
+        // n'a pas vue. Un age relatif recalcule a chaque reponse ne le permet
+        // pas (il derive avec l'heure du navigateur et l'aller-retour reseau).
         $sortie = [];
 
         foreach ($posts as $p) {
@@ -454,11 +459,20 @@ final class TUC_Caisse
                 'total'     => (float) get_post_meta($p->ID, 'tuc_total', true),
                 'statut'    => (string) get_post_meta($p->ID, 'tuc_statut', true),
                 'heure'     => get_the_date('H:i', $p),
+                'cree'      => (int) strtotime($p->post_date),
                 'age'       => max(0, $maintenant - strtotime($p->post_date)),
             ];
         }
 
-        return new WP_REST_Response(['ok' => true, 'commandes' => $sortie, 'nb' => count($sortie)], 200);
+        // 'maintenant' (instant serveur) permet a la page de calculer sa fenetre
+        // de reprise sans dependre de l'horloge de la tablette, qui peut deriver
+        // de plusieurs minutes. C'est la meme reference que 'age'.
+        return new WP_REST_Response([
+            'ok'         => true,
+            'commandes'  => $sortie,
+            'nb'         => count($sortie),
+            'maintenant' => $maintenant,
+        ], 200);
     }
 
     /** Changement de statut depuis la caisse, limité au restaurant assigné. */
