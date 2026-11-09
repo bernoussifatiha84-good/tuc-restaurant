@@ -79,6 +79,33 @@ final class TUC_Reglages
     }
 
     /**
+     * Diagnostic de la valeur DÉJÀ en base. Ne modifie rien.
+     *
+     * POURQUOI CE CONTRÔLE EXISTE
+     * L'écran normalise à l'enregistrement, mais `wp option update` ne passe pas
+     * par l'écran. Et les deux lectures ne testent que `=== ''`
+     * (class-tuc-compte.php:267, class-tuc-onboarding-restaurant.php:140) :
+     * une valeur mal formée n'est pas vide, donc elle ne déclenche AUCUN 503.
+     * Elle produit simplement `wa.me/0600000000` — un lien mort, sans erreur,
+     * que personne ne voit. Mesuré, pas supposé.
+     *
+     * Ce contrôle est le seul filet sur ce chemin-là, celui du terminal.
+     *
+     * @return array{fautive: string, normalisee: string, valide: bool}|null
+     *         null quand l'option est vide (l'état « non configuré » le dit déjà).
+     */
+    public static function diagnostic(): ?array
+    {
+        $enBase = self::numero_enregistre();
+        if (trim($enBase) === '') {
+            return null;
+        }
+        $normalisee = TUC_Compte::normaliser($enBase);
+        $valide = $enBase === $normalisee && preg_match(self::BORNE_WA, $enBase) === 1;
+        return ['fautive' => $enBase, 'normalisee' => $normalisee, 'valide' => $valide];
+    }
+
+    /**
      * Normalise puis valide. Retourne le numéro stockable, ou un WP_Error qui
      * dit POURQUOI — pas un « invalide » sec.
      */
@@ -148,7 +175,28 @@ final class TUC_Reglages
      */
     public static function notice_non_configure(): void
     {
-        if (!current_user_can('manage_options') || self::numero_enregistre() !== '') {
+        if (!current_user_can('manage_options')) {
+            return;
+        }
+
+        // Le cas mal formé passe AVANT : l'option n'est pas vide, donc l'ancien
+        // test ne le voyait pas, et c'est justement celui que le terminal produit.
+        $diagnostic = self::diagnostic();
+        if ($diagnostic !== null && !$diagnostic['valide']) {
+            printf(
+                '<div class="notice notice-warning"><p><strong>%s</strong> %s <code>%s</code> %s <code>%s</code>. <a href="%s">%s</a></p></div>',
+                esc_html__('TUC — numéro WhatsApp mal formé : le lien est cassé.', 'tuc-core'),
+                esc_html__('La valeur en base est', 'tuc-core'),
+                esc_html($diagnostic['fautive']),
+                esc_html__('alors que la forme correcte serait', 'tuc-core'),
+                esc_html($diagnostic['normalisee']),
+                esc_url(admin_url('options-general.php?page=' . self::SLUG)),
+                esc_html__('Corriger', 'tuc-core')
+            );
+            return;
+        }
+
+        if (self::numero_enregistre() !== '') {
             return;
         }
         $url = admin_url('options-general.php?page=' . self::SLUG);
@@ -188,6 +236,27 @@ final class TUC_Reglages
           <?php endif; ?>
 
           <h2>Numéro WhatsApp du site</h2>
+
+          <?php $diagnostic = self::diagnostic(); ?>
+          <?php if ($diagnostic !== null && !$diagnostic['valide']) : ?>
+            <div class="notice notice-warning">
+              <p>
+                <strong>Numéro mal formé : le lien WhatsApp produit par le site est cassé.</strong>
+              </p>
+              <p>
+                Valeur en base : <code><?php echo esc_html($diagnostic['fautive']); ?></code><br>
+                Forme correcte : <code><?php echo esc_html($diagnostic['normalisee']); ?></code><br>
+                Lien actuellement produit :
+                <code><?php echo esc_html(self::apercu_lien($diagnostic['fautive'])); ?></code>
+              </p>
+              <p class="description">
+                Cette valeur n’a pas été saisie ici : elle vient probablement d’une
+                commande en terminal. Les deux lectures du site ne vérifient que
+                « vide ou non » — une valeur mal formée n’est pas vide, donc elle
+                ne déclenche aucune erreur et le lien échoue en silence.
+              </p>
+            </div>
+          <?php endif; ?>
 
           <?php if ($configure) : ?>
             <p>
