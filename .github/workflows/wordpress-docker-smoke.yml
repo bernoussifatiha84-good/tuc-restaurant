@@ -85,6 +85,18 @@ jobs:
           set -euo pipefail
           node scripts/verif-a3.mjs
 
+      - name: Vérifier le réarmement du son (A1)
+        shell: bash
+        run: |
+          set -euo pipefail
+          node scripts/verif-a1.mjs
+
+      - name: Vérifier la migration des capacités de caisse (A5)
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 scripts/verif-a5.py
+
       - name: Vérifier le contrat de déploiement sans déployer
         shell: bash
         run: |
