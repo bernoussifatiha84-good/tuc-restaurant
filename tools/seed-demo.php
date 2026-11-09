@@ -14,7 +14,10 @@
  *
  * Usage :
  *   wp eval-file tools/seed-demo.php            # crée ou met à jour (idempotent)
- *   wp eval-file tools/seed-demo.php -- --supprimer   # retire tout le contenu démo
+ *   wp eval-file tools/seed-demo.php supprimer  # retire tout le contenu démo
+ *
+ * Attention à la forme : WP-CLI 2.x n'accepte PAS `-- --supprimer` (il repond
+ * « unknown --supprimer parameter »). L'argument se passe NU, sans tirets.
  *
  * Refuse de s'exécuter si WP_ENVIRONMENT_TYPE vaut 'production'. Le contenu de
  * démonstration n'a rien à faire sur un site ouvert au public.
@@ -34,12 +37,37 @@ if ($environnement === 'production') {
     WP_CLI::error('Refus : WP_ENVIRONMENT_TYPE=production. Le contenu de démonstration ne va pas sur un site public.');
 }
 
-$supprimer = in_array('--supprimer', $args ?? [], true);
+$supprimer = in_array('supprimer', (array) ($args ?? []), true)
+    || in_array('--supprimer', (array) ($args ?? []), true); // ancienne forme, toleree
 
 /** Tout le contenu créé ici porte ce marqueur, pour pouvoir être retiré d'un coup. */
 const TUC_DEMO_FLAG = 'tuc_demo';
 
 if ($supprimer) {
+    // ---- ce que la purge va laisser derriere elle, dit AVANT d'ecrire ----
+    // `tuc_demo` est une META, pas une parente : supprimer un resto ne supprime
+    // pas ses commandes. Elles restent en base avec un `tuc_resto` qui pointe
+    // vers un article disparu. Le suivi client affiche alors « Restaurant TUC »
+    // au lieu du nom, et l'espace pro ne les voit plus. C'est acceptable pour
+    // des commandes de test — a condition de le savoir AVANT.
+    $restosDemo = get_posts(['post_type' => TUC_CPT::RESTO, 'post_status' => 'any',
+        'posts_per_page' => -1, 'fields' => 'ids',
+        'meta_query' => [['key' => TUC_DEMO_FLAG, 'value' => '1']]]);
+    $total = 0;
+    if (class_exists('TUC_Commande')) {
+        foreach ($restosDemo as $rid) {
+            $cmd = get_posts(['post_type' => TUC_Commande::CPT, 'post_status' => 'any',
+                'posts_per_page' => -1, 'fields' => 'ids',
+                'meta_query' => [['key' => 'tuc_resto', 'value' => $rid]]]);
+            $total += count($cmd);
+        }
+    }
+    WP_CLI::warning(sprintf(
+        'La purge va laisser %d commande(s) orpheline(s) en base : elles restent lisibles, '
+        . 'mais lues dans un restaurant qui n\'existe plus. Aucune ne sera supprimee.',
+        $total
+    ));
+
     $cibles = get_posts([
         'post_type'      => [TUC_CPT::RESTO, TUC_CPT::ITEM],
         'post_status'    => 'any',
