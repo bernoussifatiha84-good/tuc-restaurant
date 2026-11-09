@@ -1,6 +1,14 @@
 <?php
-define('ABSPATH', '/home/user/prevol/');
-define('TUC_DIR', '/home/user/tuc-restaurant/wordpress/tuc-theme');
+/**
+ * Stub WordPress minimal — uniquement pour tools/prevol-import-csv.php.
+ *
+ * NE PAS confondre avec les tests : le vrai contrat tourne sous WordPress
+ * réel (tests/import-csv-contract.php, câblé dans le smoke Docker). Ce stub
+ * existe parce que le poste de développement n'a pas de WordPress, et qu'une
+ * garde qu'on ne peut pas exécuter sur sa machine ne se vérifie jamais.
+ */
+define('ABSPATH', __DIR__ . '/');
+define('TUC_DIR', dirname(__DIR__) . '/wordpress/tuc-theme');
 class WP_Error {
     public function __construct(private string $code = '', private string $msg = '') {}
     public function get_error_code(): string { return $this->code; }
