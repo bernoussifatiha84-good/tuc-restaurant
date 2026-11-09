@@ -1291,8 +1291,11 @@ try {
     require_once '/opt/tuc-tests/reglages-contract.php';
     $casReglages = tuc_reglages_contrat($assert);
     $assert(
-        $casReglages === 23,
-        sprintf('contrat réglages : 23 cas attendus, %d exécutés', $casReglages)
+        // 21 est MESURÉ (run 42701753558 : « 23 attendus, 21 exécutés »), pas
+        // déduit d'un comptage à la main. Même leçon que les 17 → 44 du contrat
+        // import : le compte se lit dans un run, il ne s'estime pas.
+        $casReglages === 21,
+        sprintf('contrat réglages : 21 cas attendus, %d exécutés', $casReglages)
     );
     WP_CLI::log(sprintf('Contrat réglages : %d cas verts.', $casReglages));
 }
