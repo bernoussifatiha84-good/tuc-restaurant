@@ -5,7 +5,12 @@
  * Chaque cas porte sa MUTATION dans son commentaire : la ligne qu'on casse pour
  * vérifier que le test rougit. Un test qu'on n'a jamais vu rouge ne prouve rien.
  *
- * Exécution : wp eval-file /opt/tuc-tests/import-csv-contract.php
+ * Exécution : appelé par `require_once` depuis tests/wp-docker-regression.php
+ * (étape « Exécuter les régressions WordPress/TUC », déjà câblée). Aucune ligne
+ * de workflow n'est nécessaire : tout `tests/` est monté dans le conteneur.
+ *
+ * Le fichier expose `tuc_importer_contrat_csv()` et n'exécute rien au chargement :
+ * c'est l'appelant qui décide, et il vérifie le nombre de cas annoncé.
  *
  * ── MUTATIONS (jouées une par une dans le journal) ─────────────────────────
  *  M1  lire_csv()   : ne pas retirer le BOM          → cas 1 rouge
@@ -19,18 +24,34 @@
  *  ─────────────────────────────────────────────────────────────────────────
  */
 
-if (!class_exists('WP_CLI')) {
-    fwrite(STDERR, "Ce script doit être exécuté avec WP-CLI.\n");
-    exit(1);
-}
+/**
+ * Exécute le contrat de l'import CSV.
+ *
+ * Réutilise le helper d'assertion du harnais parent s'il est fourni : le motif
+ * « ÉCHEC : » est celui que le workflow extrait pour son diagnostic, on en
+ * profite au lieu d'inventer un second vocabulaire.
+ *
+ * @param callable(bool, string): void|null $assertExterne
+ * @return int nombre de cas exécutés
+ */
+function tuc_importer_contrat_csv(?callable $assertExterne = null): int
+{
+    global $casExecutees;
+    $casExecutees = 0;
 
-$assert = static function (bool $condition, string $message): void {
-    if (!$condition) {
-        fwrite(STDERR, 'ASSERTION_FAILURE: ' . $message . "\n");
-        throw new RuntimeException('ÉCHEC : ' . $message);
-    }
-    WP_CLI::log('OK : ' . $message);
-};
+    $assert = static function (bool $condition, string $message) use ($assertExterne): void {
+        global $casExecutees;
+        $casExecutees++;
+        if ($assertExterne !== null) {
+            $assertExterne($condition, $message);
+            return;
+        }
+        if (!$condition) {
+            fwrite(STDERR, 'ASSERTION_FAILURE: ' . $message . "\n");
+            throw new RuntimeException('ÉCHEC : ' . $message);
+        }
+        WP_CLI::log('OK : ' . $message);
+    };
 
 $erreurAttendue = static function ($resultat, string $code, string $message) use ($assert): void {
     $assert(is_wp_error($resultat), $message . ' (résultat attendu : erreur)');
@@ -340,7 +361,7 @@ try {
     $assert(get_post_meta($id, 'tuc_resto', true) === '', '17b. et PAS tuc_resto (sinon : menu fantôme)');
     $assert((int) get_post_meta($id, 'tuc_resto_id', true) !== $autre_resto, '17c. le plat n’est pas rattaché au restaurant voisin');
 
-    WP_CLI::success('Contrat de l’import CSV : ' . count($crees['items']) . ' plat(s) de test, tous les cas verts.');
+    return (int) $casExecutees;
 } finally {
     // ---- nettoyage : rien ne doit survivre à la suite ----
     foreach ($crees['items'] as $itemId) {
@@ -349,4 +370,6 @@ try {
     foreach ($crees['restos'] as $resto) {
         wp_delete_post((int) $resto, true);
     }
+}
+
 }
