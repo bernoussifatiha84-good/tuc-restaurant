@@ -198,6 +198,10 @@ svg{display:block;flex:none}
 .push{margin:12px 16px 0;padding:13px 14px;border-radius:var(--r);background:var(--teal-l);
   display:flex;gap:11px;align-items:flex-start}
 .push .ic{color:var(--teal-d);margin-top:1px}
+/* rearmement : ce n'est pas une suggestion, c'est un etat degrade */
+.push.rearm{background:#FFF4E0;box-shadow:inset 0 0 0 1.5px var(--amber)}
+.push.rearm .ic{color:var(--amber-d)}
+.push.rearm .go{background:var(--amber-d)}
 .push .tx{flex:1;min-width:0}
 .push h3{margin:0 0 2px;font-size:13.5px;font-weight:800;color:var(--ink)}
 .push p{margin:0;font-size:12.5px;color:var(--g800);line-height:1.45}
@@ -321,6 +325,20 @@ svg{display:block;flex:none}
     </nav>
   </header>
 
+  <!-- bandeau de réarmement : le son ne survit pas à un rechargement -->
+  <div class="push rearm" id="bandeau-rearm" hidden>
+    <span class="ic">
+      <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 8A6 6 0 0 0 6 8c0 7-3 9-3 9h18s-3-2-3-9"/><path d="M13.7 21a2 2 0 0 1-3.4 0"/></svg>
+    </span>
+    <div class="tx">
+      <h3>Réarmez les alertes</h3>
+      <p id="rearm-txt">La page a été rechargée : le son des nouvelles commandes est coupé tant que vous ne le réactivez pas.</p>
+      <button class="go" id="btn-rearmer" type="button">
+        Réarmer le son
+      </button>
+    </div>
+  </div>
+
   <!-- bandeau push, masqué dès que l'abonnement est actif -->
   <div class="push" id="bandeau-push" hidden>
     <span class="ic">
@@ -385,6 +403,51 @@ svg{display:block;flex:none}
   };
   const son = { context: null, actif: false };
 
+  /**
+   * L'INTENTION d'armement est persistee, pas l'etat.
+   *
+   * Un AudioContext ne peut pas etre repris sans geste utilisateur : aucun
+   * navigateur ne laisse une page produire du son apres un rechargement sans
+   * interaction. Persister `son.actif` serait donc un mensonge a l'ecran.
+   * On persiste donc l'INTENTION, et s'il y a intention sans armement, on
+   * affiche un bandeau qui reclame un geste — jamais un silence muet.
+   */
+  const CLE_SON = 'tuc_caisse_son_voulu';
+  const sonVoulu = () => {
+    try { return localStorage.getItem(CLE_SON) === '1'; } catch (_) { return false; }
+  };
+  const memoriserSonVoulu = (voulu) => {
+    try { localStorage.setItem(CLE_SON, voulu ? '1' : '0'); } catch (_) {}
+  };
+
+  /**
+   * Le bandeau n'est visible que s'il y a une INTENTION non satisfaite :
+   * l'utilisateur voulait le son, et il n'est pas arme.
+   */
+  function majBandeauRearm() {
+    const b = $('#bandeau-rearm');
+    if (!b) return;
+    b.hidden = !(sonVoulu() && !son.actif);
+  }
+
+  /** Arme le son pour de vrai (geste utilisateur obligatoire). */
+  async function armerSon(depuisBandeau) {
+    const AudioContextClass = window.AudioContext || window.webkitAudioContext;
+    if (!AudioContextClass) throw new Error('Audio non pris en charge par ce navigateur.');
+    son.context = son.context || new AudioContextClass();
+    await son.context.resume();
+    son.actif = son.context.state === 'running';
+    if (!son.actif) throw new Error('Autorisez le son sur cet appareil puis réessayez.');
+    memoriserSonVoulu(true);
+    majBandeauRearm();
+    majBoutonSon(true, depuisBandeau
+      ? 'Alertes réarmées sur cet appareil.'
+      : 'Bip et vibration activés; signal de test envoyé.');
+    if (navigator.vibrate) navigator.vibrate([90, 50, 90]);
+    jouerSignalSonore();
+    return true;
+  }
+
   /* ---------------- outils ---------------- */
   const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) =>
     ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
@@ -435,17 +498,11 @@ svg{display:block;flex:none}
       if (son.actif) {
         await son.context.suspend();
         son.actif = false;
+        memoriserSonVoulu(false);   // couper explicitement, c'est oublier l'intention
+        majBandeauRearm();
         majBoutonSon(false, 'Son désactivé.');
       } else {
-        const AudioContextClass = window.AudioContext || window.webkitAudioContext;
-        if (!AudioContextClass) throw new Error('Audio non pris en charge par ce navigateur.');
-        son.context = son.context || new AudioContextClass();
-        await son.context.resume();
-        son.actif = son.context.state === 'running';
-        if (!son.actif) throw new Error('Autorisez le son sur cet appareil puis réessayez.');
-        majBoutonSon(true, 'Bip et vibration activés; signal de test envoyé.');
-        if (navigator.vibrate) navigator.vibrate([90, 50, 90]);
-        jouerSignalSonore();
+        await armerSon(false);
         toast('Bip + vibration activés sur cet appareil');
       }
     } catch (e) {
@@ -704,6 +761,10 @@ svg{display:block;flex:none}
         const ou = fraiche.mode === 'table'
           ? 'Table ' + fraiche.table
           : (fraiche.mode === 'livraison' ? 'Livraison' : 'Emporter');
+        // A2 : la notification systeme est TOUJOURS emise par le service worker.
+        // Le son n'est qu'un supplement. On garde le toast dans tous les cas,
+        // mais il ne remplace plus rien : si le son est muet, l'utilisateur a
+        // quand meme une notification persistante a l'ecran.
         if (etat.alerteSonore && son.actif) {
           if (navigator.vibrate) navigator.vibrate([120, 60, 120, 60, 220]);
           jouerSignalSonore();
@@ -974,11 +1035,39 @@ svg{display:block;flex:none}
       etat.vapid = moi.vapid;
       etat.alerteSonore = moi.alerte_sonore === true;
       $('#btn-son').hidden = !etat.alerteSonore;
+
+      // Le son ne survit pas a un rechargement : si l'utilisateur l'avait
+      // demande, on le lui rappelle au lieu de le laisser croire qu'il est arme.
+      majBandeauRearm();
+
+      // Et sur n'importe quel geste, on rearme silencieusement : la premiere
+      // interaction de la page suffit a satisfaire la politique navigateur.
+      if (sonVoulu() && !son.actif) {
+        const rearmementAuto = async () => {
+          try { await armerSon(true); } catch (_) { majBandeauRearm(); }
+        };
+        document.addEventListener('pointerdown', rearmementAuto, { once: true });
+        document.addEventListener('keydown', rearmementAuto, { once: true });
+      }
       if (!etat.alerteSonore) $('#son-status').textContent = 'Votre compte n’est pas rattaché à ce restaurant : alertes silencieuses.';
       majService(!(moi.resto && moi.resto.ferme));
       if (moi.resto && moi.resto.nom) $('#nom-resto').textContent = moi.resto.nom;
 
       $('#btn-son').addEventListener('click', basculerSon);
+      const rearmer = $('#btn-rearmer');
+      if (rearmer) {
+        rearmer.addEventListener('click', async () => {
+          rearmer.disabled = true;
+          try {
+            await armerSon(true);
+            toast('Alertes réarmées sur cet appareil');
+          } catch (e) {
+            toast(e.message || 'Impossible de réarmer le son');
+          } finally {
+            rearmer.disabled = false;
+          }
+        });
+      }
       await initPush(moi.vapid);
       const btnPush = $('#btn-push');
       if (btnPush) {
