@@ -8,9 +8,15 @@
 
 | Environnement GitHub | Adresse | Branché ? | Ce qui l'atteint |
 |---|---|---|---|
-| `dev` | `chocolate-gazelle-457691.hostingersite.com` | ✅ | branche `develop` |
-| `uat` | `chocolate-gazelle-457691.hostingersite.com/uat` | ✅ | tag `pre-release-*` |
+| `dev` | `URL_DEV` (variable GitHub) | ✅ | branche `develop` |
+| `uat` | `URL_UAT` — sous-répertoire `/uat` du dev | ✅ | tag `pre-release-*` |
 | `prd` | *(aucune)* | ⛔ **non branché** | tag `release-*` |
+
+> **Le dépôt est public.** Les adresses, l'hôte SSH et l'utilisateur ne sont pas
+> recopiés ici : ils vivent dans les variables (`URL_DEV`, `ROOT_UAT`, …) et les
+> secrets (`SSH_HOST`, `SSH_USERNAME`, `SSH_PRIVATE_KEY`) de chaque environnement
+> GitHub. Les lire avec `gh variable list --env <nom>` / l'interface GitHub, pas
+> depuis un fichier suivi par Git.
 
 **Le tag ne crée pas un WordPress.** Il choisit **quel nom d'environnement** lance le flux.
 Aujourd'hui `develop` et `pre-release-…` déposent le code **sur le même hébergement** —
@@ -90,8 +96,8 @@ gh variable set URL_PRD  -R bernoussifatiha84-good/tuc-restaurant --body "https:
 gh variable set ROOT_PRD -R bernoussifatiha84-good/tuc-restaurant \
    --body "domains/tuc.ma/public_html"
 # 3. poser les secrets SSH dans l'environnement prd
-gh secret set SSH_HOST     -R … --env prd --body "145.223.38.175"
-gh secret set SSH_USERNAME -R … --env prd --body "u987613820"
+gh secret set SSH_HOST     -R … --env prd --body "<hôte SSH Hostinger>"
+gh secret set SSH_USERNAME -R … --env prd --body "<utilisateur SSH Hostinger>"
 gh secret set SSH_PRIVATE_KEY -R … --env prd < tuc_deploy
 ```
 
@@ -116,3 +122,10 @@ seconde (`tuc.ma`) est celle qui compte : **elle débloque la prod**.
 
 Quand `tuc.ma` sera là : `tuc.ma` = prd, et on décidera alors si `uat` devient
 `uat.tuc.ma` (site entier) ou reste l'essai partagé actuel.
+
+
+## Dette connue à la date du merge
+
+Les défauts de la chaîne caisse et les prérequis du pilote sont suivis dans
+l'issue #3. Ils ne sont pas corrigés par le merge de la PR #2 : merger ne déploie
+rien et ne rend rien « prêt pour la production ».
