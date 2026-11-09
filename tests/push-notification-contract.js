@@ -71,7 +71,12 @@ async function main() {
   }]);
   assert.equal(refreshed, true, 'si la caisse serveur est au premier plan, le push demande son rafraîchissement');
   assert.deepEqual(JSON.parse(JSON.stringify(postedMessages[0])), { type: 'tuc-rafraichir', commande: 42 });
-  assert.equal(notifications.length, 2, 'pas de notification système en double quand la caisse est déjà visible');
+  // A2 : la notification systeme est TOUJOURS emise, meme caisse visible.
+  // L'ancienne assertion (length === 2) verrouillait le court-circuit qui a
+  // produit le defaut : onglet au premier plan + son non arme = aucun signal
+  // durable. Ici : 3 notifications (arriere-plan, hors tenant, caisse visible).
+  assert.equal(notifications.length, 3, 'la notification est emise meme quand la caisse est visible (A2)');
+  assert.equal(notifications[2].title, serverPayload.titre, 'la caisse visible recoit la meme notification');
   console.log('PASS: Table 7 → caisse rattachée bip/vibreur, compte hors tenant silencieux, caisse visible rafraîchie');
 }
 

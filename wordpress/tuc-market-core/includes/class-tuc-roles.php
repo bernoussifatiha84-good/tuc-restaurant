@@ -20,7 +20,7 @@ final class TUC_Roles
     public const CAP_MANAGE_STAFF = 'tuc_manage_staff';
     public const CAP_AUDIBLE_ORDER_ALERTS = 'tuc_audible_order_alerts';
 
-    private const SCHEMA_VERSION = 4;
+    private const SCHEMA_VERSION = 5;
 
     public static function init(): void
     {
@@ -92,6 +92,47 @@ final class TUC_Roles
                 'edit_private_tuc_menu_items', 'edit_published_tuc_menu_items',
             ] as $capability) {
                 $administrator->add_cap($capability);
+            }
+        }
+
+        // A5 — reparer les comptes crees AVANT que ce schema ne les couvre.
+        //
+        // L'onboarding attribue `tuc_restaurateur` puis `tuc_resto_id`, mais
+        // `comptes_du_resto()` exige en plus les capacites ; un compte cree
+        // avant la bonne version du schema reste muet, et rien ne le lui dit.
+        // On ne devine pas : on ne touche QUE les comptes qui ont deja un
+        // `tuc_resto_id` explicite (donc rattaches a un restaurant, donc
+        // destines a la caisse), et on ne cree aucun rattachement.
+        $repris = 0;
+        $rattaches = get_users([
+            'meta_key'   => 'tuc_resto_id',
+            'meta_value' => '',
+            'compare'    => '!=',
+            'fields'     => 'ID',
+            'number'     => 0,
+        ]);
+        foreach ($rattaches as $user_id) {
+            $user = get_userdata((int) $user_id);
+            if (!$user instanceof WP_User) {
+                continue;
+            }
+            // un administrateur n'est pas un compte de caisse par nature :
+            // on ne lui ajoute rien, c'est a lui de rattacher un compte dedie.
+            if (in_array('administrator', (array) $user->roles, true)) {
+                continue;
+            }
+            if (!array_intersect((array) $user->roles, ['tuc_restaurateur', 'tuc_gestionnaire', 'tuc_caissier', 'tuc_serveur'])) {
+                continue;
+            }
+            if (user_can($user, self::CAP_ACCESS_CAISSE) && user_can($user, self::CAP_VIEW_ORDERS)) {
+                continue;
+            }
+            $role = get_role($user->roles[0]);
+            if ($role instanceof WP_Role) {
+                $role->add_cap(self::CAP_ACCESS_CAISSE);
+                $role->add_cap(self::CAP_VIEW_ORDERS);
+                $role->add_cap(self::CAP_UPDATE_ORDERS);
+                $repris++;
             }
         }
 

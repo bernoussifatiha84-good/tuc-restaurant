@@ -55,15 +55,23 @@ self.addEventListener('push', (e) => {
   }
 
   e.waitUntil((async () => {
-    // si une fenêtre de la caisse est visible, le push est superflu :
-    // la page se rafraîchit elle-même et affiche la commande en tête
     const liste = await self.clients.matchAll({ type: 'window', includeUncontrolled: true });
-    const visible = liste.some((c) => c.visibilityState === 'visible' && c.focused);
-    if (visible) {
-      liste.forEach((c) => c.postMessage({ type: 'tuc-rafraichir', commande: d.commande || 0 }));
-      return;
-    }
 
+    // On rafraîchit la page si elle est ouverte : elle affichera la commande en
+    // tête, tout de suite.
+    liste.forEach((c) => c.postMessage({ type: 'tuc-rafraichir', commande: d.commande || 0 }));
+
+    // ET on affiche TOUJOURS la notification, même onglet visible.
+    //
+    // Avant, un onglet visible court-circuitait la notification : « le push est
+    // superflu ». C'etait faux des que le son n'est pas arme — et il ne l'est
+    // jamais au chargement (`son.actif = false`), ni apres un 401/403 qui
+    // provoque un location.reload(). Resultat : caisse au premier plan, son
+    // muet, aucune notification, un toast de 2,6 s. Une commande perdue.
+    //
+    // Le service worker ne peut pas lire l'etat du son (c'est un contexte de
+    // page). Le choix retenu est donc : le signal durable est TOUJOURS emis,
+    // et c'est la PAGE qui retire son toast si elle a deja sonne.
     await self.registration.showNotification(d.titre, {
       body: d.texte,
       icon: './icone-192.png',
