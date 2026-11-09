@@ -48,9 +48,28 @@ Le front n'utilise `wa-lien` et `wa-statut` que pour la vérification.
 le numéro de TUC, pas celui d'un restaurant. Il n'y a pas de numéro par restaurant,
 et il n'en faut pas pour ce parcours.
 
-Sans cette option, trois endpoints renvoient **503** et bloquent : création de
-compte client, aperçu de panier, inscription restaurant. Ce n'est pas une
-dégradation silencieuse, c'est un refus explicite.
+Sans cette option, **deux** endpoints renvoient **503** et bloquent : création de
+compte client et inscription restaurant. Ce n'est pas une dégradation silencieuse,
+c'est un refus explicite.
+
+*(Le troisième, « aperçu de panier », n'existe plus : `/wa-panier` a été supprimé
+— voir la section suivante. La phrase précédente annonçait encore trois endpoints
+alors qu'il n'en restait que deux ; c'est corrigé ici.)*
+
+**Réglage par l'écran** : `Réglages → Réglages TUC` dans l'administration.
+
+Le champ est **normalisé à l'enregistrement**, et c'est indispensable : les deux
+lectures se contentent de retirer les caractères non numériques et de préfixer
+`https://wa.me/`. Sans normalisation, `0600000000` produirait
+`wa.me/0600000000` — un lien cassé, sans aucune erreur. L'écran stocke donc
+toujours la forme internationale, et affiche la valeur enregistrée ainsi qu'un
+aperçu du lien produit.
+
+Effacer le champ est permis : le site repasse en état « non configuré » et les
+deux endpoints refusent de nouveau en 503.
+
+**Solution de secours, si l'écran n'est pas disponible** (par exemple avant
+déploiement, ou sur un environnement sans administration) :
 
 **À régler sur chaque environnement**, hors dépôt — le dépôt est public, aucune
 valeur réelle n'y est committée :

@@ -1285,4 +1285,14 @@ try {
         sprintf('contrat import CSV : 50 cas attendus, %d exécutés', $casImport)
     );
     WP_CLI::log(sprintf('Contrat import CSV : %d cas verts.', $casImport));
+
+    // Écran de réglages (numéro WhatsApp). Même méthode : require_once, jamais
+    // include — un fichier absent doit être fatal, pas un saut silencieux.
+    require_once '/opt/tuc-tests/reglages-contract.php';
+    $casReglages = tuc_reglages_contrat($assert);
+    $assert(
+        $casReglages === 23,
+        sprintf('contrat réglages : 23 cas attendus, %d exécutés', $casReglages)
+    );
+    WP_CLI::log(sprintf('Contrat réglages : %d cas verts.', $casReglages));
 }
