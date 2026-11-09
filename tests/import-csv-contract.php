@@ -98,7 +98,7 @@ $diffInventaire = static function (array $avant, array $apres): string {
     }
     return $ecarts === [] ? 'aucun écart' : implode(' ; ', $ecarts);
 };
-$avant = $inventaire();
+$inventaireAvant = $inventaire();
 
 // ---- fixtures ----
 $admin = get_users(['role' => 'administrator', 'number' => 1, 'fields' => 'ID']);
@@ -494,10 +494,10 @@ try {
 
     // Preuve exigée : comptage toutes statuts confondus, identique à l'avant.
     wp_set_current_user((int) $admin[0]);
-    $apres = $inventaire();
+    $inventaireApres = $inventaire();
     $assert(
-        $apres === $avant,
-        'D. aucune fixture ne survit (toutes statuts confondus) — ' . $diffInventaire($avant, $apres)
+        $inventaireApres === $inventaireAvant,
+        'D. aucune fixture ne survit (toutes statuts confondus) — ' . $diffInventaire($inventaireAvant, $inventaireApres)
     );
     wp_set_current_user(0);
 }
