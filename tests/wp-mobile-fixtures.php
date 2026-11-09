@@ -174,11 +174,16 @@ $staleItems = get_posts([
 foreach ($staleItems as $staleId) {
     wp_delete_post((int) $staleId, true);
 }
+// EN BROUILLON, exprès. Avec `ville=casablanca`, le thème liste TOUS les restos
+// `publish` (front-page.php:24-27), sans filtre de quartier : un resto publié de
+// plus ferait échouer le contrat de la ville (« la ville affiche les deux fiches
+// réelles », 3 !== 2 — constaté au run 42629484881). L'écran d'import, lui, liste
+// aussi les brouillons : le Restaurant cible reste sélectionnable.
 $importRestoId = wp_insert_post([
     'post_type'   => TUC_CPT::RESTO,
     'post_title'  => 'Resto import contrat',
     'post_name'   => $importRestoSlug,
-    'post_status' => 'publish',
+    'post_status' => 'draft',
 ]);
 if (!is_int($importRestoId) || $importRestoId <= 0) {
     WP_CLI::error('Impossible de créer le restaurant du contrat d’import CSV.');
