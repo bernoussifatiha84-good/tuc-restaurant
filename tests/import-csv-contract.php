@@ -58,7 +58,20 @@ $erreurAttendue = static function ($resultat, string $code, string $message) use
     $assert($resultat->get_error_code() === $code, $message . ' — code ' . $resultat->get_error_code());
 };
 
-$crees = ['restos' => [], 'items' => [], 'users' => []];
+$crees = ['restos' => [], 'items' => [], 'users' => [], 'transients' => []];
+
+// Inventaire AVANT. Le contrôle d'après ne dit rien s'il n'a pas de point de
+// comparaison : « le même nombre qu'avant » exige de compter avant.
+$inventaire = static function (): array {
+    $compter = static function (string $type): int {
+        $ids = get_posts(['post_type' => $type, 'post_status' => 'any', 'posts_per_page' => -1,
+                          'fields' => 'ids', 'suppress_filters' => true]);
+        return count($ids);
+    };
+    return ['resto' => $compter(TUC_CPT::RESTO), 'item' => $compter(TUC_CPT::ITEM),
+            'users' => count(get_users(['fields' => 'ID']))];
+};
+$avant = $inventaire();
 
 // ---- fixtures ----
 $admin = get_users(['role' => 'administrator', 'number' => 1, 'fields' => 'ID']);
@@ -83,6 +96,34 @@ $autre_resto = wp_insert_post([
 $crees['restos'][] = $autre_resto;
 
 $platsCsv = static fn(array $lignes): array => ['lignes' => $lignes];
+
+// `wp_die()` n'est PAS une exception : sous WP-CLI il termine le processus. On
+// intercepte le gestionnaire de mort pour le transformer en exception, sinon la
+// suite meurt au premier refus (run 42628947718, cas 12a).
+// Déclaré ICI, avant le `try` principal, pour que le `finally` puisse toujours
+// retirer les filtres — même si une assertion tombe au milieu. Un `remove_filter`
+// posé au fil de l'eau ne s'exécute jamais quand le test échoue : c'est
+// précisément le moment où la suite suivante en a le plus besoin.
+$intercepterMort = null;
+$poseInterception = static function () use (&$intercepterMort): void {
+    $intercepterMort = static function (): callable {
+        return static function ($message = ''): void {
+            throw new RuntimeException('WP_DIE:' . (is_scalar($message) ? (string) $message : ''));
+        };
+    };
+    add_filter('wp_die_handler', $intercepterMort);
+    add_filter('wp_die_ajax_handler', $intercepterMort);
+    add_filter('wp_die_json_handler', $intercepterMort);
+};
+$retirerInterception = static function () use (&$intercepterMort): void {
+    if ($intercepterMort === null) {
+        return;
+    }
+    remove_filter('wp_die_handler', $intercepterMort);
+    remove_filter('wp_die_ajax_handler', $intercepterMort);
+    remove_filter('wp_die_json_handler', $intercepterMort);
+    $intercepterMort = null;
+};
 
 try {
     // =====================================================================
@@ -257,21 +298,8 @@ try {
     // =====================================================================
     // 12. Handlers : sans nonce, sans capacité → 403
     // =====================================================================
-    // `wp_die()` n'est PAS une exception : sous WP-CLI il termine le processus.
-    // L'appeler tel quel ferait tomber toute la suite au premier refus — c'est
-    // exactement ce qui est arrivé au premier passage en CI (run 42628947718 :
-    // « Error: Accès réservé à l'équipe TUC. » puis sortie 1, cas 12a).
-    // On intercepte donc le gestionnaire de mort pour le transformer en
-    // exception : le handler appelle bien wp_die, on constate le refus, et la
-    // suite continue.
-    $intercepterMort = static function (): callable {
-        return static function ($message = ''): void {
-            throw new RuntimeException('WP_DIE:' . (is_scalar($message) ? (string) $message : ''));
-        };
-    };
-    add_filter('wp_die_handler', $intercepterMort);
-    add_filter('wp_die_ajax_handler', $intercepterMort);
-    add_filter('wp_die_json_handler', $intercepterMort);
+    // Les trois filtres sont posés ici et retirés dans le `finally` ci-dessous.
+    $poseInterception();
 
     $refus = null;
     wp_set_current_user(0);
@@ -310,9 +338,6 @@ try {
     wp_delete_user((int) $abonne);
     wp_set_current_user((int) $admin[0]);
 
-    remove_filter('wp_die_handler', $intercepterMort);
-    remove_filter('wp_die_ajax_handler', $intercepterMort);
-    remove_filter('wp_die_json_handler', $intercepterMort);
 
     // =====================================================================
     // 13. Les plats importés arrivent en BROUILLON
@@ -407,15 +432,50 @@ try {
     $assert(get_post_meta($id, 'tuc_resto', true) === '', '17b. et PAS tuc_resto (sinon : menu fantôme)');
     $assert((int) get_post_meta($id, 'tuc_resto_id', true) !== $autre_resto, '17c. le plat n’est pas rattaché au restaurant voisin');
 
+    // Si le nettoyage ci-dessous est cassé, ce cas le dit AVANT les assertions
+    // métier : la fuite est le défaut, pas un détail de fin de suite.
+    // ---- D. nettoyage vérifié par comptage ----
     return (int) $casExecutees;
 } finally {
+    // ---- restauration d'abord : la mutation globale avant tout le reste ----
+    // `wp_die` doit redevenir mortel pour tout ce qui tourne après ce contrat,
+    // que le contrat passe ou échoue.
+    $retirerInterception();
+
     // ---- nettoyage : rien ne doit survivre à la suite ----
+    // Dans un `finally` : la fuite ne dépend pas du succès du contrat.
     foreach ($crees['items'] as $itemId) {
         wp_delete_post((int) $itemId, true);
     }
     foreach ($crees['restos'] as $resto) {
         wp_delete_post((int) $resto, true);
     }
+    foreach ($crees['users'] as $userId) {
+        if (!function_exists('wp_delete_user')) {
+            require_once ABSPATH . 'wp-admin/includes/user.php';
+        }
+        wp_delete_user((int) $userId);
+    }
+    // Les transients du module portent l'id de l'utilisateur courant : ce sont
+    // des brouillons d'écran qui survivraient 24 h et fausseraient l'écran admin
+    // d'un test ultérieur (il lirait un dry-run qui n'est pas le sien).
+    foreach ($crees['transients'] as $transient) {
+        delete_transient($transient);
+    }
+    $adminCourant = get_current_user_id();
+    delete_transient('tuc_import_csv_' . $adminCourant);
+
+    // Preuve exigée : comptage toutes statuts confondus, identique à l'avant.
+    wp_set_current_user((int) $admin[0]);
+    $apres = $inventaire();
+    $assert(
+        $apres === $avant,
+        sprintf(
+            'D. aucune fixture ne survit : resto %d→%d, item %d→%d, users %d→%d (toutes statuts confondus)',
+            $avant['resto'], $apres['resto'], $avant['item'], $apres['item'], $avant['users'], $apres['users']
+        )
+    );
+    wp_set_current_user(0);
 }
 
 }
