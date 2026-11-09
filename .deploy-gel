@@ -1,0 +1,4 @@
+develop est gele : un pilote reel est en cours.
+Un rsync --delete ne doit pas changer le site sous les pieds du restaurateur.
+Pour deployer volontairement malgre le gel : workflow_dispatch (trace de qui et pourquoi),
+ou supprimer ce fichier avec l'accord explicite du proprietaire.
