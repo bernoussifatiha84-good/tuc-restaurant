@@ -1281,8 +1281,8 @@ try {
     require_once '/opt/tuc-tests/import-csv-contract.php';
     $casImport = tuc_importer_contrat_csv($assert);
     $assert(
-        $casImport === 45,
-        sprintf('contrat import CSV : 45 cas attendus, %d exécutés', $casImport)
+        $casImport === 47,
+        sprintf('contrat import CSV : 47 cas attendus, %d exécutés', $casImport)
     );
     WP_CLI::log(sprintf('Contrat import CSV : %d cas verts.', $casImport));
 }

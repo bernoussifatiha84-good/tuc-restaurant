@@ -383,6 +383,28 @@ try {
     ])[0];
     $crees['items'][] = $id;
     $assert(get_post_status($id) === 'draft', '13b. le plat est en brouillon, jamais publié');
+    // Le cas 13b ci-dessus passe par `construire_payload()`, qui porte SA PROPRE
+    // copie de 'draft'. Le forçage réel vit dans `importer()` (wp_insert_post).
+    // Mutation M7 (run 42637710646) a changé le second et le contrat est resté
+    // VERT : la copie du payload tenait le test à la place du vrai garde. On
+    // appelle donc importer() directement, sans passer par le payload.
+    $direct = TUC_Import_CSV::importer(
+        ['direct-draft' => ['reference' => 'direct-draft', 'nom' => 'Plat direct', 'description' => '',
+                            'prix' => '30', 'categorie' => '', 'promo_pct' => '0', 'disponible' => 'oui']],
+        [],
+        $resto_id
+    );
+    $assert(!is_wp_error($direct), '13c. l’import direct (sans payload intermédiaire) passe');
+    $idDirect = 0;
+    foreach (get_posts(['post_type' => TUC_CPT::ITEM, 'post_status' => 'any', 'posts_per_page' => -1,
+                        'fields' => 'ids', 'suppress_filters' => true]) as $candidat) {
+        if ((string) get_post_meta((int) $candidat, 'tuc_import_ref', true) === 'direct-draft') {
+            $idDirect = (int) $candidat;
+        }
+    }
+    $crees['items'][] = $idDirect;
+    $assert($idDirect > 0 && get_post_status($idDirect) === 'draft',
+        '13d. importer() force le brouillon par lui-même — pas seulement construire_payload()');
 
     // =====================================================================
     // 14. Un plat DÉJÀ PUBLIÉ redevient brouillon, et le dry-run le DIT
