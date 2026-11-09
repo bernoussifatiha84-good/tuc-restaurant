@@ -368,9 +368,17 @@ try {
         $resto_id
     );
     $assert($analyse['bloquant'], '15b. le dry-run bloque ce plat (« à modifier à la main »)');
-    $resultat = TUC_Import_CSV::importer(['brouillon-1' => ['reference' => 'brouillon-1', 'nom' => 'Plat brouillon', 'description' => '', 'prix' => '25', 'categorie' => '', 'promo_pct' => '0', 'disponible' => 'oui']], [], $resto_id);
+    // L'import doit REFUSER, pas seulement l'écran. Sinon un appel direct
+    // (CLI, code, dry-run contourné) écrase les conditions sans rien dire :
+    // c'est exactement ce que le cas 15c a trouvé.
+    $ligne = ['reference' => 'brouillon-1', 'nom' => 'Plat brouillon', 'description' => '', 'prix' => '25',
+              'categorie' => '', 'promo_pct' => '0', 'disponible' => 'oui'];
+    $resultat = TUC_Import_CSV::importer(['brouillon-1' => $ligne], [], $resto_id);
+    $assert(is_wp_error($resultat) && $resultat->get_error_code() === 'tuc_import_condition', '15c. l’import lui-même refuse : les conditions ne peuvent pas être écrasées en silence');
     $apres = get_post_meta($id, 'tuc_options', true);
-    $assert(isset($apres['groups'][1]['visible_if']), '15c. les conditions sont intactes après un import qui ne les touche pas');
+    $assert(isset($apres['groups'][1]['visible_if']), '15d. les conditions sont intactes en base après le refus');
+    $forcer = TUC_Import_CSV::importer(['brouillon-1' => $ligne], [], $resto_id, true);
+    $assert(!is_wp_error($forcer), '15e. un écrasement volontaire (arg explicite) reste possible, mais il faut le demander');
 
     // =====================================================================
     // 16. Un brouillon importé est VISIBLE via /pro/menu et ABSENT de /menu/{slug}
