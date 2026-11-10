@@ -1356,9 +1356,19 @@ final class TUC_Onboarding_Restaurant
         }
         // ① Conversion éventuelle d'un HEIC/HEIF en JPEG, AVANT toute autre
         //    vérification de type : après elle, il n'existe plus qu'un JPEG.
+        // MESURE AVANT CONVERSION : quel format l'appareil a-t-il RÉELLEMENT
+        // envoyé ? On le note d'après les premiers octets. Un JPEG présent dans
+        // les uploads ne prouve rien sur l'entrée (il peut venir d'iOS, qui
+        // convertit parfois avant l'envoi) — d'où cette observation, qui ne
+        // conserve aucune photo et aucune donnée personnelle.
+        $formatRecu = tuc_heic_observer_entree((string) $photo['tmp_name'], 'avant-conversion');
+
         $converti = self::convertir_en_jpeg((string) $photo['tmp_name'], (string) ($photo['name'] ?? ''));
         if (is_wp_error($converti)) {
             return $converti;
+        }
+        if ($formatRecu === 'heic') {
+            tuc_heic_observer_entree((string) $converti['chemin'], 'converti-heic-vers-jpeg');
         }
         $cheminPhoto = $converti['chemin'];
         $photo['name'] = $converti['nom'];
