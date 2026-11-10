@@ -19,6 +19,16 @@
  */
 $wpRoot = $argv[1] ?? '';
 $heic = $argv[2] ?? '';
+// Mode CI : la fixture est à côté du script (tests/fixtures), et le WordPress
+// est celui où WP-CLI est déjà chargé. « required » = l'absence de décodeur
+// HEIC fait ÉCHOUER le test au lieu d'annoncer un mode dégradé.
+$exigerDecodeur = in_array('required', $argv, true);
+if ($heic !== '' && !is_file($heic) && is_file(__DIR__ . '/' . $heic)) {
+    $heic = __DIR__ . '/' . $heic;
+}
+if ($heic === '' && is_file(__DIR__ . '/fixtures/heic-mire-1600x1200.heic')) {
+    $heic = __DIR__ . '/fixtures/heic-mire-1600x1200.heic';
+}
 if ($wpRoot === '' || $heic === '' || !is_file($wpRoot . '/wp-load.php') || !is_file($heic)) {
     fwrite(STDERR, "usage : php heic-dependance-http.php <wordpress> <fichier.heic>\n");
     exit(2);
@@ -47,6 +57,13 @@ if (class_exists('Imagick')) {
     $decodeur = count($im->queryFormats('HEIC')) > 0;
 }
 echo '  décodeur HEIC            : ' . ($decodeur ? 'oui' : 'non') . "\n";
+
+if (!$decodeur && $exigerDecodeur) {
+    echo "=== Décodeur HEIC ===\n";
+    echo "  ECHEC — mode CI : aucun décodeur HEIC (Imagick/libheif). Un skip\n";
+    echo "          n'est pas un succès, on refuse de conclure.\n";
+    exit(1);
+}
 
 $ref = new ReflectionMethod('TUC_Onboarding_Restaurant', 'convertir_en_jpeg');
 $ref->setAccessible(true);
