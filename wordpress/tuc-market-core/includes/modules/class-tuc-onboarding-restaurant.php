@@ -356,7 +356,10 @@ final class TUC_Onboarding_Restaurant
     private const OPTION_GENERATION = 'tuc_purge_generation';
 
     /** Tentatives d'allocation du compteur global avant de REFUSER (aucun repli). */
-    private const GENERATION_TENTATIVES = 10;
+    // 10 reprises perdaient trop souvent la ligne unique sous la rafale mesurée
+    // en CI (25 refus sur 144 réservations). 20 reprises avec jitter, ça reste
+    // borné (une requête de plus, jamais une écriture aveugle).
+    private const GENERATION_TENTATIVES = 20;
 
     /** Reprises d'écriture d'un compteur quand l'erreur est un conflit récupérable. */
     private const COMPTEUR_TENTATIVES = 3;
@@ -376,6 +379,7 @@ final class TUC_Onboarding_Restaurant
     {
         global $wpdb;
         $tentatives = $tentatives ?? self::GENERATION_TENTATIVES;
+        self::$generationConflit = false;
 
         // Création de la ligne du compteur global (une fois). Son échec faute de
         // place ou de droits doit être VU, pas transformé en identité de secours.
@@ -385,7 +389,11 @@ final class TUC_Onboarding_Restaurant
             '0'
         ));
         if ($creation === false) {
-            return null; // SQL refusé : on refuse l'opération, on n'invente rien
+            // SQL refusé : on refuse l'opération, on n'invente rien. Reste à
+            // savoir SI la base invite à rejouer : « Deadlock found … try
+            // restarting » ou « Record has changed » ne sont pas une panne.
+            self::$generationConflit = self::erreur_recuperable((string) $wpdb->last_error);
+            return null;
         }
 
         for ($essai = 0; $essai < $tentatives; $essai++) {
@@ -395,7 +403,10 @@ final class TUC_Onboarding_Restaurant
             ));
             if ($brut === null) {
                 // Ligne disparue entre-temps (ou SELECT refusé) : on ne fabrique
-                // pas de valeur, on échoue.
+                // pas de valeur, on échoue. Mais « disparue entre-temps » est une
+                // fenêtre de concurrence avec la purge, pas une panne : la
+                // passe suivante relignera le compteur.
+                self::$generationConflit = true;
                 return null;
             }
             $actuel = (int) $brut;
@@ -426,6 +437,7 @@ final class TUC_Onboarding_Restaurant
                 // dans la limite de GENERATION_TENTATIVES (10, déjà en place).
                 // -----------------------------------------------------------------
                 if (!self::erreur_recuperable((string) $wpdb->last_error)) {
+                    self::$generationConflit = false;
                     return null; // vraie panne (droits, table absente...) : refus
                 }
                 // -----------------------------------------------------------------
@@ -439,6 +451,7 @@ final class TUC_Onboarding_Restaurant
                 // ENTIÈRE dans une transaction neuve.
                 // -----------------------------------------------------------------
                 if (!self::dans_une_transaction()) {
+                    self::$generationConflit = true;
                     self::$transactionPerdue = true;
                     return null;
                 }
@@ -450,6 +463,10 @@ final class TUC_Onboarding_Restaurant
         }
         // Épuisement des tentatives : AUCUN repli horodaté (deux créations dans
         // la même seconde partageraient la même valeur — mesuré). null = refus.
+        // Nature du refus : 20 collisions perdues sur la LIGNE UNIQUE du
+        // compteur global, par une rafale de processus qui veulent tous un
+        // numéro. C'est de l'affluence, pas une panne — à rejouer.
+        self::$generationConflit = true;
         return null;
     }
 
@@ -560,6 +577,13 @@ final class TUC_Onboarding_Restaurant
                     // de demandes ne doit pas être consommé par un refus).
                     if ($annuler !== null) {
                         $annuler();
+                    }
+                    if (self::$generationConflit) {
+                        // Collision passagère : l'appelant rejoue, et le client
+                        // reçoit « momentanément occupé » avec `retry`, jamais
+                        // « service indisponible ».
+                        self::$causeRefus = 'conflits';
+                        return 'conflit';
                     }
                     self::$causeRefus = 'generation';
                     return null;
@@ -721,6 +745,20 @@ final class TUC_Onboarding_Restaurant
 
     /** Le dernier `sous_verrou()` a-t-il perdu sa transaction (deadlock) ? */
     private static bool $transactionPerdue = false;
+
+    /**
+     * L'allocation d'une GÉNÉRATION a-t-elle échoué sur une COLLISION passagère
+     * (ligne du compteur global disparue, 20 reprises toutes perdues, base qui
+     * invite elle-même à rejouer) ? Dans ce cas le refus n'est pas une panne du
+     * service et doit être classé « à rejouer ». Fanion remis à false à chaque
+     * appel, donc jamais hérité d'une section précédente.
+     *
+     * Mesuré en CI (run sur 544b5e9) : 12 refus 503 sur 96 IP distinctes et 25
+     * sur 144 en rafale, tous publiés `cause=generation perdue=0 panne=1` avec
+     * un message SQL VIDE — le motif exact de l'épuisement des reprises, que les
+     * quatre corrections précédentes ne couvraient pas.
+     */
+    private static bool $generationConflit = false;
 
     /** Dernier message SQL vu par les écritures de compteur (pour la reprise). */
     private static string $derniereErreurSql = '';
