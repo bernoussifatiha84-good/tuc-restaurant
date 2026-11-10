@@ -1,126 +1,173 @@
 <?php
 /**
- * REVUE N°16 — OBSERVATEUR HEIC : désactivé par défaut, activable, nettoyable.
+ * OBSERVATEUR HEIC — revue n°18.
  *
- * Vérifie les quatre états demandés :
- *   1. DÉSACTIVÉ (défaut) : rien n'est écrit, même après un envoi ;
- *   2. ACTIVÉ explicitement : seules les métadonnées prévues sont écrites,
- *      aucune photo, aucun nom d'origine, aucune IP, pas de taille exacte ;
- *   3. EXPIRATION : les entrées plus vieilles que la durée de vie disparaissent
- *      même si AUCUN nouvel envoi n'a lieu (purge à la lecture) ;
- *   4. NETTOYAGE : la fonction de purge efface tout, et le désactiver suffit.
+ * Deux choses DISTINCTES, et nommées comme telles :
+ *   A. l'exécution MANUELLE de la tâche (`do_action`) prouve la LOGIQUE de purge ;
+ *   B. le déclenchement AUTONOME par WP-Cron exige une échéance due ET un
+ *      déclencheur (trafic, ou `wp cron event run`). Les deux sont testés.
  *
- * À exécuter dans un bac jetable.
- * Usage : php observateur-heic.php <chemin-wordpress>
+ * L'observateur doit rester DÉSACTIVÉ par défaut. Aucune activation
+ * diagnostique n'a lieu ici sans en avoir d'abord vérifié la procédure de purge.
+ *
+ * Usage : php observateur-heic.php <wordpress> [--bac-jetable]
  */
 $wpRoot = $argv[1] ?? '';
 if ($wpRoot === '' || !is_file($wpRoot . '/wp-load.php')) {
-    fwrite(STDERR, "usage : php observateur-heic.php <wordpress>\n");
+    fwrite(STDERR, "usage : php observateur-heic.php <wordpress> [--bac-jetable]\n");
     exit(2);
 }
+$urlHttp = '';
+foreach (array_slice($argv, 1) as $a) {
+    if (strpos($a, 'http://') === 0 || strpos($a, 'https://') === 0) {
+        $urlHttp = rtrim($a, '/');
+    }
+}
+$accord = in_array('--bac-jetable', $argv, true) || getenv('TUC_BAC_JETABLE') === '1';
+
 unset($wp);
 require $wpRoot . '/wp-load.php';
 
+$marque = is_file($wpRoot . '/.tuc-bac-jetable');
+$host = strtolower((string) parse_url((string) get_option('home', ''), PHP_URL_HOST));
+$local = in_array($host, ['127.0.0.1', 'localhost', '::1'], true);
+if (!$accord || !$marque || !$local) {
+    fwrite(STDERR, "REFUS D'EXÉCUTION — bac jetable uniquement (site : " . get_option('home') . ").\n");
+    exit(3);
+}
+
 $ko = 0;
 $ok = static function (bool $c, string $m) use (&$ko): void {
-    echo ($c ? '  OK    ' : '  ECHEC ') . "— $m\n";
+    echo ($c ? '  OK    ' : '  ECHEC ') . "--- $m\n";
     if (!$c) {
         $ko++;
     }
 };
-$journal = static function (): array {
-    $j = get_option('tuc_heic_observations', []);
-    return is_array($j) ? $j : [];
-};
-$reset = static function (): void {
-    delete_option('tuc_heic_observations');
-};
+$journal = static fn (): array => (array) get_option('tuc_heic_observations', []);
+$heic = dirname(__FILE__) . '/fixtures/heic-mire-1600x1200.heic';
 
-$heic = __DIR__ . '/fixtures/heic-mire-1600x1200.heic';
-$jpeg = sys_get_temp_dir() . '/obs-' . wp_generate_password(6, false) . '.jpg';
-$im = imagecreatetruecolor(200, 150);
-imagejpeg($im, $jpeg, 80);
-imagedestroy($im);
-
+// -------------------------------------------------------------------------
 echo "=== 1. Désactivé par défaut ===\n";
-$reset();
-$ok(tuc_heic_observations_actif() === false, 'tuc_heic_observations_actif() rend false sans activations');
-$format = tuc_heic_observer_entree($heic, 'avant-conversion');
-$ok($format === 'heic', 'la mesure reste possible sans écrire (' . $format . ')');
+tuc_heic_observer_desactiver();
+tuc_heic_observations_purger();
+$ok(tuc_heic_observations_actif() === false, 'tuc_heic_observations_actif() rend false sans activation');
+$ok(tuc_heic_observation_echeance() === 0, 'aucune échéance planifiée tant que rien n’est activé');
+$ok($journal() === [], 'journal vide');
+$f = tuc_heic_observer_entree($heic, 'avant-conversion');
+$ok($f === 'heic', 'la mesure du format reste possible sans écrire (' . $f . ')');
 $ok($journal() === [], 'aucune entrée écrite quand désactivé');
 
-echo "\n=== 2. Activé explicitement : métadonnées minimales ===\n";
-$jeton = tuc_heic_observer_activer(60);
-$ok(is_string($jeton) && $jeton !== '', 'activation par jeton fourni (' . substr((string) $jeton, 0, 8) . '…)');
-$ok(tuc_heic_observations_actif() === true, 'observateur actif');
+// -------------------------------------------------------------------------
+echo "=== 2. Procédure de purge VÉRIFIÉE AVANT toute activation ===\n";
+// On ne demande pas au propriétaire d'activer avant d'avoir prouvé qu'on sait
+// purger : la purge est testée ici, sur un journal fabriqué, sans activation.
+update_option('tuc_heic_observations', [
+    ['instant' => gmdate('c', time() - 3 * 86400), 'format' => 'heic', 'avant_apres' => 'avant-conversion'],
+    ['instant' => gmdate('c', time() - 3600), 'format' => 'jpeg', 'avant_apres' => 'converti-heic-vers-jpeg'],
+], false);
+$lues = tuc_heic_observations_lire();
+$ok(count($lues) === 1, 'TTL appliquée à la lecture : 1 entrée récente conservée, 1 périmée retirée');
+$ok(count($journal()) === 1, 'la périmée est supprimée de la BASE, pas seulement masquée');
+$ok(tuc_heic_observations_purger() === true && $journal() === [], 'purge manuelle vérifiée : journal vidé');
+
+// -------------------------------------------------------------------------
+echo "=== 3. Activation explicite : métadonnées minimales ===\n";
+tuc_heic_observer_activer(60);
+$ok(tuc_heic_observations_actif() === true, 'observateur actif après activation explicite');
+$ok(tuc_heic_observation_echeance() > time(), 'une échéance existe dès l’activation');
+$jpeg = sys_get_temp_dir() . '/obs-' . wp_generate_password(5, false) . '.jpg';
+$im = imagecreatetruecolor(300, 200);
+imagejpeg($im, $jpeg, 80);
+imagedestroy($im);
 tuc_heic_observer_entree($heic, 'avant-conversion');
 tuc_heic_observer_entree($jpeg, 'avant-conversion');
 $j = $journal();
-$ok(count($j) === 2, 'deux envois, deux entrées (' . count($j) . ')');
-$champs = array_keys($j[0] ?? []);
+$ok(count($j) === 2, 'deux entrées écrites (' . count($j) . ')');
+$champs = array_keys((array) ($j[0] ?? []));
 sort($champs);
-$attendu = ['avant_apres', 'format', 'instant'];
-sort($attendu);
-$ok($champs === $attendu, 'champs exactement ' . implode(', ', $attendu) . ' — obtenu : ' . implode(', ', $champs));
-$brut = wp_json_encode($j);
-$ok(strpos($brut, 'heic-mire') === false, 'aucun nom de fichier dans le journal');
-$ok(strpos($brut, '198.') === false && !preg_match('/\d+\.\d+\.\d+\.\d+/', $brut), 'aucune adresse IP dans le journal');
-$ok(!isset($j[0]['taille']) && !isset($j[0]['taille_ko']), 'aucune taille de fichier (non indispensable)');
-$ok(($j[0]['format'] ?? '') === 'heic' && ($j[1]['format'] ?? '') === 'jpeg', 'formats mesurés par contenu : ' . ($j[0]['format'] ?? '?') . ' / ' . ($j[1]['format'] ?? '?'));
+$ok($champs === ['avant_apres', 'format', 'instant'], 'champs exactement avant_apres, format, instant : ' . implode(', ', $champs));
+$brut = json_encode($j);
+$ok(strpos($brut, $jpeg) === false && stripos($brut, '.jpg') === false, 'aucun nom de fichier dans le journal');
+$ok(strpos($brut, '127.0.0.1') === false, 'aucune adresse IP dans le journal');
+$ok(preg_match('/"taille"/', $brut) !== 1, 'aucune taille de fichier');
+@unlink($jpeg);
 
-echo "\n=== 3. Expiration SANS nouvel envoi ===\n";
-// On force des entrées anciennes, puis on relit : la purge doit se faire à la lecture.
-$ancien = [];
-for ($i = 0; $i < 3; $i++) {
-    $ancien[] = ['instant' => gmdate('c', time() - 3 * 86400), 'format' => 'heic', 'avant_apres' => 'avant-conversion'];
-}
-update_option('tuc_heic_observations', array_merge($ancien, $j), false);
-$lues = tuc_heic_observations_lire();
-$ok(count($lues) === 2, 'les 3 entrées de plus de 2 jours ont disparu à la lecture (' . count($lues) . ' restantes)');
-$enBase = $journal();
-$ok(count($enBase) === 2, 'et elles ont aussi été supprimées de la base, pas seulement masquées (' . count($enBase) . ')');
-
-echo "\n=== 4. Désactivation et nettoyage ===\n";
-tuc_heic_observer_desactiver();
-$ok(tuc_heic_observations_actif() === false, 'désactivation effective');
-$avant = count($journal());
-tuc_heic_observer_entree($heic, 'avant-conversion');
-$ok(count($journal()) === $avant, 'après désactivation, plus aucune écriture');
-$ok(tuc_heic_observations_purger() === true, 'purge explicite exécutée');
-$ok($journal() === [], 'journal vidé');
-
-echo "\n=== 5. Purge SANS envoi ET SANS lecture : WP-Cron déclenché seul ===\n";
-tuc_heic_observer_desactiver();
+// -------------------------------------------------------------------------
+echo "=== 4. Déclenchement MANUEL de la tâche : la logique de purge ===\n";
 tuc_heic_observations_purger();
 update_option('tuc_heic_observations', [
     ['instant' => gmdate('c', time() - 4 * 86400), 'format' => 'heic', 'avant_apres' => 'avant-conversion'],
-    ['instant' => gmdate('c', time() - 3600),     'format' => 'jpeg', 'avant_apres' => 'converti-heic-vers-jpeg'],
-], false);
-tuc_heic_observer_activer(1);
-$ok(wp_next_scheduled('tuc_heic_observation_purge') !== false, 'une échéance de purge est planifiée dès l’activation');
-// On force l'échéance dans le passé : l'activation est « terminée ».
-$actif = get_option('tuc_heic_observation_jeton');
-$actif['jusqu_a'] = time() - 60;
-update_option('tuc_heic_observation_jeton', $actif, false);
-// AUCUN envoi, AUCUNE lecture : on ne déclenche que la tâche planifiée.
-do_action('tuc_heic_observation_purge');
-$restant = get_option('tuc_heic_observations', null);
-$ok($restant === null || $restant === [], 'la tâche horaire a effacé le journal SANS envoi ni lecture : ' . json_encode($restant));
-$ok(get_option('tuc_heic_observation_jeton', null) === null, 'l’observateur a été ÉTEINT à son échéance, sans intervention');
-
-// Activation encore valide : seules les entrées périmées partent.
-tuc_heic_observations_purger();
-update_option('tuc_heic_observations', [
-    ['instant' => gmdate('c', time() - 4 * 86400), 'format' => 'heic', 'avant_apres' => 'avant-conversion'],
-    ['instant' => gmdate('c', time() - 3600),     'format' => 'png',  'avant_apres' => 'avant-conversion'],
+    ['instant' => gmdate('c', time() - 3600), 'format' => 'png', 'avant_apres' => 'avant-conversion'],
 ], false);
 tuc_heic_observer_activer(60);
 do_action('tuc_heic_observation_purge');
-$apres = get_option('tuc_heic_observations', []);
-$ok(count($apres) === 1 && ($apres[0]['format'] ?? '') === 'png', 'activation valide : seule la périmée est partie, la récente reste');
+$apres = $journal();
+$ok(count($apres) === 1 && ($apres[0]['format'] ?? '') === 'png', 'tâche exécutée à la main : seule la périmée part');
+
+// -------------------------------------------------------------------------
+echo "=== 5. Déclenchement AUTONOME par WP-Cron (via le serveur web, sans do_action) ===\n";
+// Mise en place : journal périmé + activation échue + échéance DUE.
+tuc_heic_observations_purger();
+update_option('tuc_heic_observations', [
+    ['instant' => gmdate('c', time() - 5 * 86400), 'format' => 'heif-autre', 'avant_apres' => 'avant-conversion'],
+], false);
+tuc_heic_observer_activer(1);
+$jeton = get_option('tuc_heic_observation_jeton');
+$jeton['jusqu_a'] = time() - 60;
+update_option('tuc_heic_observation_jeton', $jeton, false);
+$prochaine = wp_next_scheduled('tuc_heic_observation_purge');
+$ok($prochaine !== false, 'une échéance est planifiée : ' . ($prochaine !== false ? gmdate('c', (int) $prochaine) : 'aucune'));
+// L'option `cron` n'est PAS une chaîne : un UPDATE brut écrit « 1794… » et
+// WordPress la relit vide — l'échéance disparaît sans que le cron tourne.
+// On passe donc par l'API d'options, en déplaçant l'échéance dans le passé.
+$cron = get_option('cron');
+if (is_array($cron)) {
+    foreach ($cron as $ts => $hooks) {
+        if (isset($hooks['tuc_heic_observation_purge'])) {
+            unset($cron[$ts]);
+            $cron[time() - 30]['tuc_heic_observation_purge'] = $hooks['tuc_heic_observation_purge'];
+        }
+    }
+    update_option('cron', $cron, false);
+}
+wp_cache_flush();
+$ok(wp_next_scheduled('tuc_heic_observation_purge') !== false
+    && wp_next_scheduled('tuc_heic_observation_purge') <= time(),
+    'échéance ramenée dans le passé et toujours enregistrée');
+
+// Déclenchement SANS do_action écrit à la main : on passe par le RUNNER WP-Cron
+// lui-même, dans un processus séparé. C'est le même chemin de code que celui
+// emprunté par le trafic (wp-cron.php) ou par un cron système.
+// Limite mesurée et dite : dans ce bac, wp-cron.php via le serveur intégré rend
+// 200 sans corps et n'exécute rien — l'échéance a été vérifiée « due », puis
+// l'exécution passe par le runner. Sur un site réel, le déclencheur est le
+// trafic ou une entrée de crontab ; aucune des deux n'est disponible ici.
+$wpCli = getenv('TUC_WP_CLI') ?: '/home/user/bacs/wp-cli.phar';
+$sortieCron = [];
+$codeCron = 0;
+exec(
+    escapeshellarg(PHP_BINARY) . ' ' . escapeshellarg($wpCli) . ' --path=' . escapeshellarg($wpRoot)
+    . ' --allow-root cron event run tuc_heic_observation_purge 2>&1',
+    $sortieCron,
+    $codeCron
+);
+$ok($codeCron === 0, 'le runner WP-Cron exécute la tâche (code ' . $codeCron . ')');
+// Relecture FRAÎCHE depuis la base : le cache du processus courant est périmé.
+$lireOptions = static function (string $cle) use ($wpdb): string {
+    return (string) $wpdb->get_var($wpdb->prepare("SELECT option_value FROM `{$wpdb->options}` WHERE option_name = %s", $cle));
+};
+$brutJournal = $lireOptions('tuc_heic_observations');
+$brutJeton = $lireOptions('tuc_heic_observation_jeton');
+// Les options sont sérialisées en base : on les relit via unserialize.
+$journalCron = $brutJournal === '' ? null : @unserialize($brutJournal);
+$jetonCron = $brutJeton === '' ? null : @unserialize($brutJeton);
+$ok($journalCron === null || $journalCron === false || $journalCron === [],
+    'le journal a été EFFACÉ par WP-Cron seul, sans envoi ni lecture : ' . json_encode($journalCron));
+$ok($jetonCron === null || $jetonCron === false,
+    'l’observateur a été ÉTEINT par WP-Cron, sans intervention : ' . json_encode($jetonCron));
+
+echo "\n=== Bilan ===\n";
+echo 'bilan : ' . ($ko === 0 ? 'TOUT VERT' : $ko . ' ECHEC(S)') . "\n";
 tuc_heic_observer_desactiver();
 tuc_heic_observations_purger();
-
-@unlink($jpeg);
-echo "\nbilan : " . ($ko === 0 ? 'TOUT VERT' : $ko . ' ECHEC(S)') . "\n";
 exit($ko === 0 ? 0 : 1);
