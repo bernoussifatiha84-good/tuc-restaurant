@@ -50,8 +50,24 @@ foreach (array_slice($argv, 1) as $a) {
 $wpRoot = $argLibres[0] ?? $wpRoot;
 $urlHttp = rtrim((string) ($argLibres[1] ?? $urlHttp), '/');
 $accord = isset($opts['bac']) || getenv('TUC_BAC_JETABLE') === '1';
-$marqueur = $wpRoot . '/.tuc-bac-jetable';
-$marque = is_file($marqueur);
+// Le marqueur est cherché à DEUX endroits : la racine, puis wp-content/uploads.
+// Motif mesuré en CI : dans le conteneur, wp-content appartient à l'uid 33 et
+// seul uploads/ est ouvert en 1777 ; écrire à la racine est refusé (droits), ce
+// qui faisait refuser l'exécution alors que le bac EST jetable.
+$candidatsMarqueur = [$wpRoot . '/.tuc-bac-jetable', $wpRoot . '/wp-content/uploads/.tuc-bac-jetable'];
+$marqueur = $candidatsMarqueur[0];
+$marque = false;
+foreach ($candidatsMarqueur as $candidat) {
+    if (is_file($candidat)) {
+        $marqueur = $candidat;
+        $marque = true;
+        break;
+    }
+    if (is_writable(dirname($candidat))) {
+        $marqueur = $candidat; // emplacement retenu pour le test de garde
+        break;
+    }
+}
 
 unset($wp);
 require $wpRoot . '/wp-load.php';
