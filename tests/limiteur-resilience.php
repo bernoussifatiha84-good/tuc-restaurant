@@ -66,7 +66,7 @@ if (!$accord || !$marque || !$local) {
     fwrite(STDERR, "REFUS D'EXÉCUTION — script destructif, bac jetable uniquement.\n");
     fwrite(STDERR, '  site          : ' . ($urlSite !== '' ? $urlSite : '(inconnu)') . "\n");
     fwrite(STDERR, '  hôte local    : ' . ($local ? 'oui' : 'NON') . "\n");
-    fwrite(STDERR, '  environnement : ' . $envType . ' (informatif : vaut « production » par défaut)\n');
+    fwrite(STDERR, '  environnement : ' . $envType . "\n");
     fwrite(STDERR, '  marqueur      : ' . $marqueur . ' => ' . ($marque ? 'présent' : 'ABSENT') . "\n");
     fwrite(STDERR, '  accord        : ' . ($accord ? 'oui' : 'NON (--bac-jetable ou TUC_BAC_JETABLE=1)') . "\n");
     fwrite(STDERR, "Aucune écriture effectuée par ce script.\n");
