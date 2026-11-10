@@ -274,16 +274,55 @@ final class TUC_Onboarding_Restaurant
      */
     private static function lire_compteur(string $cle): array
     {
-        $valeur = get_transient($cle);
-        if (!is_array($valeur) || !isset($valeur['n'], $valeur['fin'])) {
+        global $wpdb;
+        // SQL direct, comme le verrou : un transient passe par le cache objet,
+        // et un cache persistant peut servir un compte périmé.
+        $valeur = $wpdb->get_var($wpdb->prepare(
+            "SELECT option_value FROM `{$wpdb->options}` WHERE option_name = %s",
+            $cle
+        ));
+        if ($valeur === null) {
             return [0, 0];
         }
-        $restant = (int) $valeur['fin'] - time();
-        if ($restant <= 0) {
-            delete_transient($cle);
+        $parties = explode('|', (string) $valeur);
+        $compte = (int) ($parties[0] ?? 0);
+        $fin = (int) ($parties[1] ?? 0);
+        $restant = $fin - time();
+        if ($compte <= 0 || $restant <= 0) {
             return [0, 0];
         }
-        return [(int) $valeur['n'], $restant];
+        return [$compte, $restant];
+    }
+
+    /** Écrit un compteur (SQL direct + purge du cache objet). À appeler SOUS verrou. */
+    private static function ecrire_compteur(string $cle, int $compte, int $fin): void
+    {
+        global $wpdb;
+        $valeur = $compte . '|' . $fin;
+        $ok = $wpdb->query($wpdb->prepare(
+            "INSERT IGNORE INTO `{$wpdb->options}` (option_name, option_value, autoload) VALUES (%s, %s, 'no')",
+            $cle,
+            $valeur
+        ));
+        if ($ok !== 1) {
+            $wpdb->query($wpdb->prepare(
+                "UPDATE `{$wpdb->options}` SET option_value = %s WHERE option_name = %s",
+                $valeur,
+                $cle
+            ));
+        }
+        self::purger_cache_option($cle);
+    }
+
+    /** Remet un compteur à zéro (SQL direct + purge). À appeler SOUS verrou. */
+    private static function supprimer_compteur(string $cle): void
+    {
+        global $wpdb;
+        $wpdb->query($wpdb->prepare(
+            "DELETE FROM `{$wpdb->options}` WHERE option_name = %s",
+            $cle
+        ));
+        self::purger_cache_option($cle);
     }
 
     /**
@@ -351,7 +390,7 @@ final class TUC_Onboarding_Restaurant
             $ok = $wpdb->query($wpdb->prepare(
                 "INSERT IGNORE INTO `{$table}` (option_name, option_value, autoload) VALUES (%s, %s, 'no')",
                 $nom,
-                $jeton
+                $jeton . '|' . time()
             ));
             if ($ok === 1) {
                 self::purger_cache_option($nom);
@@ -425,11 +464,6 @@ final class TUC_Onboarding_Restaurant
 
 
     /**
-     * Incrémente un compteur à fenêtre fixe. À appeler DANS `sous_verrou()`.
-     * Le compteur est lu AVANT d'écrire, dans la même section critique que la
-     * décision : c'est le point que la revue a mis en évidence.
-     */
-    /**
      * Clé de limitation : l'adresse vue par le serveur, JAMAIS un en-tête
      * fourni par le client (`X-Forwarded-For`, `X-Real-IP` sont falsifiables :
      * mesuré, une valeur forgee arrive intacte, et aucune liste de proxys de
@@ -444,14 +478,16 @@ final class TUC_Onboarding_Restaurant
         return 'tuc_' . $prefixe . '_' . md5((string) $ip);
     }
 
+    /**
+     * Incrémente un compteur à fenêtre fixe. À appeler DANS `sous_verrou()`.
+     * Le compteur est lu AVANT d'écrire, dans la même section critique que la
+     * décision : c'est le point que la revue a mis en évidence.
+     */
     private static function incrementer_compteur(string $cle): void
     {
         [$n, $restant] = self::lire_compteur($cle);
-        if ($restant <= 0) {
-            $restant = HOUR_IN_SECONDS;
-        }
-        // get/set_transient purge son propre cache : pas de lecture périmée.
-        set_transient($cle, ['n' => $n + 1, 'fin' => time() + $restant], $restant);
+        $fin = $restant > 0 ? time() + $restant : time() + HOUR_IN_SECONDS;
+        self::ecrire_compteur($cle, $n + 1, $fin);
     }
 
     /**
@@ -470,10 +506,10 @@ final class TUC_Onboarding_Restaurant
                 return false;
             }
             if ($restant <= 0) {
-                delete_transient($cle);
+                self::supprimer_compteur($cle);
                 return true;
             }
-            set_transient($cle, ['n' => $n - 1, 'fin' => time() + $restant], $restant);
+            self::ecrire_compteur($cle, $n - 1, time() + $restant);
             return true;
         });
         // Si le verrou n'a pas pu être pris, le crédit n'est pas rendu : c'est un

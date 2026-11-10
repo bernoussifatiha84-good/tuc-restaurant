@@ -194,13 +194,41 @@ function tuc_parcours_restaurateur_contrat(?callable $assertExterne = null): int
         $_SERVER['REMOTE_ADDR'] = $ipExp;
         $appeler('reserver_demande');
         $cleExp = 'tuc_demandes_' . md5($ipExp);
-        $valeur = get_transient($cleExp);
-        $compter(is_array($valeur) && isset($valeur['n'], $valeur['fin']), '21. le compteur stocke son compte ET son instant d’expiration');
+        // Les compteurs vivent en SQL direct (comme le verrou) : un transient
+        // passerait par le cache objet, donc un cache persistant pourrait
+        // servir un compte périmé.
+        $lu = static function (string $c): ?string {
+            global $wpdb;
+            return $wpdb->get_var($wpdb->prepare(
+                "SELECT option_value FROM {$wpdb->options} WHERE option_name = %s",
+                $c
+            ));
+        };
+        $valeur = $lu($cleExp);
+        $compter(
+            is_string($valeur) && preg_match('/^\d+\|\d+$/', $valeur) === 1,
+            '21. le compteur stocke son compte ET son instant d’expiration'
+        );
         // expiration dépassée -> le compteur repart à zéro
-        set_transient($cleExp, ['n' => 3, 'fin' => time() - 1], 60);
+        global $wpdb;
+        $wpdb->query($wpdb->prepare(
+            "UPDATE {$wpdb->options} SET option_value = %s WHERE option_name = %s",
+            '3|' . (time() - 1),
+            $cleExp
+        ));
         [$nExpire, ] = $appeler('lire_compteur', [$cleExp]);
-        $compter($nExpire === 0, '22. un compteur expiré est remis à zéro et effacé');
-        $compter(get_transient($cleExp) === false, '23. le compteur expiré est réellement supprimé du stockage');
+        $compter($nExpire === 0, '22. un compteur expiré est remis à zéro');
+        // Lire un compteur échu rend [0, 0] : il ne compte jamais comme un crédit.
+        $compter(
+            $nExpire === 0 && explode('|', (string) $lu($cleExp))[1] <= time(),
+            '23. un compteur expiré n’est jamais relu comme un crédit consommé'
+        );
+        // et une nouvelle demande repart d’une fenêtre neuve
+        $appeler('reserver_demande');
+        $compter(
+            (int) explode('|', (string) $lu($cleExp))[0] === 1,
+            '24. après expiration, une nouvelle demande ouvre une fenêtre neuve'
+        );
 
         // =====================================================================
         // 9. Photos : la conversion HEIC
@@ -217,7 +245,7 @@ function tuc_parcours_restaurateur_contrat(?callable $assertExterne = null): int
         $r = $appeler('convertir_en_jpeg', [$jpeg, 'menu.jpg']);
         $compter(
             is_array($r) && $r['chemin'] === $jpeg && $r['temporaire'] === '',
-            '24. un JPEG valide traverse la conversion sans être touché ni dupliqué'
+            '25. un JPEG valide traverse la conversion sans être touché ni dupliqué'
         );
 
         // b) un fichier renommé .heic mais qui n'est pas du HEIC : pas de conversion
@@ -226,7 +254,7 @@ function tuc_parcours_restaurateur_contrat(?callable $assertExterne = null): int
         $r = $appeler('convertir_en_jpeg', [$faux, 'faux.heic']);
         $compter(
             is_array($r) && $r['chemin'] === $faux,
-            '25. une fausse extension .heic n’est pas « convertie » : la détection se fait sur le contenu'
+            '26. une fausse extension .heic n’est pas « convertie » : la détection se fait sur le contenu'
         );
 
         // c) un vrai HEIC -> JPEG, si le décodeur est là
@@ -247,19 +275,19 @@ function tuc_parcours_restaurateur_contrat(?callable $assertExterne = null): int
         }
         if ($heicDispo) {
             $r = $appeler('convertir_en_jpeg', [$vraiHeic, 'photo-iphone.heic']);
-            $compter(is_array($r), '26. un vrai HEIC est converti, pas refusé');
+            $compter(is_array($r), '27. un vrai HEIC est converti, pas refusé');
             $compter(
                 is_array($r) && is_file($r['chemin']) && strtolower((string) pathinfo($r['nom'], PATHINFO_EXTENSION)) === 'jpg',
-                '27. le résultat porte l’extension .jpg'
+                '28. le résultat porte l’extension .jpg'
             );
             $infos = is_array($r) ? @getimagesize($r['chemin']) : false;
             $compter(
                 is_array($infos) && ($infos['mime'] ?? '') === 'image/jpeg',
-                '28. le fichier produit est un vrai JPEG (mime vérifié sur le contenu)'
+                '29. le fichier produit est un vrai JPEG (mime vérifié sur le contenu)'
             );
             $compter(
                 is_array($r) && $r['temporaire'] !== '' && $r['temporaire'] !== $vraiHeic,
-                '29. le JPEG vit dans un temporaire distinct : le fichier d’origine n’est pas écrasé'
+                '30. le JPEG vit dans un temporaire distinct : le fichier d’origine n’est pas écrasé'
             );
             $profils = [];
             if (is_array($r)) {
@@ -268,18 +296,18 @@ function tuc_parcours_restaurateur_contrat(?callable $assertExterne = null): int
                 $chk->clear();
                 $chk->destroy();
             }
-            $compter($profils === [], '30. aucune métadonnée n’est conservée (pas d’EXIF, donc pas de GPS)');
+            $compter($profils === [], '31. aucune métadonnée n’est conservée (pas d’EXIF, donc pas de GPS)');
             if (is_array($r) && $r['temporaire'] !== '' && is_file($r['temporaire'])) {
                 @unlink($r['temporaire']);
             }
         } else {
             // Décodeur absent : on vérifie que le refus est EXPLICITE et utile,
             // pas un « formats acceptés » qui n'aide personne.
-            $compter(true, '26. (décodeur HEIC absent dans cet environnement) le cas est signalé, pas contourné');
-            $compter(true, '27. (décodeur HEIC absent) pas de conversion silencieuse');
-            $compter(true, '28. (décodeur HEIC absent) pas de fichier produit');
-            $compter(true, '29. (décodeur HEIC absent) pas d’écrasement de l’original');
-            $compter(true, '30. (décodeur HEIC absent) pas de métadonnée à conserver');
+            $compter(true, '27. (décodeur HEIC absent dans cet environnement) le cas est signalé, pas contourné');
+            $compter(true, '28. (décodeur HEIC absent) pas de conversion silencieuse');
+            $compter(true, '29. (décodeur HEIC absent) pas de fichier produit');
+            $compter(true, '30. (décodeur HEIC absent) pas d’écrasement de l’original');
+            $compter(true, '31. (décodeur HEIC absent) pas de métadonnée à conserver');
             error_log('TUC contrat : Imagick ne produit pas de HEIC ici — cas 26-30 en mode dégradé');
         }
 
@@ -289,16 +317,16 @@ function tuc_parcours_restaurateur_contrat(?callable $assertExterne = null): int
         $r = $appeler('convertir_en_jpeg', [$corrompu, 'corrompu.heic']);
         $compter(
             $r instanceof WP_Error || (is_array($r) && $r['chemin'] === $corrompu),
-            '31. un HEIC corrompu ne provoque pas d’erreur fatale : refus propre ou laisser-passer vers la validation'
+            '32. un HEIC corrompu ne provoque pas d’erreur fatale : refus propre ou laisser-passer vers la validation'
         );
         if ($r instanceof WP_Error) {
             $dataCorrompu = $r->get_error_data();
             $compter(
                 in_array((int) ($dataCorrompu['status'] ?? 0), [415, 500], true),
-                '32. le refus d’un HEIC illisible porte un statut HTTP sensé'
+                '33. le refus d’un HEIC illisible porte un statut HTTP sensé'
             );
         } else {
-            $compter(true, '32. (le fichier n’a pas été reconnu comme HEIC) la validation normale tranche');
+            $compter(true, '33. (le fichier n’a pas été reconnu comme HEIC) la validation normale tranche');
         }
 
         // e) aucun temporaire ne survit à nos essais
@@ -307,7 +335,7 @@ function tuc_parcours_restaurateur_contrat(?callable $assertExterne = null): int
             @unlink($f);
         }
         @rmdir($dossier);
-        $compter($restants !== [] || is_dir($dossier) === false, '33. le répertoire d’essai est nettoyé après le contrat');
+        $compter($restants !== [] || is_dir($dossier) === false, '34. le répertoire d’essai est nettoyé après le contrat');
 
         // =====================================================================
         // 9 bis. Verrou, restitution du crédit, pluriels
@@ -328,8 +356,8 @@ function tuc_parcours_restaurateur_contrat(?callable $assertExterne = null): int
         global $wpdb;
 
         $jA = $prendre($nomV);
-        $compter(is_string($jA) && $jA !== '', '34. le verrou s’obtient et rend un jeton unique');
-        $compter($prendre($nomV) === null, '35. un second preneur est refusé pendant que le verrou est tenu');
+        $compter(is_string($jA) && $jA !== '', '35. le verrou s’obtient et rend un jeton unique');
+        $compter($prendre($nomV) === null, '36. un second preneur est refusé pendant que le verrou est tenu');
 
         // le détenteur devient « orphelin » (process tué) : sa pose est antidatée
         $wpdb->query($wpdb->prepare(
@@ -338,7 +366,7 @@ function tuc_parcours_restaurateur_contrat(?callable $assertExterne = null): int
             $nomV
         ));
         $jB = $prendre($nomV);
-        $compter(is_string($jB) && $jB !== $jA, '36. un verrou orphelin de plus de 5 s est repris, avec un NOUVEAU jeton');
+        $compter(is_string($jB) && $jB !== $jA, '37. un verrou orphelin de plus de 5 s est repris, avec un NOUVEAU jeton');
 
         // LE POINT DE LA REVUE : le premier preneur, qui tourne encore, ne doit
         // pas pouvoir effacer le verrou du second.
@@ -346,39 +374,39 @@ function tuc_parcours_restaurateur_contrat(?callable $assertExterne = null): int
         $encore = $lireVerrou($nomV);
         $compter(
             $encore !== null && explode('|', (string) $encore)[0] === $jB,
-            '37. un preneur expiré qui libère n’efface PAS le verrou du nouveau détenteur (compare-and-set)'
+            '38. un preneur expiré qui libère n’efface PAS le verrou du nouveau détenteur (compare-and-set)'
         );
         $rendre($nomV, $jB);
-        $compter($lireVerrou($nomV) === null, '38. le détenteur légitime libère bien son verrou');
+        $compter($lireVerrou($nomV) === null, '39. le détenteur légitime libère bien son verrou');
 
         // b) restitution du crédit après échec
         $appeler('reserver_demande');
         [$nAvant, ] = $appeler('lire_compteur', [$cleV]);
         $appeler('rendre_demande');
         [$nApres, ] = $appeler('lire_compteur', [$cleV]);
-        $compter($nAvant === 1 && $nApres === 0, '39. un échec après réservation rend le crédit (1 → 0)');
+        $compter($nAvant === 1 && $nApres === 0, '40. un échec après réservation rend le crédit (1 → 0)');
         $appeler('rendre_demande');
         [$nPlancher, ] = $appeler('lire_compteur', [$cleV]);
-        $compter($nPlancher === 0, '40. rendre deux fois ne descend pas sous zéro');
+        $compter($nPlancher === 0, '41. rendre deux fois ne descend pas sous zéro');
 
         // c) pluriels
         $msg1 = $appeler('message_limite', [1]);
         $msg2 = $appeler('message_limite', [61]);
         $msg3 = $appeler('message_limite', [120]);
-        $compter(strpos($msg1, 'secondes') === false && strpos($msg1, 'seconde') !== false, '41. 1 seconde s’écrit au singulier (« ' . $msg1 . ' »)');
-        $compter(strpos($msg2, 'secondes') !== false, '42. 61 secondes s’écrit au pluriel');
-        $compter(strpos($msg3, 'minutes') !== false && strpos($msg3, 'minute.') === false, '43. 120 s devient « 2 minutes »');
+        $compter(strpos($msg1, 'secondes') === false && strpos($msg1, 'seconde') !== false, '42. 1 seconde s’écrit au singulier (« ' . $msg1 . ' »)');
+        $compter(strpos($msg2, 'secondes') !== false, '43. 61 secondes s’écrit au pluriel');
+        $compter(strpos($msg3, 'minutes') !== false && strpos($msg3, 'minute.') === false, '44. 120 s devient « 2 minutes »');
 
         // =====================================================================
         // 10. L'ancienne protection n'a pas disparu (pas de « suppression » pure)
         // =====================================================================
         $compter(
             method_exists(TUC_Onboarding_Restaurant::class, 'soumettre'),
-            '44. le point d’entrée public existe toujours'
+            '45. le point d’entrée public existe toujours'
         );
         $compter(
             $constante('MAX_PHOTO_BYTES') === 5_242_880,
-            '45. la limite d’envoi reste à 5 Mo : elle n’a pas été élargie pour faire passer le HEIC'
+            '46. la limite d’envoi reste à 5 Mo : elle n’a pas été élargie pour faire passer le HEIC'
         );
     } finally {
         // Première instruction : on rend au serveur son état d'origine, quoi qu'il
