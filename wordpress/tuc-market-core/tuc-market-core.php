@@ -20,6 +20,7 @@ const TUC_CORE_FILE    = __FILE__;
 define('TUC_CORE_DIR', plugin_dir_path(__FILE__));
 define('TUC_CORE_URL', plugin_dir_url(__FILE__));
 
+require_once TUC_CORE_DIR . 'includes/class-tuc-heic.php';   // aiguillage HEIC (testable sans décodeur)
 require_once TUC_CORE_DIR . 'includes/class-tuc-health.php';
 require_once TUC_CORE_DIR . 'includes/class-tuc-activator.php';
 require_once TUC_CORE_DIR . 'includes/class-tuc-roles.php';

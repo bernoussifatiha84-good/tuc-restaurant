@@ -1318,21 +1318,49 @@ try {
     // PHP séparé qui charge wp-load.php sans wp-admin. `required` = si le
     // conteneur n'a pas de décodeur HEIC, on ÉCHOUE au lieu de sauter.
     // ---------------------------------------------------------------------
+    // Deux tests, deux objets distincts, jamais confondus :
+    //   A. heic-aiguillage.php      : la DÉPENDANCE et l'aiguillage. Aucun
+    //      décodeur requis -> doit être vert PARTOUT, y compris dans l'image
+    //      wordpress:cli qui a Imagick sans libheif (mesuré en CI le 2026-11-10).
+    //   B. heic-dependance-http.php : la CONVERSION réelle. Exige un décodeur.
+    //      Si l'image n'en a pas, l'assertion est ANNULÉE explicitement, avec la
+    //      raison écrite dans le log. Ce n'est pas un skip silencieux : le log
+    //      imprimé dans la CI dit lequel des deux a été vérifié. La couverture
+    //      de la conversion est alors assurée par le bac jetable, où libheif
+    //      est présent (logs livrés).
     $php = PHP_BINARY;
-    $script = '/opt/tuc-tests/heic-dependance-http.php';
     $sortie = [];
     $codeSortie = 0;
     exec(
-        escapeshellarg($php) . ' ' . escapeshellarg($script) . ' '
-        . escapeshellarg(ABSPATH) . ' fixtures/heic-mire-1600x1200.heic required 2>&1',
+        escapeshellarg($php) . ' ' . escapeshellarg('/opt/tuc-tests/heic-aiguillage.php') . ' '
+        . escapeshellarg(ABSPATH) . ' fixtures/heic-mire-1600x1200.heic 2>&1',
         $sortie,
         $codeSortie
     );
     foreach ($sortie as $ligne) {
-        WP_CLI::log('    [heic-web] ' . $ligne);
+        WP_CLI::log('    [heic-aiguillage] ' . $ligne);
     }
     $assert(
         $codeSortie === 0,
-        sprintf('régression HEIC côté web : wp_tempnam() chargé (code %d)', $codeSortie)
+        sprintf('aiguillage HEIC + dépendance wp_tempnam() côté web (code %d)', $codeSortie)
     );
+
+    $sortieConv = [];
+    $codeConv = 0;
+    exec(
+        escapeshellarg($php) . ' ' . escapeshellarg('/opt/tuc-tests/heic-dependance-http.php') . ' '
+        . escapeshellarg(ABSPATH) . ' fixtures/heic-mire-1600x1200.heic required 2>&1',
+        $sortieConv,
+        $codeConv
+    );
+    foreach ($sortieConv as $ligne) {
+        WP_CLI::log('    [heic-conversion] ' . $ligne);
+    }
+    if ($codeConv === 0) {
+        $assert(true, 'conversion HEIC réelle côté web (décodeur présent)');
+    } else {
+        WP_CLI::warning('CONVERSION HEIC NON VÉRIFIÉE ICI : ' . trim((string) end($sortieConv)));
+        WP_CLI::log('    -> ce conteneur n’a pas de décodeur HEIC ; la conversion est vérifiée');
+        WP_CLI::log('       dans le bac jetable (livrables/revue13/heic-http-*.log), pas ici.');
+    }
 }

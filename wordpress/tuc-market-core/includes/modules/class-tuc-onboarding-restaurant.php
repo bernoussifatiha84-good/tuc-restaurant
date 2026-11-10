@@ -146,20 +146,13 @@ final class TUC_Onboarding_Restaurant
      */
     private static function convertir_en_jpeg(string $chemin, string $nom): array|WP_Error
     {
-        $entete = (string) @file_get_contents($chemin, false, null, 0, 32);
-        $estHeif = strpos($entete, 'ftyp') !== false
-            && preg_match('/ftyp(heic|heix|hevc|heim|heis|hevm|hevs|mif1|msf1)/', $entete) === 1;
-
-        if (!$estHeif) {
-            return ['chemin' => $chemin, 'nom' => $nom, 'temporaire' => ''];
-        }
-
-        if (!class_exists('Imagick')) {
-            return new WP_Error(
-                'tuc_onboarding_photo_heic',
-                __('Cette photo est au format HEIC (iPhone), que ce site ne sait pas encore convertir. Sur iPhone : Réglages → Appareil photo → Formats → « Le plus compatible », ou partagez la photo en JPEG.', 'tuc-core'),
-                ['status' => 415]
-            );
+        // Aiguillage + dépendance `wp_tempnam()` : déplacés dans
+        // tuc_heic_aiguillage() (includes/class-tuc-heic.php) pour être
+        // vérifiables même sur une image sans décodeur HEIC. Le contrat
+        // parcours-restaurateur (cas 46-48 d'origine) les couvre toujours.
+        $aiguillage = tuc_heic_aiguillage($chemin, $nom);
+        if (is_wp_error($aiguillage) || empty($aiguillage['heif'])) {
+            return $aiguillage;
         }
 
         try {
@@ -199,13 +192,10 @@ final class TUC_Onboarding_Restaurant
                 $im->thumbnailImage(self::MAX_COTE_JPEG, self::MAX_COTE_JPEG, true, false);
             }
 
-            // `wp_tempnam()` vit dans wp-admin/includes/file.php, que le
-            // front-end REST ne charge PAS. Mesuré en HTTP réel (WebKit + php -S) :
-            // sans ce require, l'appel levait « Call to undefined function
-            // wp_tempnam() », attrapé par le catch, et la route rendait un 415
-            // « conversion impossible » alors qu'ImageMagick avait très bien
-            // converti. Les requires de la ligne ~1390 arrivent APRÈS : trop tard.
-            require_once ABSPATH . 'wp-admin/includes/file.php';
+            // `wp_tempnam()` est chargé par tuc_heic_aiguillage() AVANT d'arriver
+            // ici (le front-end REST ne charge pas wp-admin/includes/file.php).
+            // Sans lui : « Call to undefined function wp_tempnam() », attrapé par
+            // le catch, et un 415 trompeur alors qu'Imagick convertit très bien.
             $temporaire = wp_tempnam('tuc-heic-');
             if (!is_string($temporaire) || $temporaire === '') {
                 $im->clear();
