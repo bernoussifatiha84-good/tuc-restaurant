@@ -1309,4 +1309,30 @@ try {
         sprintf('contrat parcours restaurateur : 133 cas attendus, %d exécutés', $casParcours)
     );
     WP_CLI::log(sprintf('Contrat parcours restaurateur : %d cas verts.', $casParcours));
+
+    // ---------------------------------------------------------------------
+    // Régression HEIC côté REQUÊTE WEB (défaut du 2026-11-03 : wp_tempnam()
+    // absent en front-end, invisible en WP-CLI où wp-admin est déjà chargé).
+    //
+    // Appelé DEPUIS ce runner, donc sans toucher au workflow : on lance un
+    // PHP séparé qui charge wp-load.php sans wp-admin. `required` = si le
+    // conteneur n'a pas de décodeur HEIC, on ÉCHOUE au lieu de sauter.
+    // ---------------------------------------------------------------------
+    $php = PHP_BINARY;
+    $script = '/opt/tuc-tests/heic-dependance-http.php';
+    $sortie = [];
+    $codeSortie = 0;
+    exec(
+        escapeshellarg($php) . ' ' . escapeshellarg($script) . ' '
+        . escapeshellarg(ABSPATH) . ' fixtures/heic-mire-1600x1200.heic required 2>&1',
+        $sortie,
+        $codeSortie
+    );
+    foreach ($sortie as $ligne) {
+        WP_CLI::log('    [heic-web] ' . $ligne);
+    }
+    $assert(
+        $codeSortie === 0,
+        sprintf('régression HEIC côté web : wp_tempnam() chargé (code %d)', $codeSortie)
+    );
 }
