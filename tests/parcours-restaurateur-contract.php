@@ -310,15 +310,53 @@ function tuc_parcours_restaurateur_contrat(?callable $assertExterne = null): int
         $compter($restants !== [] || is_dir($dossier) === false, '33. le répertoire d’essai est nettoyé après le contrat');
 
         // =====================================================================
+        // 9 bis. Verrou, restitution du crédit, pluriels
+        // =====================================================================
+        $ipV = '192.0.2.70';
+        $nettoyer($ipV);
+        $_SERVER['REMOTE_ADDR'] = $ipV;
+        $cleV = 'tuc_demandes_' . md5($ipV);
+
+        // a) le verrou s'obtient, puis se libère
+        $acquerir = static function (string $c) use ($appeler) { return $appeler('acquerir_verrou', [$c]); };
+        $liberer = static function (string $c) use ($appeler): void { $appeler('liberer_verrou', [$c]); };
+        $compter($acquerir($cleV) === true, '34. le verrou s’obtient quand personne ne le tient');
+        $compter(get_option($cleV . '_verrou') !== false, '35. le verrou est bien visible en base pendant qu’il est tenu');
+        $liberer($cleV);
+        $compter(get_option($cleV . '_verrou') === false, '36. le verrou est retiré après libération');
+        // un verrou orphelin (process tué) doit être repris
+        update_option($cleV . '_verrou', time() - 60, false);
+        $compter($acquerir($cleV) === true, '37. un verrou orphelin de plus de 5 s est repris, pas bloquant');
+        $liberer($cleV);
+
+        // b) restitution du crédit après échec
+        $appeler('reserver_demande');
+        [$nAvant, ] = $appeler('lire_compteur', [$cleV]);
+        $appeler('rendre_demande');
+        [$nApres, ] = $appeler('lire_compteur', [$cleV]);
+        $compter($nAvant === 1 && $nApres === 0, '38. un échec après réservation rend le crédit (1 → 0)');
+        $appeler('rendre_demande');
+        [$nPlancher, ] = $appeler('lire_compteur', [$cleV]);
+        $compter($nPlancher === 0, '39. rendre deux fois ne descend pas sous zéro');
+
+        // c) pluriels
+        $msg1 = $appeler('message_limite', [1]);
+        $msg2 = $appeler('message_limite', [61]);
+        $msg3 = $appeler('message_limite', [120]);
+        $compter(strpos($msg1, 'secondes') === false && strpos($msg1, 'seconde') !== false, '40. 1 seconde s’écrit au singulier (« ' . $msg1 . ' »)');
+        $compter(strpos($msg2, 'secondes') !== false, '41. 61 secondes s’écrit au pluriel');
+        $compter(strpos($msg3, 'minutes') !== false && strpos($msg3, 'minute.') === false, '42. 120 s devient « 2 minutes »');
+
+        // =====================================================================
         // 10. L'ancienne protection n'a pas disparu (pas de « suppression » pure)
         // =====================================================================
         $compter(
             method_exists(TUC_Onboarding_Restaurant::class, 'soumettre'),
-            '34. le point d’entrée public existe toujours'
+            '43. le point d’entrée public existe toujours'
         );
         $compter(
             $constante('MAX_PHOTO_BYTES') === 5_242_880,
-            '35. la limite d’envoi reste à 5 Mo : elle n’a pas été élargie pour faire passer le HEIC'
+            '44. la limite d’envoi reste à 5 Mo : elle n’a pas été élargie pour faire passer le HEIC'
         );
     } finally {
         // Première instruction : on rend au serveur son état d'origine, quoi qu'il

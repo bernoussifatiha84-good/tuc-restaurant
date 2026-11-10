@@ -1303,11 +1303,12 @@ try {
     require_once '/opt/tuc-tests/parcours-restaurateur-contract.php';
     $casParcours = tuc_parcours_restaurateur_contrat($assert);
     $assert(
-        // 37 est MESURÉ, pas estimé : première exécution du contrat dans le bac à
-        // sable SQLite, « CAS EXECUTES : 37 », zéro échec. Mon estimation à la main
-        // en donnait 35 — la boucle « 6.0/6.1/6.2 » compte trois cas, pas un.
-        $casParcours === 37,
-        sprintf('contrat parcours restaurateur : 37 cas attendus, %d exécutés', $casParcours)
+        // 46 est MESURÉ, pas estimé : « CAS EXECUTES : 46 » en MariaDB 10.11.13
+        // ET en SQLite, zéro échec. Deux estimations à la main se sont déjà
+        // trompées (35 puis 42) : cette valeur se lit dans un run, elle ne se
+        // calcule pas.
+        $casParcours === 46,
+        sprintf('contrat parcours restaurateur : 46 cas attendus, %d exécutés', $casParcours)
     );
     WP_CLI::log(sprintf('Contrat parcours restaurateur : %d cas verts.', $casParcours));
 }
