@@ -227,10 +227,11 @@ function tuc_parcours_restaurateur_contrat(?callable $assertExterne = null): int
         };
         $valeur = $lu($cleExp);
         $compter(
-            // format actuel : « compte|fin|séquence » — la séquence fait partie de
-            // la valeur comparée par le CAS, c'est elle qui ferme le cas ABA.
-            is_string($valeur) && preg_match('/^\d+\|\d+\|\d+$/', $valeur) === 1,
-            '21. le compteur stocke son compte, son instant d’expiration ET sa séquence'
+            // format actuel : « compte|fin|génération|séquence » — la séquence
+            // fait partie de la valeur comparée par le CAS (ABA par réécriture),
+            // la génération distingue deux créations (ABA par recréation).
+            is_string($valeur) && preg_match('/^\d+\|\d+\|\d+\|\d+$/', $valeur) === 1,
+            '21. le compteur stocke son compte, sa fin, sa génération ET sa séquence'
         );
         // expiration dépassée -> le compteur repart à zéro
         global $wpdb;
@@ -861,7 +862,7 @@ function tuc_parcours_restaurateur_contrat(?callable $assertExterne = null): int
         $compter($creeB === true, '90. B crée le compteur pendant la pause de A');
         $compter($ecritCreaA === false, '91. A n’écrase pas la création de B : son incrément est refusé');
         $compter((int) explode('|', $valeurCrea)[0] === 2, '92. le compteur porte l’écriture de B (2) : ' . $valeurCrea);
-        $compter((int) explode('|', $valeurCrea)[2] === 2, '93. la séquence est celle de B : aucune écriture de A ne l’a fait bouger');
+        $compter((int) explode('|', $valeurCrea)[3] === 2, '93. la séquence est celle de B : aucune écriture de A ne l’a fait bouger');
         $compter($appeler('ecrire_compteur', [$cleCrea, 99, time() + 60, null]) === false, '94. le mode création refuse d’écrire sur une ligne existante');
         $appeler('rendre_verrou', [$nomCrea, $jCreaB]);
 
@@ -920,6 +921,106 @@ function tuc_parcours_restaurateur_contrat(?callable $assertExterne = null): int
                 ...$lot
             ));
         }
+
+        // =====================================================================
+        // 18. ABA PAR RECRÉATION (revue n°6, point 1)
+        // même compte, même expiration, séquence revenue à 1 : la valeur
+        // complète peut redevenir identique si rien ne distingue l'identité.
+        // =====================================================================
+        $cleRec = 'tuc_demandes_' . md5('192.0.2.160');
+        $nomRec = $cleRec . '_verrou';
+        foreach ([$cleRec, $nomRec] as $nn) {
+            $wpdb->query($wpdb->prepare("DELETE FROM {$wpdb->options} WHERE option_name = %s", $nn));
+        }
+        $finRec = time() + 3600;
+        $appeler('ecrire_compteur', [$cleRec, 3, $finRec, null]);
+        $appeler('ecrire_compteur', [$cleRec, 2, $finRec, (string) $lu($cleRec)]);
+        $appeler('ecrire_compteur', [$cleRec, 1, $finRec, (string) $lu($cleRec)]);
+        $avantRec = (string) $lu($cleRec);
+        $compter((int) explode('|', $avantRec)[0] === 1, '101. le compteur est bien revenu à 1 (' . $avantRec . ')');
+        $appeler('supprimer_compteur', [$cleRec]);
+        $appeler('ecrire_compteur', [$cleRec, 1, $finRec, null]);
+        $apresRec = (string) $lu($cleRec);
+        $compter((string) explode('|', $avantRec)[0] === (string) explode('|', $apresRec)[0], '102. même COMPTE avant et après recréation : le pire cas est construit');
+        $compter(explode('|', $avantRec)[1] === explode('|', $apresRec)[1], '103. même EXPIRATION avant et après recréation');
+        $compter($avantRec !== $apresRec, '104. la valeur complète DIFFÈRE : la génération a changé (' . $avantRec . ' vs ' . $apresRec . ')');
+        $compter($appeler('ecrire_compteur', [$cleRec, 3, $finRec, $avantRec]) === false, '105. une écriture conditionnelle préparée AVANT la suppression est refusée');
+        $compter((string) $lu($cleRec) === $apresRec, '106. la ligne recréée est intacte : ' . $lu($cleRec));
+        $naissances = [];
+        for ($i = 0; $i < 3; $i++) {
+            $appeler('supprimer_compteur', [$cleRec]);
+            $appeler('ecrire_compteur', [$cleRec, 1, $finRec, null]);
+            $naissances[] = (int) explode('|', (string) $lu($cleRec))[2];
+        }
+        $compter(count(array_unique($naissances)) === 3, '107. trois créations successives : trois générations distinctes (' . implode(',', $naissances) . ')');
+        $wpdb->query($wpdb->prepare("DELETE FROM {$wpdb->options} WHERE option_name = %s", $cleRec));
+
+        // =====================================================================
+        // 19. PURGE : curseur persistant, reprise, taille de requête bornée
+        // =====================================================================
+        $prefixeCurseur = 'tuc_tentatives_';
+        $nomLoin = static fn (int $i): string => $prefixeCurseur . sprintf('%05d', $i) . str_repeat('c', 27);
+        for ($lot = 0; $lot < 3000; $lot += 200) {
+            $valeurs = [];
+            $params = [];
+            for ($i = $lot; $i < min($lot + 200, 3000); $i++) {
+                $valeurs[] = "(%s, %s, 'no')";
+                $params[] = $nomLoin($i);
+                $params[] = '5|' . (time() + 1800);
+            }
+            $wpdb->query($wpdb->prepare(
+                "INSERT INTO {$wpdb->options} (option_name, option_value, autoload) VALUES " . implode(',', $valeurs),
+                ...$params
+            ));
+        }
+        $wpdb->query($wpdb->prepare(
+            "INSERT INTO {$wpdb->options} (option_name, option_value, autoload) VALUES (%s, %s, 'no')",
+            $prefixeCurseur . 'zzzzz' . str_repeat('c', 27),
+            '9|' . (time() - 3 * 86400)
+        ));
+        $GLOBALS['tuc_sql_max'] = 0;
+        $espion = static function (string $requete): string {
+            $GLOBALS['tuc_sql_max'] = max($GLOBALS['tuc_sql_max'], strlen($requete));
+            return $requete;
+        };
+        add_filter('query', $espion);
+        $appeler('balayer_lignes_perimees', [500, 2, 0]);
+        $curseurA = (string) ($GLOBALS['tuc_purge_curseur_fin'] ?? '');
+        $compter($curseurA !== '', '108. après une passe bornée (2 fenêtres), un curseur est conservé : ' . $curseurA);
+        $appeler('balayer_lignes_perimees', [500, 2, 0]);
+        $departB = (string) ($GLOBALS['tuc_purge_curseur_depart'] ?? '');
+        $finB = (string) ($GLOBALS['tuc_purge_curseur_fin'] ?? '');
+        $compter($departB === $curseurA, '109. la passe suivante REPREND au curseur, pas au début');
+        $compter(strcmp($finB, $curseurA) > 0, '110. le curseur avance strictement');
+        $passesC = 0;
+        do {
+            $appeler('balayer_lignes_perimees', [500, 2, 0]);
+            $passesC++;
+            $encore = (int) $wpdb->get_var($wpdb->prepare(
+                "SELECT COUNT(*) FROM {$wpdb->options} WHERE option_name = %s",
+                $prefixeCurseur . 'zzzzz' . str_repeat('c', 27)
+            ));
+        } while ($encore > 0 && $passesC < 20);
+        $compter($encore === 0, '111. la périmée derrière 3 000 vivantes est atteinte en ' . $passesC . ' passes bornées');
+        // La mesure de taille ne porte QUE sur les requêtes de la purge : on
+        // arrête l'espion avant les vérifications (qui émettent de gros IN (...)).
+        remove_filter('query', $espion);
+        $tailleMaxPurge = (int) $GLOBALS['tuc_sql_max'];
+        $vivantesC = 0;
+        for ($lot = 0; $lot < 3000; $lot += 500) {
+            $nomsLot = [];
+            for ($i = $lot; $i < min($lot + 500, 3000); $i++) {
+                $nomsLot[] = $nomLoin($i);
+            }
+            $vivantesC += (int) $wpdb->get_var($wpdb->prepare(
+                "SELECT COUNT(*) FROM {$wpdb->options} WHERE option_name IN (" . implode(',', array_fill(0, count($nomsLot), '%s')) . ")",
+                ...$nomsLot
+            ));
+        }
+        $compter($vivantesC === 3000, '112. aucune vivante supprimée (' . $vivantesC . '/3000)');
+        $compter($tailleMaxPurge > 0 && $tailleMaxPurge < 4096, '113. la requête de purge reste bornée (' . $tailleMaxPurge . ' o) malgré 3 000 vivantes');
+        $wpdb->query("DELETE FROM {$wpdb->options} WHERE option_name LIKE '{$prefixeCurseur}0%'");
+        $wpdb->query("DELETE FROM {$wpdb->options} WHERE option_name LIKE '{$prefixeCurseur}z%'");
 
         // =====================================================================
         // 10. L'ancienne protection n'a pas disparu (pas de « suppression » pure)

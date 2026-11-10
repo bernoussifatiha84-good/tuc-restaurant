@@ -296,27 +296,111 @@ final class TUC_Onboarding_Restaurant
         return self::lire_valeur(self::lire_brut($cle));
     }
 
-    /** Décode une valeur de compteur. Rend [compte, secondes_restantes]. */
+    /** Décode une valeur de compteur. Rend [compte, secondes_restantes].
+     *
+     * Accepte les deux formats : « compte|fin|génération|séquence » (courant) et
+     * l'ancien « compte|fin|séquence » (trois champs, lu comme : génération =
+     * fin - HOUR_IN_SECONDS). Voir `composantes()`.
+     */
     private static function lire_valeur(?string $valeur): array
     {
         if ($valeur === null) {
             return [0, 0];
         }
-        $parties = explode('|', $valeur);
-        $compte = (int) ($parties[0] ?? 0);
-        $fin = (int) ($parties[1] ?? 0);
-        $restant = $fin - time();
-        if ($compte <= 0 || $restant <= 0) {
+        $c = self::composantes($valeur);
+        $restant = $c['fin'] - time();
+        if ($c['compte'] <= 0 || $restant <= 0) {
             return [0, 0];
         }
-        return [$compte, $restant];
+        return [$c['compte'], $restant];
+    }
+
+    /**
+     * Composantes d'une valeur de compteur.
+     *
+     * FORMAT COURANT : « compte|fin|génération|séquence ».
+     *
+     * POURQUOI LA GÉNÉRATION (revue n°6, point 1). Une ligne supprimée puis
+     * recréée repartait à « 1|<même fin>|1 » : la valeur complète pouvait donc
+     * redevenir IDENTIQUE, et une écriture conditionnelle préparée AVANT la
+     * suppression redevenait acceptable — un ABA par recréation. Un horodatage
+     * ne suffit pas (deux créations dans la même seconde donnent la même
+     * valeur, le test l'a montré). La valeur porte donc une GÉNÉRATION issue
+     * d'un compteur global strictement croissant, qui ne recule ni ne se
+     * recycle : deux créations de la même clé n'ont jamais la même génération,
+     * même séparées d'une milliseconde ou après suppression.
+     */
+    private static function composantes(string $valeur): array
+    {
+        $p = explode('|', $valeur);
+        if (count($p) === 4) {
+            return [
+                'compte'     => (int) ($p[0] ?? 0),
+                'fin'        => (int) ($p[1] ?? 0),
+                'generation' => (int) ($p[2] ?? 0),
+                'sequence'   => (int) ($p[3] ?? 0),
+            ];
+        }
+        return [
+            'compte'     => (int) ($p[0] ?? 0),
+            'fin'        => (int) ($p[1] ?? 0),
+            'generation' => (int) ($p[1] ?? 0) - HOUR_IN_SECONDS, // ancien format
+            'sequence'   => (int) ($p[2] ?? 0),
+        ];
+    }
+
+    /** Génération portée par une valeur de compteur. */
+    private static function generation_de(string $valeur): int
+    {
+        return self::composantes($valeur)['generation'];
+    }
+
+    /** Ligne du compteur global de générations : une seule pour tout le site. */
+    private const OPTION_GENERATION = 'tuc_purge_generation';
+
+    /**
+     * Rend la génération suivante. Strictement croissante, jamais réutilisée,
+     * y compris après suppression de la ligne du compteur : c'est ce qui rend
+     * le retour à une valeur identique impossible.
+     *
+     * Écriture conditionnelle en boucle bornée (portable MariaDB/SQLite, pas de
+     * LAST_INSERT_ID ni de séquence propre à un moteur).
+     */
+    private static function prochaine_generation(): int
+    {
+        global $wpdb;
+        $wpdb->query($wpdb->prepare(
+            "INSERT IGNORE INTO `{$wpdb->options}` (option_name, option_value, autoload) VALUES (%s, %s, 'no')",
+            self::OPTION_GENERATION,
+            '0'
+        ));
+        for ($essai = 0; $essai < 10; $essai++) {
+            $brut = $wpdb->get_var($wpdb->prepare(
+                "SELECT option_value FROM `{$wpdb->options}` WHERE option_name = %s",
+                self::OPTION_GENERATION
+            ));
+            $actuel = (int) $brut;
+            $suivant = $actuel + 1;
+            $touche = $wpdb->query($wpdb->prepare(
+                "UPDATE `{$wpdb->options}` SET option_value = %s WHERE option_name = %s AND option_value = %s",
+                (string) $suivant,
+                self::OPTION_GENERATION,
+                (string) $brut
+            ));
+            if ((int) $touche === 1) {
+                self::purger_cache_option(self::OPTION_GENERATION);
+                return $suivant;
+            }
+        }
+        // Impossible en pratique sous verrou ; on ne réutilise jamais 0.
+        return time();
     }
 
     /**
      * Écrit un compteur. Le résultat est VÉRIFIÉ en base : on ne suppose jamais
      * qu'un UPDATE a fait ce qu'on lui demandait.
      *
-     * FORMAT DE LA VALEUR : « compte|fin|séquence ». La séquence est incrémentée
+     * FORMAT DE LA VALEUR : « compte|fin|génération|séquence ». La séquence est incrémentée
      * à CHAQUE écriture et fait partie de la valeur comparée par le CAS. C'est
      * ce qui règle le cas ABA (retour à la même valeur après d'autres écritures)
      * SANS seconde vérification après coup.
@@ -336,13 +420,18 @@ final class TUC_Onboarding_Restaurant
      *    clé porte une génération neuve ; sans ligne, on échoue plutôt que de
      *    recréer.
      */
-    private static function ecrire_compteur(string $cle, int $compte, int $fin, ?string $attendu = null): bool
+    private static function ecrire_compteur(string $cle, int $compte, int $fin, ?string $attendu = null, ?int $generation = null): bool
     {
         global $wpdb;
 
         if ($attendu === null) {
             // Création : un seul INSERT, atomique. Rien d'autre.
-            $valeur = $compte . '|' . $fin . '|1';
+            // GÉNÉRATION : identité neuve à chaque création, même après
+            // suppression (ABA par recréation, revue n°6).
+            if ($generation === null) {
+                $generation = self::prochaine_generation();
+            }
+            $valeur = $compte . '|' . $fin . '|' . $generation . '|1';
             $insert = $wpdb->query($wpdb->prepare(
                 "INSERT IGNORE INTO `{$wpdb->options}` (option_name, option_value, autoload) VALUES (%s, %s, 'no')",
                 $cle,
@@ -356,7 +445,9 @@ final class TUC_Onboarding_Restaurant
         }
 
         // Conditionnel : aucun INSERT, jamais. Si la ligne n'existe plus, échec.
-        $valeur = $compte . '|' . $fin . '|' . (self::sequence_dans($attendu) + 1);
+        // La GÉNÉRATION est RECOPIÉE telle quelle : une écriture ne peut pas
+        // « rajeunir » le compteur, elle atteste au contraire de son identité.
+        $valeur = $compte . '|' . $fin . '|' . self::generation_de($attendu) . '|' . (self::sequence_dans($attendu) + 1);
         $touche = $wpdb->query($wpdb->prepare(
             "UPDATE `{$wpdb->options}` SET option_value = %s WHERE option_name = %s AND option_value = %s",
             $valeur,
@@ -370,11 +461,10 @@ final class TUC_Onboarding_Restaurant
         return self::relire_egal($cle, $valeur);
     }
 
-    /** Séquence portée par une valeur de compteur (« compte|fin|séquence »). */
+    /** Séquence portée par une valeur de compteur (dernier champ). */
     private static function sequence_dans(string $valeur): int
     {
-        $parties = explode('|', $valeur);
-        return (int) ($parties[2] ?? 0);
+        return self::composantes($valeur)['sequence'];
     }
 
     /** Séquence de la ligne en base pour ce compteur (0 si absente ou illisible). */
@@ -723,6 +813,13 @@ final class TUC_Onboarding_Restaurant
      *    → la création est un INSERT unique (jamais suivi d'un UPDATE) ; si la
      *      ligne apparaît entre-temps, on rend false et l'appelant retente sous
      *      verrou, au lieu d'écraser.
+     * 4. (n°6) ABA PAR RECRÉATION : la ligne supprimée puis recréée repartait à
+     *    « 1|<même fin>|1 ». Une écriture conditionnelle préparée AVANT la
+     *    suppression retrouvait alors exactement la valeur comparée et pouvait
+     *    être acceptée. → la valeur porte une GÉNÉRATION tirée d'un compteur
+     *    global strictement croissant, jamais réutilisée ; un « reset » de
+     *    fenêtre échue est une écriture CONDITIONNELLE, donc la génération de la
+     *    ligne est conservée. Mesuré : `aba-recreation.php`.
      */
     private static function incrementer_compteur(string $cle, ?callable $garde = null): bool
     {
@@ -736,8 +833,17 @@ final class TUC_Onboarding_Restaurant
             // ligne entre la lecture et l'instant présent, on n'écrase pas.
             return self::ecrire_compteur($cle, 1, time() + HOUR_IN_SECONDS, null);
         }
-        [$n, $restant] = self::lire_compteur($cle);
+        // On réutilise la valeur lue pour décider, et c'est CETTE valeur qui
+        // sert d'attendu au CAS : relire une seconde fois (ancienne version)
+        // ouvrait une fenêtre où la décision portait sur un état déjà remplacé.
+        [$n, $restant] = self::lire_valeur($brut);
         $fin = $restant > 0 ? time() + $restant : time() + HOUR_IN_SECONDS;
+        if ($n <= 0) {
+            // Fenêtre échue : on repart à un, MAIS en écriture CONDITIONNELLE
+            // sur la valeur lue — donc la génération de la ligne est conservée et
+            // aucune purge concurrente ne peut être « annulée » par ce reset.
+            return self::ecrire_compteur($cle, 1, $fin, $brut);
+        }
         return self::ecrire_compteur($cle, $n + 1, $fin, $brut);
     }
 
@@ -869,26 +975,37 @@ final class TUC_Onboarding_Restaurant
     }
 
     /**
+     * Curseur de purge, gardé en base : c'est ce qui permet à une passe de
+     * REPRENDRE là où la précédente s'est arrêtée, au lieu de repartir du début.
+     *
+     * Revue n°6, point 2 : la passe précédente retenait en mémoire tous les noms
+     * vus vivants et les réinjectait en `NOT IN (...)` dans la fenêtre suivante.
+     * Sur un volume réel, cela faisait (a) une requête de plus en plus longue,
+     * (b) une mémoire proportionnelle au nombre de compteurs vivants, (c) aucun
+     * état conservé : la passe suivante relisait les mêmes 500 premières lignes.
+     *
+     * Le curseur est UNE ligne d'options, donc UNE sur tout le site, quelle que
+     * soit l'adresse du visiteur. Il n'est jamais supprimé par la purge.
+     */
+    private const OPTION_CURSEUR = 'tuc_purge_curseur';
+
+    /** Borne de temps d'un appel : une purge ne doit jamais allonger une requête publique. */
+    private const PURGE_MS_MAX = 250;
+
+    /**
      * Balayage des lignes périmées : compteurs échus depuis plus de
      * RETENTION_COMPTEUR et verrous orphelins très anciens. Sans lui, chaque
      * nouvelle IP laisserait une ligne d'options pour toujours.
      *
-     * DEUX DÉFAUTS CORRIGÉS (revue n°3, point 2) :
+     * HISTORIQUE DES DÉFAUTS, tous reproduits par un test avant correction :
      *
-     * 1. la suppression se faisait PAR NOM, après une sélection : une ligne
-     *    renouvelée entre les deux (nouvelle écriture d'un autre processus)
-     *    aurait été effacée. Désormais le DELETE est conditionnel à la valeur
-     *    EXACTE qui a été lue (`AND option_value = %s`) : si la ligne a changé,
-     *    zéro ligne touchée, elle survit.
-     * 2. le `LIKE 'tuc_%'` ramenait d'autres clés du site (tuc_vapid_*, etc.) qui
-     *    pouvaient remplir la fenêtre de 500 et laisser les mêmes lignes
-     *    anciennes hors de portée pour toujours. La sélection vise maintenant
-     *    EXACTEMENT nos deux préfixes, triés par nom : chaque passe supprime ce
-     *    qu'elle a lu, donc la fenêtre avance et le balayage progresse.
-     *
-     * Portable À DESSEIN : pas de `SUBSTRING_INDEX` (MySQL seulement), pas de
-     * `CAST(... AS SIGNED)` — la version SQL « élégante » marchait sur MariaDB et
-     * échouait sur SQLite, c'est le test qui l'a dit.
+     * n°3 : suppression par nom après sélection → DELETE conditionnel sur la
+     *       valeur exacte (une ligne renouvelée survit).
+     * n°4 : 500 lignes vivantes triées avant les périmées → la fenêtre
+     *       n'avançait pas ; corrigé alors par une exclusion en mémoire.
+     * n°6 : cette exclusion en mémoire ne bornait rien (requête et mémoire
+     *       proportionnelles au nombre de vivantes, pas de reprise). → CURSEUR
+     *       PERSISTANT + PROGRESSION STRICTEMENT CROISSANTE + BUDGET DE TEMPS.
      */
     private static function purger_lignes_perimees(int $plafond = 500): int
     {
@@ -902,59 +1019,73 @@ final class TUC_Onboarding_Restaurant
      * Le balayage lui-même, sans le tirage aléatoire : c'est lui qu'on teste.
      * Rend le nombre de lignes réellement supprimées.
      *
-     * LE BLOCAGE QUE LA REVUE N°4 A NOMMÉ (500 lignes VIVANTES triées avant les
-     * périmées) : la fenêtre `LIMIT`, triée par nom, relisait toujours les mêmes
-     * lignes vivantes sans jamais atteindre les périmées derrière.
+     * INCORRECTIONS INTERDITES PAR CONSTRUCTION :
+     *  - la fenêtre est toujours `option_name > curseur` (jamais `NOT IN`) :
+     *    sa taille ne dépend plus de ce qui a été vu, seulement du `LIMIT` ;
+     *  - le curseur ne recule jamais et n'est écrit qu'après le traitement de la
+     *    fenêtre : une passe interrompue reprend exactement au même endroit ;
+     *  - une visite complète (fenêtre vide) remet le curseur à zéro, sinon les
+     *    lignes écrites plus tard, dont le nom est « avant » le curseur, ne
+     *    seraient plus jamais visitées ;
+     *  - le temps consommé est borné (`$msMax`) : au-delà, on s'arrête proprement
+     *    et la passe suivante continue. La purge est déclenchée pendant une
+     *    requête publique : elle doit rester invisible dans le temps de réponse.
      *
-     * Correction : chaque passe retient les lignes qu'elle a lues et laissées en
-     * vie, puis les EXCLUT de la sélection de la passe suivante. La fenêtre
-     * avance donc de 500 lignes par passe même quand toutes les premières sont
-     * vivantes. Ces noms ne sont gardés qu'en mémoire ; aucun registre n'est
-     * écrit en base.
+     * @param int $plafond   lignes par fenêtre
+     * @param int $fenetresMax garde-fou de sécurité (nombre de fenêtres)
+     * @param int $msMax     budget de temps de l'appel, en millisecondes (0 = illimité pour les tests)
      */
-    private static function balayer_lignes_perimees(int $plafond = 500, int $fenetresMax = 2000): int
+    private static function balayer_lignes_perimees(int $plafond = 500, int $fenetresMax = 2000, int $msMax = self::PURGE_MS_MAX): int
     {
         global $wpdb;
+        $debut = microtime(true);
         $limite = time() - self::RETENTION_COMPTEUR;
-        $vuesVivantes = [];
         $supprimees = 0;
         $passes = 0;
         $lues = 0;
+        $curseur = (string) $wpdb->get_var($wpdb->prepare(
+            "SELECT option_value FROM `{$wpdb->options}` WHERE option_name = %s",
+            self::OPTION_CURSEUR
+        ));
+        $depart = $curseur;
 
-        // On boucle jusqu'à avoir parcouru TOUTE la file, en excluant à chaque
-        // tour ce qui a déjà été vu vivant. La borne n'est qu'un garde-fou de
-        // temps de requête : 2000 fenêtres de 500 = 1 000 000 de lignes lues en
-        // un appel, et `$GLOBALS['tuc_purge_lues']` dit où l'on s'est arrêté.
         while ($passes < max(1, $fenetresMax)) {
-            $passes++;
-            $exclure = array_keys($vuesVivantes);
-            $exclusion = '';
-            if ($exclure !== []) {
-                $exclusion = ' AND option_name NOT IN (' . implode(',', array_fill(0, count($exclure), '%s')) . ')';
+            if ($msMax > 0 && $passes > 0 && (microtime(true) - $debut) * 1000 >= $msMax) {
+                break; // budget épuisé : la passe suivante reprendra au curseur
             }
-            $params = array_merge(
-                [$wpdb->esc_like('tuc_tentatives_') . '%', $wpdb->esc_like('tuc_demandes_') . '%'],
-                $exclure,
-                [max(1, $plafond)]
-            );
+            $passes++;
+
             $lignes = $wpdb->get_results($wpdb->prepare(
                 "SELECT option_name, option_value FROM `{$wpdb->options}`
-                  WHERE (option_name LIKE %s OR option_name LIKE %s)" . $exclusion . "
+                  WHERE (option_name LIKE %s OR option_name LIKE %s)
+                    AND option_name > %s
                   ORDER BY option_name ASC
                   LIMIT %d",
-                ...$params
+                $wpdb->esc_like('tuc_tentatives_') . '%',
+                $wpdb->esc_like('tuc_demandes_') . '%',
+                $curseur,
+                max(1, $plafond)
             ), ARRAY_A);
+
             if (empty($lignes)) {
-                break; // plus rien à voir : la file est parcourue
+                // File parcourue : on repart du début à la prochaine passe.
+                self::ecrire_curseur('');
+                $curseur = '';
+                break;
             }
             $lues += count($lignes);
 
+            $dernier = $curseur;
             foreach ((array) $lignes as $ligne) {
                 $nom = (string) ($ligne['option_name'] ?? '');
                 $valeur = (string) ($ligne['option_value'] ?? '');
+                if ($nom <= $dernier) {
+                    break; // sécurité : jamais deux fois le même nom dans une passe
+                }
+                $dernier = $nom;
+
                 if (!preg_match('/^tuc_(tentatives|demandes)_[a-z0-9]+(_verrou)?$/', $nom)) {
-                    $vuesVivantes[$nom] = true; // jamais notre bien : on l'ignore à jamais
-                    continue;
+                    continue; // jamais notre bien : laissé tel quel
                 }
                 // Point d'observation (action WordPress) : sans auditeur, aucun
                 // effet. Il existe pour que le test puisse renouveler la ligne
@@ -963,8 +1094,7 @@ final class TUC_Onboarding_Restaurant
 
                 $instant = (int) (explode('|', $valeur)[1] ?? 0);
                 if ($instant <= 0 || $instant >= $limite) {
-                    $vuesVivantes[$nom] = true; // vivante : écartée des fenêtres suivantes
-                    continue;
+                    continue; // vivante : on la laisse, le curseur l'a dépassée
                 }
                 // CONDITIONNEL : ne supprime que si la valeur est encore celle lue.
                 $touche = $wpdb->query($wpdb->prepare(
@@ -975,19 +1105,59 @@ final class TUC_Onboarding_Restaurant
                 if ((int) $touche === 1) {
                     $supprimees++;
                     self::purger_cache_option($nom);
-                } else {
-                    $vuesVivantes[$nom] = true; // renouvelée juste avant : elle survit
                 }
             }
 
+            // Curseur écrit APRÈS traitement : une interruption relit la fenêtre
+            // (travail refait, jamais travail sauté).
+            $curseur = $dernier;
+            self::ecrire_curseur($curseur);
         }
 
         wp_cache_delete('alloptions', 'options');
         wp_cache_delete('notoptions', 'options');
-        // Diagnostic : ce que cette passe a réellement lu, et en combien de fenêtres.
         $GLOBALS['tuc_purge_lues'] = $lues;
         $GLOBALS['tuc_purge_fenetres'] = $passes;
+        $GLOBALS['tuc_purge_ms'] = (int) round((microtime(true) - $debut) * 1000);
+        $GLOBALS['tuc_purge_curseur_depart'] = $depart;
+        $GLOBALS['tuc_purge_curseur_fin'] = $curseur;
         return $supprimees;
+    }
+
+    /** Écrit (ou efface, si chaîne vide) le curseur de purge. */
+    private static function ecrire_curseur(string $valeur): void
+    {
+        global $wpdb;
+        if ($valeur === '') {
+            $wpdb->query($wpdb->prepare(
+                "DELETE FROM `{$wpdb->options}` WHERE option_name = %s",
+                self::OPTION_CURSEUR
+            ));
+        } else {
+            $wpdb->query($wpdb->prepare(
+                "INSERT INTO `{$wpdb->options}` (option_name, option_value, autoload) VALUES (%s, %s, 'no')
+                 ON DUPLICATE KEY UPDATE option_value = VALUES(option_value)",
+                self::OPTION_CURSEUR,
+                $valeur
+            ));
+            // SQLite ne connaît pas ON DUPLICATE KEY : on retente en deux temps.
+            if (self::derniere_erreur_sql() !== '') {
+                $wpdb->last_error = '';
+                $wpdb->query($wpdb->prepare(
+                    "UPDATE `{$wpdb->options}` SET option_value = %s WHERE option_name = %s",
+                    $valeur,
+                    self::OPTION_CURSEUR
+                ));
+                if ((int) $wpdb->rows_affected === 0) {
+                    $wpdb->query($wpdb->prepare(
+                        "INSERT OR IGNORE INTO `{$wpdb->options}` (option_name, option_value, autoload) VALUES (%s, %s, 'no')",
+                        self::OPTION_CURSEUR,
+                        $valeur
+                    ));
+                }
+            }
+        }
+        self::purger_cache_option(self::OPTION_CURSEUR);
     }
 
     /** Message avec un délai lisible : « dans 42 minutes », pas « plus tard ». */
