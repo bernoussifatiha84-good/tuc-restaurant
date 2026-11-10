@@ -227,8 +227,10 @@ function tuc_parcours_restaurateur_contrat(?callable $assertExterne = null): int
         };
         $valeur = $lu($cleExp);
         $compter(
-            is_string($valeur) && preg_match('/^\d+\|\d+$/', $valeur) === 1,
-            '21. le compteur stocke son compte ET son instant d’expiration'
+            // format actuel : « compte|fin|séquence » — la séquence fait partie de
+            // la valeur comparée par le CAS, c'est elle qui ferme le cas ABA.
+            is_string($valeur) && preg_match('/^\d+\|\d+\|\d+$/', $valeur) === 1,
+            '21. le compteur stocke son compte, son instant d’expiration ET sa séquence'
         );
         // expiration dépassée -> le compteur repart à zéro
         global $wpdb;
@@ -761,6 +763,71 @@ function tuc_parcours_restaurateur_contrat(?callable $assertExterne = null): int
         } while ($restant > 0 && $passes < 10);
         $compter($restant === 0 && $passes <= 3, '82. la fenêtre de 500 ne bloque pas : 520 lignes purgées en ' . $passes . ' passe(s)');
         $compter((string) $lu($etrangere) === $valeurEtrangere, '83. une clé d’un autre module n’est jamais touchée par la purge');
+
+        // =====================================================================
+        // 16. Compteur : ligne disparue, et ABA (revue n°4, point 2)
+        // =====================================================================
+        $cleDis = 'tuc_demandes_' . md5('192.0.2.130');
+        $nomDis = $cleDis . '_verrou';
+        foreach ([$cleDis, $nomDis] as $nn) {
+            $wpdb->query($wpdb->prepare("DELETE FROM {$wpdb->options} WHERE option_name = %s", $nn));
+        }
+        $wpdb->query($wpdb->prepare(
+            "INSERT INTO {$wpdb->options} (option_name, option_value, autoload) VALUES (%s, %s, 'no')",
+            $cleDis,
+            '2|' . (time() + 3600) . '|4'
+        ));
+        $jDis = $appeler('prendre_verrou', [$nomDis]);
+        // la garde supprime la ligne juste avant l'écriture
+        $gardeDis = static function () use ($cleDis, $nomDis, $jDis, $appeler, $wpdb): bool {
+            $wpdb->query($wpdb->prepare("DELETE FROM {$wpdb->options} WHERE option_name = %s", $cleDis));
+            return $appeler('verrou_est_a_nous', [$nomDis, $jDis]);
+        };
+        $ecritDis = $appeler('incrementer_compteur', [$cleDis, $gardeDis]);
+        $compter($ecritDis === false, '84. ligne supprimée pendant l’opération : l’incrément est refusé');
+        $compter($lu($cleDis) === null, '85. la ligne n’est PAS recréée par un ancien détenteur');
+        $compter(
+            $appeler('ecrire_compteur', [$cleDis, 1, time() + 60, '2|0']) === false && $lu($cleDis) === null,
+            '86. une écriture conditionnelle sur une ligne absente n’insère rien'
+        );
+        $appeler('rendre_verrou', [$nomDis, $jDis]);
+
+        // ABA : 2 -> 3 -> 2 entre la lecture et l'écriture, séquence changée
+        $cleAba = 'tuc_demandes_' . md5('192.0.2.140');
+        $nomAba = $cleAba . '_verrou';
+        foreach ([$cleAba, $nomAba] as $nn) {
+            $wpdb->query($wpdb->prepare("DELETE FROM {$wpdb->options} WHERE option_name = %s", $nn));
+        }
+        $finAba = time() + 3600;
+        $wpdb->query($wpdb->prepare(
+            "INSERT INTO {$wpdb->options} (option_name, option_value, autoload) VALUES (%s, %s, 'no')",
+            $cleAba,
+            '2|' . $finAba . '|4'
+        ));
+        $jAba = $appeler('prendre_verrou', [$nomAba]);
+        $gardeAba = static function () use ($cleAba, $finAba, $wpdb): bool {
+            // écriture concurrente : 3 puis retour à 2, séquence 4 -> 7
+            $wpdb->query($wpdb->prepare(
+                "UPDATE {$wpdb->options} SET option_value = %s WHERE option_name = %s",
+                '3|' . $finAba . '|5',
+                $cleAba
+            ));
+            $wpdb->query($wpdb->prepare(
+                "UPDATE {$wpdb->options} SET option_value = %s WHERE option_name = %s",
+                '2|' . $finAba . '|7',
+                $cleAba
+            ));
+            return true;
+        };
+        $ecritAba = $appeler('incrementer_compteur', [$cleAba, $gardeAba]);
+        $valeurAba = (string) $lu($cleAba);
+        $compter($ecritAba === false, '87. ABA : l’incrément est refusé quand la valeur est revenue identique (séquence changée)');
+        $compter(explode('|', $valeurAba)[0] === '2' && explode('|', $valeurAba)[2] === '7', '88. le compteur concurrent est intact : ' . $valeurAba);
+        $appeler('rendre_verrou', [$nomAba, $jAba]);
+        $compter($appeler('incrementer_compteur', [$cleAba, static fn (): bool => true]) === true, '89. témoin : un incrément normal repasse ensuite');
+        foreach ([$cleAba, $nomAba] as $nn) {
+            $wpdb->query($wpdb->prepare("DELETE FROM {$wpdb->options} WHERE option_name = %s", $nn));
+        }
 
         // =====================================================================
         // 10. L'ancienne protection n'a pas disparu (pas de « suppression » pure)
