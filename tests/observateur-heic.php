@@ -89,6 +89,38 @@ $ok(count($journal()) === $avant, 'après désactivation, plus aucune écriture'
 $ok(tuc_heic_observations_purger() === true, 'purge explicite exécutée');
 $ok($journal() === [], 'journal vidé');
 
+echo "\n=== 5. Purge SANS envoi ET SANS lecture : WP-Cron déclenché seul ===\n";
+tuc_heic_observer_desactiver();
+tuc_heic_observations_purger();
+update_option('tuc_heic_observations', [
+    ['instant' => gmdate('c', time() - 4 * 86400), 'format' => 'heic', 'avant_apres' => 'avant-conversion'],
+    ['instant' => gmdate('c', time() - 3600),     'format' => 'jpeg', 'avant_apres' => 'converti-heic-vers-jpeg'],
+], false);
+tuc_heic_observer_activer(1);
+$ok(wp_next_scheduled('tuc_heic_observation_purge') !== false, 'une échéance de purge est planifiée dès l’activation');
+// On force l'échéance dans le passé : l'activation est « terminée ».
+$actif = get_option('tuc_heic_observation_jeton');
+$actif['jusqu_a'] = time() - 60;
+update_option('tuc_heic_observation_jeton', $actif, false);
+// AUCUN envoi, AUCUNE lecture : on ne déclenche que la tâche planifiée.
+do_action('tuc_heic_observation_purge');
+$restant = get_option('tuc_heic_observations', null);
+$ok($restant === null || $restant === [], 'la tâche horaire a effacé le journal SANS envoi ni lecture : ' . json_encode($restant));
+$ok(get_option('tuc_heic_observation_jeton', null) === null, 'l’observateur a été ÉTEINT à son échéance, sans intervention');
+
+// Activation encore valide : seules les entrées périmées partent.
+tuc_heic_observations_purger();
+update_option('tuc_heic_observations', [
+    ['instant' => gmdate('c', time() - 4 * 86400), 'format' => 'heic', 'avant_apres' => 'avant-conversion'],
+    ['instant' => gmdate('c', time() - 3600),     'format' => 'png',  'avant_apres' => 'avant-conversion'],
+], false);
+tuc_heic_observer_activer(60);
+do_action('tuc_heic_observation_purge');
+$apres = get_option('tuc_heic_observations', []);
+$ok(count($apres) === 1 && ($apres[0]['format'] ?? '') === 'png', 'activation valide : seule la périmée est partie, la récente reste');
+tuc_heic_observer_desactiver();
+tuc_heic_observations_purger();
+
 @unlink($jpeg);
 echo "\nbilan : " . ($ko === 0 ? 'TOUT VERT' : $ko . ' ECHEC(S)') . "\n";
 exit($ko === 0 ? 0 : 1);

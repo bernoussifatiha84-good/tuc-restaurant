@@ -116,8 +116,13 @@ function tuc_heic_decodeur_disponible(): bool
  * nom du restaurant, la référence de demande.
  *
  * Activation EXPLICITE et TEMPORAIRE : `tuc_heic_observer_activer(60)` (minutes).
- * Durée de vie des entrées : `TUC_HEIC_OBSERVATION_TTL` (2 jours par défaut),
- * appliquée À LA LECTURE — donc sans attendre un nouvel envoi.
+ * Durée de vie des entrées : `TUC_HEIC_OBSERVATION_TTL` (2 jours par défaut).
+ * La suppression est réellement déclenchée sans envoi ET sans lecture par deux
+ * échéances WP-Cron (`tuc_heic_observation_purge`, horaire) : l'une efface les
+ * entrées périmées, l'autre éteint l'observateur à son échéance. Une TTL seule
+ * ne garantissait rien : sans lecture ni envoi, l'option restait en base.
+ * Repli assumé : sur un site sans trafic ni WP-Cron externe, les échéances ne
+ * se déclenchent pas. C'est écrit dans la fiche de l'observateur.
  */
 const TUC_HEIC_OBSERVATION_OPTION = 'tuc_heic_observations';
 const TUC_HEIC_OBSERVATION_JETON = 'tuc_heic_observation_jeton';
@@ -138,6 +143,43 @@ function tuc_heic_observations_actif(): bool
     return true;
 }
 
+/** Échéance de l'activation en cours (0 si aucune). */
+function tuc_heic_observation_echeance(): int
+{
+    $actif = get_option(TUC_HEIC_OBSERVATION_JETON, null);
+    return is_array($actif) && !empty($actif['jusqu_a']) ? (int) $actif['jusqu_a'] : 0;
+}
+
+/**
+ * Tâche horaire : efface les entrées périmées ET éteint l'observateur arrivé à
+ * échéance. S'exécute sans envoi et sans lecture. Ne fait rien si l'observateur
+ * n'a jamais été activé (aucun zéro n'est même écrit).
+ */
+function tuc_heic_observation_cron_purge(): void
+{
+    if (tuc_heic_observation_echeance() > 0 && !tuc_heic_observations_actif()) {
+        // L'échéance est passée : on éteint (tuc_heic_observations_actif() a déjà
+        // supprimé le jeton) et on efface les observations restantes.
+        tuc_heic_observations_purger();
+        return;
+    }
+    $journal = get_option(TUC_HEIC_OBSERVATION_OPTION, null);
+    if (!is_array($journal) || $journal === []) {
+        return; // rien en base : on n'écrit pas d'option vide
+    }
+    tuc_heic_observations_lire(); // applique la TTL et réécrit si besoin
+}
+
+/** Programme les deux échéances (idempotent). */
+function tuc_heic_observation_planifier(): void
+{
+    if (!wp_next_scheduled('tuc_heic_observation_purge')) {
+        wp_schedule_event(time() + HOUR_IN_SECONDS, 'hourly', 'tuc_heic_observation_purge');
+    }
+}
+add_action('tuc_heic_observation_purge', 'tuc_heic_observation_cron_purge');
+add_action('init', 'tuc_heic_observation_planifier');
+
 /**
  * Active l'observateur pour N minutes. Rend un jeton à conserver.
  * Sans cette activation, aucune écriture n'a lieu.
@@ -150,6 +192,8 @@ function tuc_heic_observer_activer(int $minutes = 60): string
         'jusqu_a'  => time() + max(1, $minutes) * 60,
         'active_le' => gmdate('c'),
     ], false);
+    // Une échéance EXISTE dès l'activation : la purge ne dépend plus d'une lecture.
+    tuc_heic_observation_planifier();
     return $jeton;
 }
 
