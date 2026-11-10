@@ -658,6 +658,111 @@ function tuc_parcours_restaurateur_contrat(?callable $assertExterne = null): int
         $compter(strpos($msg3, 'minutes') !== false && strpos($msg3, 'minute.') === false, '44. 120 s devient « 2 minutes »');
 
         // =====================================================================
+        // 14. Entrelacement garde -> reprise -> écriture (revue n°3, point 1)
+        // =====================================================================
+        $cleEnt = 'tuc_demandes_' . md5('192.0.2.120');
+        $nomEnt = $cleEnt . '_verrou';
+        foreach ([$cleEnt, $nomEnt] as $nn) {
+            $wpdb->query($wpdb->prepare("DELETE FROM {$wpdb->options} WHERE option_name = %s", $nn));
+        }
+        $wpdb->query($wpdb->prepare(
+            "INSERT INTO {$wpdb->options} (option_name, option_value, autoload) VALUES (%s, %s, 'no')",
+            $cleEnt,
+            '2|' . (time() + 3600)
+        ));
+        $jEntA = $appeler('prendre_verrou', [$nomEnt]);
+        $jEntB = null;
+        // La garde de A fait ce que ferait le monde extérieur pendant sa pause :
+        // son verrou vieillit, B le reprend et écrit. Puis A répond « oui ».
+        $gardeEnt = static function () use (&$jEntB, $nomEnt, $jEntA, $cleEnt, $appeler, $wpdb): bool {
+            $wpdb->query($wpdb->prepare(
+                "UPDATE {$wpdb->options} SET option_value = %s WHERE option_name = %s",
+                $jEntA . '|' . (time() - 60),
+                $nomEnt
+            ));
+            $jEntB = $appeler('prendre_verrou', [$nomEnt]);
+            $appeler('ecrire_compteur', [$cleEnt, 3, time() + 3000]);
+            return true;
+        };
+        $ecritEntA = $appeler('incrementer_compteur', [$cleEnt, $gardeEnt]);
+        $valeurEnt = (string) $lu($cleEnt);
+        $compter(is_string($jEntB) && $jEntB !== $jEntA, '73. pendant la pause de A, B reprend bien le verrou');
+        $compter($ecritEntA === false, '74. l’écriture de A, préparée sur un état périmé, est refusée');
+        $compter((int) explode('|', $valeurEnt)[0] === 3, '75. le compteur garde la valeur de B : ' . $valeurEnt);
+        $appeler('rendre_verrou', [$nomEnt, $jEntB]);
+        $compter($appeler('ecrire_compteur', [$cleEnt, 99, time() + 60, '2|0']) === false, '76. une écriture conditionnelle sur une valeur disparue est refusée par la base');
+        $jEntC = $appeler('prendre_verrou', [$nomEnt]);
+        $compter($appeler('incrementer_compteur', [$cleEnt, static fn (): bool => true]) === true, '77. témoin : sans concurrent, l’incrément s’applique');
+        $appeler('rendre_verrou', [$nomEnt, $jEntC]);
+        $compter($appeler('ouvrir_transaction') === 'transaction', '78. la base accepte une transaction (protection réelle, pas seulement conditionnelle)');
+        $appeler('annuler_transaction');
+        foreach ([$cleEnt, $nomEnt] as $nn) {
+            $wpdb->query($wpdb->prepare("DELETE FROM {$wpdb->options} WHERE option_name = %s", $nn));
+        }
+
+        // =====================================================================
+        // 15. Purge : renouvellement entre sélection et suppression (point 2)
+        // =====================================================================
+        $renouv = 'tuc_tentatives_' . md5('purge-renouvelee');
+        $tem = ['tuc_tentatives_' . md5('purge-t1'), 'tuc_tentatives_' . md5('purge-t2')];
+        foreach (array_merge([$renouv], $tem) as $nn) {
+            $wpdb->query($wpdb->prepare("DELETE FROM {$wpdb->options} WHERE option_name = %s", $nn));
+            $wpdb->query($wpdb->prepare(
+                "INSERT INTO {$wpdb->options} (option_name, option_value, autoload) VALUES (%s, %s, 'no')",
+                $nn,
+                '3|' . (time() - 3 * 86400)
+            ));
+        }
+        $dejaRenouvelee = false;
+        $auditeur = static function (string $nomVu) use (&$dejaRenouvelee, $renouv, $wpdb, $lu): void {
+            if ($nomVu === $renouv && !$dejaRenouvelee) {
+                $dejaRenouvelee = true;
+                $wpdb->query($wpdb->prepare(
+                    "UPDATE {$wpdb->options} SET option_value = %s WHERE option_name = %s",
+                    '1|' . (time() + 1800),
+                    $renouv
+                ));
+            }
+        };
+        add_action('tuc_avant_suppression_ligne_perimee', $auditeur, 10, 1);
+        $appeler('balayer_lignes_perimees', [500]);
+        remove_action('tuc_avant_suppression_ligne_perimee', $auditeur, 10);
+        $compter($dejaRenouvelee === true, '79. le renouvellement a eu lieu ENTRE la sélection et la suppression');
+        $compter($lu($renouv) !== null, '80. la ligne renouvelée n’est PAS effacée par la purge');
+        $compter($lu($tem[0]) === null && $lu($tem[1]) === null, '81. les lignes restées périmées sont bien supprimées');
+        foreach (array_merge([$renouv], $tem) as $nn) {
+            $wpdb->query($wpdb->prepare("DELETE FROM {$wpdb->options} WHERE option_name = %s", $nn));
+        }
+
+        // la fenêtre avance : 520 lignes périmées, LIMIT 500, deux passes
+        $serie = [];
+        for ($i = 0; $i < 520; $i++) {
+            $serie[] = 'tuc_tentatives_' . md5('serie-' . $i);
+        }
+        foreach ($serie as $nn) {
+            $wpdb->query($wpdb->prepare("DELETE FROM {$wpdb->options} WHERE option_name = %s", $nn));
+            $wpdb->query($wpdb->prepare(
+                "INSERT INTO {$wpdb->options} (option_name, option_value, autoload) VALUES (%s, %s, 'no')",
+                $nn,
+                '9|' . (time() - 2 * 86400)
+            ));
+        }
+        // une clé d'un autre module, périmée elle aussi : jamais touchée
+        $etrangere = 'tuc_vapid_pub';
+        $valeurEtrangere = (string) $lu($etrangere);
+        $passes = 0;
+        do {
+            $restant = (int) $wpdb->get_var($wpdb->prepare(
+                "SELECT COUNT(*) FROM {$wpdb->options} WHERE option_name IN (" . implode(',', array_fill(0, count($serie), '%s')) . ")",
+                ...$serie
+            ));
+            $appeler('balayer_lignes_perimees', [500]);
+            $passes++;
+        } while ($restant > 0 && $passes < 10);
+        $compter($restant === 0 && $passes <= 3, '82. la fenêtre de 500 ne bloque pas : 520 lignes purgées en ' . $passes . ' passe(s)');
+        $compter((string) $lu($etrangere) === $valeurEtrangere, '83. une clé d’un autre module n’est jamais touchée par la purge');
+
+        // =====================================================================
         // 10. L'ancienne protection n'a pas disparu (pas de « suppression » pure)
         // =====================================================================
         $compter(
