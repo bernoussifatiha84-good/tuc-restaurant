@@ -1059,6 +1059,66 @@ function tuc_parcours_restaurateur_contrat(?callable $assertExterne = null): int
         $wpdb->query($wpdb->prepare("DELETE FROM {$wpdb->options} WHERE option_name = %s", $gen));
 
         // =====================================================================
+        // 21. Échec d'allocation de génération VU DEPUIS LA ROUTE (revue n°9)
+        // 503, aucune demande, aucune photo, quota intact, puis réussite.
+        // =====================================================================
+        $ipGen = '198.51.100.241';
+        $_SERVER['REMOTE_ADDR'] = $ipGen;
+        $cleGenD = 'tuc_demandes_' . md5($ipGen);
+        $cleGenT = 'tuc_tentatives_' . md5($ipGen);
+        foreach ([$cleGenD, $cleGenD . '_verrou', $cleGenT, $cleGenT . '_verrou'] as $nn) {
+            $wpdb->query($wpdb->prepare("DELETE FROM {$wpdb->options} WHERE option_name = %s", $nn));
+        }
+        update_option('tuc_wa_numero', '212600000000', false);
+        $photoGen = sys_get_temp_dir() . '/gen-contract-' . wp_generate_password(5, false) . '.jpg';
+        $imGen = imagecreatetruecolor(320, 240);
+        imagejpeg($imGen, $photoGen, 80);
+        $soumettreGen = static function (string $nom) use ($photoGen): array {
+            $r = new WP_REST_Request('POST', '/tuc/v1/restaurant-applications');
+            $r->set_param('restaurant_name', $nom);
+            $r->set_file_params(['menu_photo' => [
+                'tmp_name' => $photoGen, 'name' => 'menu.jpg',
+                'size' => filesize($photoGen), 'error' => UPLOAD_ERR_OK,
+            ]]);
+            $res = rest_do_request($r);
+            return [$res->get_status(), $res->get_data()];
+        };
+        $nbDemandes = static fn (): int => (int) $wpdb->get_var(
+            "SELECT COUNT(*) FROM {$wpdb->posts} WHERE post_type = 'tuc_demande_resto'"
+        );
+        $nbPieces = static fn (): int => (int) $wpdb->get_var(
+            "SELECT COUNT(*) FROM {$wpdb->posts} WHERE post_type = 'attachment'"
+        );
+        $d0 = $nbDemandes();
+        $p0 = $nbPieces();
+        $panneGen = static function (string $q): string {
+            return strpos($q, 'tuc_purge_generation') !== false ? 'SELECT * FROM table_absente_revue9' : $q;
+        };
+        add_filter('query', $panneGen);
+        $muet = static fn (): bool => true;
+        set_error_handler(static function (int $no, string $txt) use ($muet): bool { return true; });
+        [$stGen, $corpsGen] = $soumettreGen('Snack Panne Generation');
+        restore_error_handler();
+        remove_filter('query', $panneGen);
+        $codeGen = is_array($corpsGen) ? (string) ($corpsGen['code'] ?? '') : '';
+        $compter($stGen === 503, '122. panne d’allocation de génération : la route rend 503 (obtenu ' . $stGen . ')');
+        $compter($codeGen === 'tuc_onboarding_storage', '123. le code est tuc_onboarding_storage');
+        $compter($nbDemandes() === $d0, '124. aucune demande créée (' . $d0 . ' -> ' . $nbDemandes() . ')');
+        $compter($nbPieces() === $p0, '125. aucune photo enregistrée (' . $p0 . ' -> ' . $nbPieces() . ' pièces jointes)');
+        $compter($lu($cleGenD) === null, '126. aucun compteur de demandes créé');
+        $compter($lu($cleGenT) === null, '127. aucune tentative consommée (ROLLBACK complet)');
+        [$stOk, ] = $soumettreGen('Snack Apres Panne Generation');
+        $valeurGen = (string) $lu($cleGenD);
+        $compter($stOk === 201, '128. la soumission suivante est acceptée (obtenu ' . $stOk . ')');
+        $compter($nbDemandes() === $d0 + 1, '129. exactement une demande créée');
+        $compter((int) explode('|', $valeurGen)[0] === 1, '130. le quota est consommé exactement une fois : ' . $valeurGen);
+        $compter((int) explode('|', $valeurGen)[2] > 0, '131. la génération est allouée après la panne (' . explode('|', $valeurGen)[2] . ')');
+        foreach ([$cleGenD, $cleGenD . '_verrou', $cleGenT, $cleGenT . '_verrou'] as $nn) {
+            $wpdb->query($wpdb->prepare("DELETE FROM {$wpdb->options} WHERE option_name = %s", $nn));
+        }
+        @unlink($photoGen);
+
+        // =====================================================================
         // 10. L'ancienne protection n'a pas disparu (pas de « suppression » pure)
         // =====================================================================
         $compter(
