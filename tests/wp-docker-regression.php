@@ -1337,7 +1337,15 @@ try {
     $urlBac = getenv('TUC_WP_URL') ?: ('http://127.0.0.1:' . (getenv('TUC_WP_PORT') ?: '8080'));
     // `wp` est sur le PATH dans l'image wordpress:cli ; en bac local on passe le phar.
     $wpCliBin = getenv('TUC_WP_CLI') ?: 'wp';
-    $lancerBac = static function (string $script, array $args) use ($bac): array {
+    // Le marqueur de bac doit exister AVANT le sous-processus : la garde des
+    // scripts destructifs l'exige, et le test de garde de limiteur-resilience
+    // le retire puis le remet — d'où la restauration ci-dessous.
+    $marqueurBac = $bac . '/.tuc-bac-jetable';
+    $marqueurAvant = is_file($marqueurBac) ? (string) file_get_contents($marqueurBac) : null;
+    if (!is_file($marqueurBac)) {
+        @file_put_contents($marqueurBac, 'bac CI ' . gmdate('c') . "\n");
+    }
+    $lancerBac = static function (string $script, array $args) use ($bac, $wpCliBin): array {
         $sortie = [];
         $code = 0;
         exec(
@@ -1355,6 +1363,12 @@ try {
     );
     foreach ($sortieResilience as $ligne) {
         WP_CLI::log('    [resilience] ' . $ligne);
+    }
+    if (!is_file($marqueurBac)) {
+        @file_put_contents($marqueurBac, $marqueurAvant ?? ('bac CI ' . gmdate('c') . "\n"));
+    }
+    if ($codeResilience !== 0) {
+        WP_CLI::warning('résilience : sortie complète ci-dessus (code ' . $codeResilience . ').');
     }
     $assert($codeResilience === 0, sprintf('résilience du limiteur, bac jetable (code %d)', $codeResilience));
 
