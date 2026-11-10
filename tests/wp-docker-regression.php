@@ -1340,7 +1340,8 @@ try {
     // Le marqueur de bac doit exister AVANT le sous-processus : la garde des
     // scripts destructifs l'exige, et le test de garde de limiteur-resilience
     // le retire puis le remet — d'où la restauration ci-dessous.
-    $marqueurBac = $bac . '/.tuc-bac-jetable';
+    $marqueurBac = is_writable($bac) ? $bac . '/.tuc-bac-jetable' : $bac . '/wp-content/uploads/.tuc-bac-jetable';
+    @mkdir(dirname($marqueurBac), 0777, true);
     $marqueurAvant = is_file($marqueurBac) ? (string) file_get_contents($marqueurBac) : null;
     if (!is_file($marqueurBac)) {
         @file_put_contents($marqueurBac, 'bac CI ' . gmdate('c') . "\n");

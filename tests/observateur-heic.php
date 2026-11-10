@@ -28,7 +28,8 @@ $accord = in_array('--bac-jetable', $argv, true) || getenv('TUC_BAC_JETABLE') ==
 unset($wp);
 require $wpRoot . '/wp-load.php';
 
-$marque = is_file($wpRoot . '/.tuc-bac-jetable');
+$marque = is_file($wpRoot . '/.tuc-bac-jetable')
+    || is_file($wpRoot . '/wp-content/uploads/.tuc-bac-jetable');
 $host = strtolower((string) parse_url((string) get_option('home', ''), PHP_URL_HOST));
 $local = in_array($host, ['127.0.0.1', 'localhost', '::1'], true);
 if (!$accord || !$marque || !$local) {
