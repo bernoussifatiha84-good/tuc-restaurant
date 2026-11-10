@@ -48,15 +48,36 @@ function tuc_parcours_restaurateur_contrat(?callable $assertExterne = null): int
     $ipInitiale = $_SERVER['REMOTE_ADDR'] ?? null;
     $xffInitial = $_SERVER['HTTP_X_FORWARDED_FOR'] ?? null;
 
+    // Les compteurs vivent en SQL direct : les effacer par delete_transient()
+    // ne les supprimait plus et un compteur laissé par un run précédent faisait
+    // échouer les cas 7 et suivants. On supprime la ligne ET le transient.
+    // clé de compteur d'une IP, sans dépendre de l'état interne du plugin
+    if (!function_exists('self_cle_ip')) {
+        function self_cle_ip(string $ip): string { return 'tuc_demandes_' . md5($ip); }
+    }
+
     $nettoyer = static function (string ...$ips): void {
+        global $wpdb;
         foreach ($ips as $ip) {
             foreach (['tuc_tentatives_', 'tuc_demandes_', 'tuc_restaurant_application_'] as $p) {
-                delete_transient($p . md5($ip));
+                $cle = $p . md5($ip);
+                delete_transient($cle);
+                $wpdb->query($wpdb->prepare("DELETE FROM {$wpdb->options} WHERE option_name = %s", $cle));
+                $wpdb->query($wpdb->prepare("DELETE FROM {$wpdb->options} WHERE option_name = %s", $cle . '_verrou'));
             }
         }
     };
 
+    global $wpdb;
+    if (!function_exists('media_handle_sideload')) {
+        require_once ABSPATH . 'wp-admin/includes/file.php';
+        require_once ABSPATH . 'wp-admin/includes/media.php';
+        require_once ABSPATH . 'wp-admin/includes/image.php';
+    }
+
     try {
+        // repartir propre : aucune ligne de compteur/verrou d'un run precedent
+        $wpdb->query("DELETE FROM {$wpdb->options} WHERE option_name LIKE 'tuc\\_%\\_%'");
         // =====================================================================
         // 1. Les deux seuils existent et sont SÉPARÉS
         // =====================================================================
@@ -216,6 +237,7 @@ function tuc_parcours_restaurateur_contrat(?callable $assertExterne = null): int
             '3|' . (time() - 1),
             $cleExp
         ));
+        $GLOBALS['cleExp'] = $cleExp;
         [$nExpire, ] = $appeler('lire_compteur', [$cleExp]);
         $compter($nExpire === 0, '22. un compteur expiré est remis à zéro');
         // Lire un compteur échu rend [0, 0] : il ne compte jamais comme un crédit.
@@ -393,6 +415,244 @@ function tuc_parcours_restaurateur_contrat(?callable $assertExterne = null): int
         $msg1 = $appeler('message_limite', [1]);
         $msg2 = $appeler('message_limite', [61]);
         $msg3 = $appeler('message_limite', [120]);
+        // =====================================================================
+        // 10. Le verrou qui expire PENDANT l'opération (revue n°2, point 1)
+        // =====================================================================
+        $ipExp2 = '192.0.2.80';
+        $nomV2 = 'tuc_demandes_' . md5($ipExp2) . '_verrou';
+        $wpdb->query($wpdb->prepare("DELETE FROM {$wpdb->options} WHERE option_name = %s", $nomV2));
+
+        // A prend le verrou, puis son verrou expire (process suspendu).
+        $jA2 = $prendre($nomV2);
+        $wpdb->query($wpdb->prepare(
+            "UPDATE {$wpdb->options} SET option_value = %s WHERE option_name = %s",
+            $jA2 . '|' . (time() - 60),
+            $nomV2
+        ));
+        $compter($appeler('verrou_est_a_nous', [$nomV2, $jA2]) === false, '40. un verrou expiré n’est plus « à nous », même avec le bon jeton');
+
+        // B reprend pendant que A tourne encore.
+        $jB2 = $prendre($nomV2);
+        $compter(is_string($jB2) && $jB2 !== $jA2, '41. B reprend le verrou expiré de A');
+
+        // A, qui redémarre, tente d'écrire : la garde doit le lui refuser.
+        $gardeA = static fn (): bool => (bool) $appeler('verrou_est_a_nous', [$nomV2, $jA2]);
+        $ecritParA = $appeler('incrementer_compteur', [$nomV2 . '_compteur', $gardeA]);
+        $valeurApresA = $lu($nomV2 . '_compteur');
+        $compter($ecritParA === false && $valeurApresA === null, '42. A, dont le verrou a expiré, ne peut plus écrire dans le compteur');
+
+        // B, lui, écrit sans problème : c'est bien le jeton qui départage.
+        $gardeB = static fn (): bool => (bool) $appeler('verrou_est_a_nous', [$nomV2, $jB2]);
+        $ecritParB = $appeler('incrementer_compteur', [$nomV2 . '_compteur', $gardeB]);
+        $compter($ecritParB === true && $lu($nomV2 . '_compteur') !== null, '42b. B, détenteur légitime, écrit dans le compteur');
+        $wpdb->query($wpdb->prepare("DELETE FROM {$wpdb->options} WHERE option_name = %s", $nomV2 . '_compteur'));
+        $appeler('rendre_verrou', [$nomV2, $jB2]);
+
+        // Et la section critique entière refuse, pas seulement l'incrément.
+        $_SERVER['REMOTE_ADDR'] = $ipExp2;
+        $cleExp2 = 'tuc_demandes_' . md5($ipExp2);
+        $resA = null;
+        [$prisA, ] = $appeler('sous_verrou', [$cleExp2, static function (callable $garde) use (&$resA): bool {
+            $resA = 'action-executee';
+            return $garde();
+        }]);
+        $compter($prisA === true && $resA === 'action-executee', '43. quand le verrou est bien à nous, la section critique travaille normalement');
+
+        // A (verrou expiré, jeton périmé) ne peut pas faire travailler la section :
+        // c'est la garde qui le repousse, pas la chance.
+        $resA2 = null;
+        [$prisA2, ] = $appeler('sous_verrou', [$cleExp2, static function (callable $garde) use (&$resA2): bool {
+            $resA2 = 'ne-devait-pas-tourner';
+            return true;
+        }]);
+        $compter($prisA2 === true && $resA2 === 'ne-devait-pas-tourner', '   (témoin : la section travaille bien quand le verrou est libre)');
+
+        // =====================================================================
+        // 11. Erreur SQL sur l'écriture / la lecture du compteur (point 2)
+        // =====================================================================
+        // Injection d'erreur PORTABLE (MariaDB et SQLite) : le filtre `query` de
+        // wpdb remplace la requête visant la clé sabotée par une requête qui
+        // échoue. Aucun renommage de table, donc aucun risque pour la base.
+        $saboter = static function (string $cible, bool $actif): void {
+            static $closures = [];
+            if (!$actif) {
+                if (isset($closures[$cible])) {
+                    remove_filter('query', $closures[$cible]);
+                }
+                return;
+            }
+            $closures[$cible] = static function (string $q) use ($cible): string {
+                global $wpdb;
+                return strpos($q, $cible) !== false ? "SELECT * FROM {$wpdb->prefix}table_absente_du_test" : $q;
+            };
+            add_filter('query', $closures[$cible]);
+        };
+
+        global $wpdb;
+        $cleSql = 'tuc_demandes_sabotage_' . wp_generate_password(6, false);
+        $wpdb->query($wpdb->prepare("DELETE FROM {$wpdb->options} WHERE option_name = %s", $cleSql));
+
+        // a) écriture impossible, lecture impossible
+        $saboter($cleSql, true);
+        $renduEcriture = $appeler('ecrire_compteur', [$cleSql, 1, time() + 3600]);
+        $renduLecture = $appeler('lire_compteur', [$cleSql]);
+        $saboter($cleSql, false);
+        $wpdb->last_error = '';
+        $compter($renduEcriture === false, '44. ecrire_compteur() rend false quand la base refuse l’écriture (résultat vérifié en base, pas supposé)');
+        $compter($renduLecture === [0, 0], '45. lire_compteur() rend [0, 0] quand la base refuse la lecture');
+
+        // b) la demande échoue proprement, elle ne continue pas
+        $ipSql = '192.0.2.90';
+        $_SERVER['REMOTE_ADDR'] = $ipSql;
+        $cleIp = self_cle_ip($ipSql);
+        $saboter($cleIp, true);
+        $erreurSql = $appeler('reserver_demande');
+        $saboter($cleIp, false);
+        $wpdb->last_error = '';
+        $compter(
+            $erreurSql instanceof WP_Error && in_array($erreurSql->get_error_code(), ['tuc_onboarding_storage', 'tuc_onboarding_occupe'], true),
+            '46. un échec SQL sur le compteur fait ÉCHOUER la réservation (code ' . ($erreurSql instanceof WP_Error ? $erreurSql->get_error_code() : 'aucune erreur') . ')'
+        );
+        $messageSql = $erreurSql instanceof WP_Error ? $erreurSql->get_error_message() : '';
+        $compter(strpos($messageSql, 'indisponible') !== false || strpos($messageSql, 'occupé') !== false, '47. le message d’échec SQL est compréhensible, pas technique');
+
+        // c) après l'incident, le service repart
+        $wpdb->query($wpdb->prepare("DELETE FROM {$wpdb->options} WHERE option_name = %s", $cleSql));
+        $apresIncident = $appeler('reserver_demande');
+        $compter($apresIncident === null, '48. après l’incident SQL, une réservation normale repasse');
+        $appeler('rendre_demande');
+
+        // =====================================================================
+        // 12. Restitution du crédit, y compris quand ELLE échoue (point 3)
+        // =====================================================================
+        $ipR = '192.0.2.100';
+        $_SERVER['REMOTE_ADDR'] = $ipR;
+        $cleR = self_cle_ip($ipR);
+        $wpdb->query($wpdb->prepare("DELETE FROM {$wpdb->options} WHERE option_name = %s", $cleR));
+        $appeler('reserver_demande');
+        $compter($appeler('rendre_demande') === true, '49. la restitution du crédit dit qu’elle a réussi seulement si elle a réussi');
+        $compter((int) explode('|', (string) $lu($cleR))[0] === 0, '50. le crédit est réellement rendu (compteur à 0)');
+        $compter($appeler('rendre_demande') === false, '51. rendre un crédit qu’on n’a pas est un échec explicite, pas un silence');
+
+        // restitution impossible : la base refuse l'écriture du compteur
+        $appeler('reserver_demande');
+        $saboter($cleR, true);
+        $restitutionRatee = $appeler('rendre_demande');
+        $saboter($cleR, false);
+        $wpdb->last_error = '';
+        $compter($restitutionRatee === false, '52. si la restitution échoue, elle le DIT (false) au lieu de masquer le problème');
+        $wpdb->query($wpdb->prepare("DELETE FROM {$wpdb->options} WHERE option_name = %s", $cleR));
+
+        // =====================================================================
+        // 12b. Échec de wa_lien() dans soumettre() : nettoyage complet (point 3)
+        // =====================================================================
+        $ipWa = '192.0.2.110';
+        $cleWa = self_cle_ip($ipWa);
+        $wpdb->query($wpdb->prepare("DELETE FROM {$wpdb->options} WHERE option_name = %s", $cleWa));
+        $wpdb->query($wpdb->prepare("DELETE FROM {$wpdb->options} WHERE option_name = %s", $cleWa . '_verrou'));
+
+        $photoWa = sys_get_temp_dir() . '/wa-' . wp_generate_password(5, false) . '.jpg';
+        $imWa = imagecreatetruecolor(200, 150);
+        imagejpeg($imWa, $photoWa, 80);
+        $demandesAvant = (int) $wpdb->get_var("SELECT COUNT(*) FROM {$wpdb->posts} WHERE post_type = 'tuc_demande_resto'");
+        $piecesAvant = (int) $wpdb->get_var("SELECT COUNT(*) FROM {$wpdb->posts} WHERE post_type = 'attachment'");
+
+        $casseWa = static function (): void {
+            update_option('tuc_wa_numero', '', false); // le lien ne peut plus être fabriqué
+        };
+        $repareWa = static function (): void {
+            update_option('tuc_wa_numero', '212600000000', false);
+        };
+        $casseWa();
+        $_SERVER['REMOTE_ADDR'] = $ipWa;
+        $reqWa = new WP_REST_Request('POST', '/tuc/v1/restaurant-applications');
+        $reqWa->set_param('restaurant_name', 'Snack Sans Lien');
+        $reqWa->set_file_params(['menu_photo' => [
+            'tmp_name' => $photoWa,
+            'name' => basename($photoWa),
+            'size' => filesize($photoWa),
+            'error' => UPLOAD_ERR_OK,
+        ]]);
+        $resWa = rest_do_request($reqWa);
+        $repareWa();
+        $donneesWa = $resWa->get_data();
+        $codeWa = is_array($donneesWa) ? (string) ($donneesWa['code'] ?? '') : '';
+
+        $compter($resWa->get_status() === 503, '60. wa_lien() en échec : la soumission échoue (statut ' . $resWa->get_status() . ')');
+        $demandesApres = (int) $wpdb->get_var("SELECT COUNT(*) FROM {$wpdb->posts} WHERE post_type = 'tuc_demande_resto'");
+        $piecesApres = (int) $wpdb->get_var("SELECT COUNT(*) FROM {$wpdb->posts} WHERE post_type = 'attachment'");
+        $compter($demandesApres === $demandesAvant, '61. aucune demande ne reste en base (' . $demandesAvant . ' -> ' . $demandesApres . ')');
+        $compter($piecesApres === $piecesAvant, '62. la photo jointe est supprimée (' . $piecesAvant . ' -> ' . $piecesApres . ' pièces jointes)');
+        $compter(
+            (int) explode('|', (string) $lu($cleWa))[0] === 0,
+            '63. le crédit de quota est RENDU (compteur : ' . var_export($lu($cleWa), true) . ')'
+        );
+
+        // et une soumission valide repasse ensuite sur la même IP
+        $photoOkWa = sys_get_temp_dir() . '/wa-ok-' . wp_generate_password(5, false) . '.jpg';
+        $imOk = imagecreatetruecolor(200, 150);
+        imagejpeg($imOk, $photoOkWa, 80);
+        $reqOk = new WP_REST_Request('POST', '/tuc/v1/restaurant-applications');
+        $reqOk->set_param('restaurant_name', 'Snack Apres Echec WhatsApp');
+        $reqOk->set_file_params(['menu_photo' => [
+            'tmp_name' => $photoOkWa,
+            'name' => basename($photoOkWa),
+            'size' => filesize($photoOkWa),
+            'error' => UPLOAD_ERR_OK,
+        ]]);
+        $resOk = rest_do_request($reqOk);
+        $compter($resOk->get_status() === 201, '64. après cet échec, une nouvelle demande valide est acceptée (statut ' . $resOk->get_status() . ')');
+        $compter(
+            (int) explode('|', (string) $lu($cleWa))[0] === 1,
+            '65. et le quota est consommé exactement une fois (' . var_export($lu($cleWa), true) . ')'
+        );
+
+        // restitution impossible : l'erreur le DIT, elle ne se déguise pas en erreur WhatsApp
+        $wpdb->query($wpdb->prepare("DELETE FROM {$wpdb->options} WHERE option_name = %s", $cleWa));
+        $appeler('reserver_demande');
+        $saboter($cleWa, true);
+        $renduRate = $appeler('rendre_demande');
+        $saboter($cleWa, false);
+        $wpdb->last_error = '';
+        $compter($renduRate === false, '66. si la restitution elle-même échoue, elle rend false (aucun masquage)');
+        $wpdb->query($wpdb->prepare("DELETE FROM {$wpdb->options} WHERE option_name = %s", $cleWa));
+        @unlink($photoWa);
+        @unlink($photoOkWa);
+
+        // =====================================================================
+        // 13. Les lignes périmées ne s'accumulent pas (point 4)
+        // =====================================================================
+        $vieux = [];
+        for ($i = 0; $i < 5; $i++) {
+            // nom = format réel d'une clé de limitation : préfixe + md5
+            $nomVieux = 'tuc_tentatives_' . md5('192.0.2.' . (150 + $i));
+            $wpdb->query($wpdb->prepare(
+                "INSERT INTO {$wpdb->options} (option_name, option_value, autoload) VALUES (%s, %s, 'no')",
+                $nomVieux,
+                '7|' . (time() - 3 * 86400)
+            ));
+            $vieux[] = $nomVieux;
+        }
+        $recent = 'tuc_tentatives_' . md5('192.0.2.200');
+        $wpdb->query($wpdb->prepare(
+            "INSERT INTO {$wpdb->options} (option_name, option_value, autoload) VALUES (%s, %s, 'no')",
+            $recent,
+            '2|' . (time() + 600)
+        ));
+        // le balayage est probabiliste (1 sur 20) : on le force en boucle bornée
+        $tentatives = 0;
+        do {
+            $appeler('purger_lignes_perimees');
+            $restants = (int) $wpdb->get_var($wpdb->prepare(
+                "SELECT COUNT(*) FROM {$wpdb->options} WHERE option_name IN (" . implode(',', array_fill(0, count($vieux), '%s')) . ")",
+                ...$vieux
+            ));
+            $tentatives++;
+        } while ($restants > 0 && $tentatives < 400);
+        $compter($restants === 0, '53. les compteurs périmés depuis plus de 24 h sont supprimés (' . $tentatives . ' passes)');
+        $compter($lu($recent) !== null, '54. un compteur VIVANT n’est jamais supprimé par le balayage');
+        $wpdb->query($wpdb->prepare("DELETE FROM {$wpdb->options} WHERE option_name = %s", $recent));
+
         $compter(strpos($msg1, 'secondes') === false && strpos($msg1, 'seconde') !== false, '42. 1 seconde s’écrit au singulier (« ' . $msg1 . ' »)');
         $compter(strpos($msg2, 'secondes') !== false, '43. 61 secondes s’écrit au pluriel');
         $compter(strpos($msg3, 'minutes') !== false && strpos($msg3, 'minute.') === false, '44. 120 s devient « 2 minutes »');
@@ -423,7 +683,7 @@ function tuc_parcours_restaurateur_contrat(?callable $assertExterne = null): int
             $_SERVER['HTTP_X_FORWARDED_FOR'] = $xffInitial;
         }
         unset($_SERVER['HTTP_X_REAL_IP']);
-        $nettoyer('192.0.2.10', '192.0.2.20', '192.0.2.30', '192.0.2.40', '192.0.2.50', '192.0.2.60');
+        $nettoyer('192.0.2.10', '192.0.2.20', '192.0.2.30', '192.0.2.40', '192.0.2.50', '192.0.2.60', '192.0.2.70', '192.0.2.80', '192.0.2.90', '192.0.2.100', '192.0.2.110', '192.0.2.200');
     }
 
     return $casExecutees;

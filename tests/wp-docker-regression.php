@@ -1303,10 +1303,10 @@ try {
     require_once '/opt/tuc-tests/parcours-restaurateur-contract.php';
     $casParcours = tuc_parcours_restaurateur_contrat($assert);
     $assert(
-        // MESURÉ, jamais estimé (37, 46, 47, 48). Quatre estimations à la main
+        // MESURÉ, jamais estimé (37, 46, 47, 48, 65). Cinq estimations à la main
         // se sont déjà trompées. Cette valeur se lit dans un run.
-        $casParcours === 48,
-        sprintf('contrat parcours restaurateur : 48 cas attendus, %d exécutés', $casParcours)
+        $casParcours === 72,
+        sprintf('contrat parcours restaurateur : 72 cas attendus, %d exécutés', $casParcours)
     );
     WP_CLI::log(sprintf('Contrat parcours restaurateur : %d cas verts.', $casParcours));
 }
