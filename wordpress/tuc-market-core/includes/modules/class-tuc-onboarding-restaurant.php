@@ -358,6 +358,9 @@ final class TUC_Onboarding_Restaurant
     /** Ligne du compteur global de générations : une seule pour tout le site. */
     private const OPTION_GENERATION = 'tuc_purge_generation';
 
+    /** Tentatives d'allocation du compteur global avant de REFUSER (aucun repli). */
+    private const GENERATION_TENTATIVES = 10;
+
     /**
      * Rend la génération suivante. Strictement croissante, jamais réutilisée,
      * y compris après suppression de la ligne du compteur : c'est ce qui rend
@@ -366,19 +369,32 @@ final class TUC_Onboarding_Restaurant
      * Écriture conditionnelle en boucle bornée (portable MariaDB/SQLite, pas de
      * LAST_INSERT_ID ni de séquence propre à un moteur).
      */
-    private static function prochaine_generation(): int
+    private static function prochaine_generation(?int $tentatives = null): ?int
     {
         global $wpdb;
-        $wpdb->query($wpdb->prepare(
+        $tentatives = $tentatives ?? self::GENERATION_TENTATIVES;
+
+        // Création de la ligne du compteur global (une fois). Son échec faute de
+        // place ou de droits doit être VU, pas transformé en identité de secours.
+        $creation = $wpdb->query($wpdb->prepare(
             "INSERT IGNORE INTO `{$wpdb->options}` (option_name, option_value, autoload) VALUES (%s, %s, 'no')",
             self::OPTION_GENERATION,
             '0'
         ));
-        for ($essai = 0; $essai < 10; $essai++) {
+        if ($creation === false) {
+            return null; // SQL refusé : on refuse l'opération, on n'invente rien
+        }
+
+        for ($essai = 0; $essai < $tentatives; $essai++) {
             $brut = $wpdb->get_var($wpdb->prepare(
                 "SELECT option_value FROM `{$wpdb->options}` WHERE option_name = %s",
                 self::OPTION_GENERATION
             ));
+            if ($brut === null) {
+                // Ligne disparue entre-temps (ou SELECT refusé) : on ne fabrique
+                // pas de valeur, on échoue.
+                return null;
+            }
             $actuel = (int) $brut;
             $suivant = $actuel + 1;
             $touche = $wpdb->query($wpdb->prepare(
@@ -391,9 +407,14 @@ final class TUC_Onboarding_Restaurant
                 self::purger_cache_option(self::OPTION_GENERATION);
                 return $suivant;
             }
+            if ($touche === false) {
+                return null; // erreur SQL : refus, jamais de valeur de secours
+            }
+            // 0 ligne touchée : un autre processus a pris ce numéro. On relit.
         }
-        // Impossible en pratique sous verrou ; on ne réutilise jamais 0.
-        return time();
+        // Épuisement des tentatives : AUCUN repli horodaté (deux créations dans
+        // la même seconde partageraient la même valeur — mesuré). null = refus.
+        return null;
     }
 
     /**
@@ -416,20 +437,32 @@ final class TUC_Onboarding_Restaurant
      * 2. `$attendu !== null` : UPDATE CONDITIONNEL sur la valeur complète. Si la
      *    ligne a disparu, **aucun INSERT** n'est tenté : on rend false.
      *
-     * 3. `$creeeSeulement === true` : création stricte, réservée au cas où la
-     *    clé porte une génération neuve ; sans ligne, on échoue plutôt que de
-     *    recréer.
+     * REND `null` QUAND LA GÉNÉRATION N'A PAS PU ÊTRE ALLOUÉE (revue n°7) :
+     * c'est un refus, pas un échec de course. Les appelants le traitent comme
+     * une erreur de stockage (503) et n'acceptent aucune demande.
      */
-    private static function ecrire_compteur(string $cle, int $compte, int $fin, ?string $attendu = null, ?int $generation = null): bool
+    private static function ecrire_compteur(string $cle, int $compte, int $fin, ?string $attendu = null, ?int $generation = null, ?callable $annuler = null): ?bool
     {
         global $wpdb;
 
         if ($attendu === null) {
             // Création : un seul INSERT, atomique. Rien d'autre.
             // GÉNÉRATION : identité neuve à chaque création, même après
-            // suppression (ABA par recréation, revue n°6).
+            // suppression (ABA par recréation, revue n°6). Si elle ne peut pas
+            // être allouée DE FAÇON UNIQUE, on rend null : l'appelant refuse
+            // l'opération. Aucun repli horodaté (revue n°7 : deux créations dans
+            // la même seconde partageraient la même valeur).
             if ($generation === null) {
                 $generation = self::prochaine_generation();
+                if ($generation === null) {
+                    // REFUS PROPRE : on ne crée rien, et on annule la réservation
+                    // faite plus tôt dans la même section critique (le compteur
+                    // de demandes ne doit pas être consommé par un refus).
+                    if ($annuler !== null) {
+                        $annuler();
+                    }
+                    return null;
+                }
             }
             $valeur = $compte . '|' . $fin . '|' . $generation . '|1';
             $insert = $wpdb->query($wpdb->prepare(
@@ -582,6 +615,7 @@ final class TUC_Onboarding_Restaurant
         }
         $resultat = null;
         $garde = false;
+        $annuler = false; // l'action demande un ROLLBACK (refus sans trace)
         $transaction = self::ouvrir_transaction();
         try {
             // Sous transaction, la ligne du verrou est verrouillée (FOR UPDATE en
@@ -591,12 +625,18 @@ final class TUC_Onboarding_Restaurant
             if (!self::verrou_est_a_nous($nom, $jeton)) {
                 return [false, null];
             }
-            $resultat = $action(static fn (): bool => self::verrou_est_a_nous($nom, $jeton));
+            $resultat = $action(static fn (): bool => self::verrou_est_a_nous($nom, $jeton), static function () use (&$annuler): void {
+                $annuler = true;
+            });
             // Après l'action : si le verrou n'est plus à nous, le travail n'est
             // pas fiable et on le signale à l'appelant.
             $garde = self::verrou_est_a_nous($nom, $jeton);
             if ($transaction === 'transaction') {
-                self::valider_transaction();
+                if ($annuler) {
+                    self::annuler_transaction(); // l'action a tout annulé
+                } else {
+                    self::valider_transaction();
+                }
             }
         } catch (Throwable $e) {
             if (self::$transactionOuverte) {
@@ -821,8 +861,10 @@ final class TUC_Onboarding_Restaurant
      *    fenêtre échue est une écriture CONDITIONNELLE, donc la génération de la
      *    ligne est conservée. Mesuré : `aba-recreation.php`.
      */
-    private static function incrementer_compteur(string $cle, ?callable $garde = null): bool
+    private static function incrementer_compteur(string $cle, ?callable $garde = null, ?callable $annuler = null): ?bool
     {
+        // null = la GÉNÉRATION n'a pas pu être allouée de façon unique : refus.
+        // false = course ordinaire (ligne apparue/disparue, verrou perdu).
         $brut = self::lire_brut($cle);
         // Avant d'écrire : le verrou est-il toujours le nôtre ?
         if ($garde !== null && !$garde()) {
@@ -831,7 +873,7 @@ final class TUC_Onboarding_Restaurant
         if ($brut === null) {
             // Aucun compteur : création atomique à 1. Si quelqu'un a créé la
             // ligne entre la lecture et l'instant présent, on n'écrase pas.
-            return self::ecrire_compteur($cle, 1, time() + HOUR_IN_SECONDS, null);
+            return self::ecrire_compteur($cle, 1, time() + HOUR_IN_SECONDS, null, null, $annuler);
         }
         // On réutilise la valeur lue pour décider, et c'est CETTE valeur qui
         // sert d'attendu au CAS : relire une seconde fois (ancienne version)
@@ -858,7 +900,7 @@ final class TUC_Onboarding_Restaurant
             return false;
         }
         self::oublier_erreur_sql();
-        [$pris, $rendu] = self::sous_verrou($cle, static function (callable $garde) use ($cle): bool {
+        [$pris, $rendu] = self::sous_verrou($cle, static function (callable $garde, callable $annuler) use ($cle): bool {
             $brut = self::lire_brut($cle);
             [$n, $restant] = self::lire_valeur($brut);
             if ($n <= 0 || $brut === null) {
@@ -888,7 +930,7 @@ final class TUC_Onboarding_Restaurant
         self::oublier_erreur_sql();
         $resultat = null;
         $ecrit = false;
-        [$pris, ] = self::sous_verrou($cle, static function (callable $garde) use ($cle, &$resultat, &$ecrit): bool {
+        [$pris, ] = self::sous_verrou($cle, static function (callable $garde, callable $annuler) use ($cle, &$resultat, &$ecrit): bool {
             [$n, $restant] = self::lire_compteur($cle);
             if (self::derniere_erreur_sql() !== '') {
                 $resultat = new WP_Error(
@@ -906,9 +948,15 @@ final class TUC_Onboarding_Restaurant
                 );
                 return false;
             }
-            $ecrit = self::incrementer_compteur($cle, $garde);
-            if (!$ecrit) {
+            $ecrit = self::incrementer_compteur($cle, $garde, $annuler);
+            if ($ecrit === null) {
+                // GÉNÉRATION NON ALLOUÉE : refus explicite (503). Aucune tentative
+                // consommée, aucune demande acceptée.
                 $resultat = self::erreur_stockage();
+                return false;
+            }
+            if ($ecrit === false) {
+                $resultat = self::erreur_occupation_passee();
             }
             return true;
         });
@@ -930,7 +978,7 @@ final class TUC_Onboarding_Restaurant
         }
         self::oublier_erreur_sql();
         $resultat = null;
-        [$pris, ] = self::sous_verrou($cle, static function (callable $garde) use ($cle, &$resultat): bool {
+        [$pris, ] = self::sous_verrou($cle, static function (callable $garde, callable $annuler) use ($cle, &$resultat): bool {
             [$n, $restant] = self::lire_compteur($cle);
             if (self::derniere_erreur_sql() !== '') {
                 $resultat = self::erreur_stockage();
@@ -944,8 +992,20 @@ final class TUC_Onboarding_Restaurant
                 );
                 return false;
             }
-            if (!self::incrementer_compteur($cle, $garde)) {
+            $ecrit = self::incrementer_compteur($cle, $garde, $annuler);
+            if ($ecrit === null) {
+                // GÉNÉRATION NON ALLOUÉE : refus explicite, aucune demande créée ;
+                // on rend false pour que `sous_verrou()` ANNULE (ROLLBACK) la
+                // réservation faite plus haut dans la même section critique.
                 $resultat = self::erreur_stockage();
+                return false;
+            }
+            if ($ecrit === false) {
+                // Ligne apparue/disparue entre la lecture et l'écriture : nouvel
+                // essai (idempotent, aucun crédit consommé). On ne peut pas
+                // relancer ici : on le signale comme une occupation.
+                $resultat = self::erreur_stockage();
+                return false;
             }
             return true;
         });
@@ -953,6 +1013,16 @@ final class TUC_Onboarding_Restaurant
             return $resultat instanceof WP_Error ? $resultat : self::erreur_occupe();
         }
         return $resultat instanceof WP_Error ? $resultat : null;
+    }
+
+    /** La ligne a bougé pendant la section critique : nouvel essai invité, pas un 503. */
+    private static function erreur_occupation_passee(): WP_Error
+    {
+        return new WP_Error(
+            'tuc_onboarding_occupe',
+            __('Le service est momentanément occupé. Réessayez dans un instant.', 'tuc-core'),
+            ['status' => 503, 'retry' => true]
+        );
     }
 
     /** Lecture ou écriture du compteur ratée : on refuse, on ne « laisse pas passer ». */
@@ -989,7 +1059,11 @@ final class TUC_Onboarding_Restaurant
      */
     private const OPTION_CURSEUR = 'tuc_purge_curseur';
 
-    /** Borne de temps d'un appel : une purge ne doit jamais allonger une requête publique. */
+    /**
+     * CIBLE de temps d'un appel (millisecondes) : on ne démarre PAS de nouvelle
+     * fenêtre au-delà. Ce n'est PAS une limite absolue — voir le commentaire de
+     * `balayer_lignes_perimees()`.
+     */
     private const PURGE_MS_MAX = 250;
 
     /**
@@ -1027,9 +1101,15 @@ final class TUC_Onboarding_Restaurant
      *  - une visite complète (fenêtre vide) remet le curseur à zéro, sinon les
      *    lignes écrites plus tard, dont le nom est « avant » le curseur, ne
      *    seraient plus jamais visitées ;
-     *  - le temps consommé est borné (`$msMax`) : au-delà, on s'arrête proprement
-     *    et la passe suivante continue. La purge est déclenchée pendant une
-     *    requête publique : elle doit rester invisible dans le temps de réponse.
+     *  - la purge s'arrête de démarrer une nouvelle fenêtre au-delà de `$msMax`.
+     *
+     * CE QUE 250 ms GARANTIT, ET CE QU'IL NE GARANTIT PAS (revue n°7). La
+     * vérification du budget a lieu ENTRE deux fenêtres : une requête SQL lente
+     * ou une fenêtre complète (500 lignes) n'est pas interrompue. Le dépassement
+     * possible est donc la durée d'UNE fenêtre (SELECT + jusqu'à 500 DELETE
+     * conditionnels), pas celle de tout le balayage. Mesuré : cible tenue à
+     * 250-252 ms sur 100 000 lignes ; dépassement mesuré à 1 101 ms avec un
+     * `SLEEP(1)` injecté dans le SELECT, et la passe reprend ensuite au curseur.
      *
      * @param int $plafond   lignes par fenêtre
      * @param int $fenetresMax garde-fou de sécurité (nombre de fenêtres)
@@ -1051,7 +1131,10 @@ final class TUC_Onboarding_Restaurant
 
         while ($passes < max(1, $fenetresMax)) {
             if ($msMax > 0 && $passes > 0 && (microtime(true) - $debut) * 1000 >= $msMax) {
-                break; // budget épuisé : la passe suivante reprendra au curseur
+                // On ne démarre pas de nouvelle fenêtre. La fenêtre en cours, elle,
+                // n'est jamais interrompue (cf. commentaire de la fonction).
+                $GLOBALS['tuc_purge_budget_atteint'] = true;
+                break;
             }
             $passes++;
 
@@ -1119,6 +1202,7 @@ final class TUC_Onboarding_Restaurant
         $GLOBALS['tuc_purge_lues'] = $lues;
         $GLOBALS['tuc_purge_fenetres'] = $passes;
         $GLOBALS['tuc_purge_ms'] = (int) round((microtime(true) - $debut) * 1000);
+        $GLOBALS['tuc_purge_depassement_ms'] = max(0, (int) $GLOBALS['tuc_purge_ms'] - max(0, $msMax));
         $GLOBALS['tuc_purge_curseur_depart'] = $depart;
         $GLOBALS['tuc_purge_curseur_fin'] = $curseur;
         return $supprimees;
