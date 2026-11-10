@@ -18,7 +18,11 @@ REQUIRED_FRENCH = (
     "Nom du restaurant",
     "En français ou en arabe",
     "Photo du menu",
-    "JPEG, PNG ou WebP",
+    # L'aide sous le champ a changé le 2026-11-03 : elle cite désormais le HEIC
+    # (le champ accepte les photos d'iPhone). On exige le préfixe stable et le
+    # débit de 5 Mo, qui doit rester annoncé.
+    "JPEG, PNG, WebP ou photo d’iPhone (HEIC)",
+    "5 Mo maximum",
     "Demander l’accompagnement",
     "Demande enregistrée",
     "Continuer dans WhatsApp",
