@@ -1023,6 +1023,42 @@ function tuc_parcours_restaurateur_contrat(?callable $assertExterne = null): int
         $wpdb->query("DELETE FROM {$wpdb->options} WHERE option_name LIKE '{$prefixeCurseur}z%'");
 
         // =====================================================================
+        // 20. ALLOCATION DE GÉNÉRATION : refus propre, aucun repli (revue n°7)
+        // =====================================================================
+        $gen = 'tuc_purge_generation';
+        $wpdb->query($wpdb->prepare("INSERT IGNORE INTO {$wpdb->options} (option_name, option_value, autoload) VALUES (%s, '10', 'no')", $gen));
+        $compter($appeler('prochaine_generation', [0]) === null, '114. zéro tentative disponible => null : aucun repli horodaté');
+        $erreurGen = static function (string $q) use ($gen): string {
+            return strpos($q, $gen) !== false ? 'SELECT * FROM table_inexistante_revue7' : $q;
+        };
+        add_filter('query', $erreurGen);
+        $genNulle = $appeler('prochaine_generation');
+        $cleGen = 'tuc_demandes_' . md5('192.0.2.170');
+        foreach ([$cleGen, $cleGen . '_verrou'] as $nn) {
+            $wpdb->query($wpdb->prepare("DELETE FROM {$wpdb->options} WHERE option_name = %s", $nn));
+        }
+        $creationNulle = $appeler('ecrire_compteur', [$cleGen, 1, time() + 3600, null]);
+        $reservation = $appeler('reserver_demande');
+        remove_filter('query', $erreurGen);
+        $compter($genNulle === null, '115. erreur SQL sur le compteur global => null (refus, pas de valeur inventée)');
+        $compter($creationNulle === null, '116. une création sans génération rend null : rien n’est écrit');
+        $compter($lu($cleGen) === null, '117. aucune ligne de compteur n’a été créée par ce refus');
+        $compter($reservation instanceof WP_Error && $reservation->get_error_code() === 'tuc_onboarding_storage', '118. la réservation est REFUSÉE en 503, pas acceptée à tort');
+        $compter($lu($cleGen) === null, '119. toujours aucune ligne après ce refus');
+        $wpdb->query($wpdb->prepare("DELETE FROM {$wpdb->options} WHERE option_name = %s", $gen));
+        $compter($appeler('prochaine_generation') !== null, '120. le compteur global se recrée et fonctionne normalement après la panne');
+        $gens = [];
+        foreach (['a', 'b', 'c', 'd', 'e'] as $suffixe) {
+            $cleG = 'tuc_tentatives_' . md5('gen-' . $suffixe);
+            $wpdb->query($wpdb->prepare("DELETE FROM {$wpdb->options} WHERE option_name = %s", $cleG));
+            $appeler('ecrire_compteur', [$cleG, 1, time() + 3600, null]);
+            $gens[] = (int) explode('|', (string) $lu($cleG))[2];
+            $wpdb->query($wpdb->prepare("DELETE FROM {$wpdb->options} WHERE option_name = %s", $cleG));
+        }
+        $compter(count(array_unique($gens)) === 5, '121. cinq clés différentes => cinq générations distinctes (' . implode(',', $gens) . ')');
+        $wpdb->query($wpdb->prepare("DELETE FROM {$wpdb->options} WHERE option_name = %s", $gen));
+
+        // =====================================================================
         // 10. L'ancienne protection n'a pas disparu (pas de « suppression » pure)
         // =====================================================================
         $compter(
