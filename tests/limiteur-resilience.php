@@ -162,6 +162,21 @@ register_shutdown_function(static function () use ($wpdb, &$crees): void {
 
 $mode = (string) ($opts['mode'] ?? 'orchestrateur');
 $sousProcessus = in_array($mode, ['reservation', 'demande-http'], true);
+
+// L'ADRESSE VUE PAR LE MODULE EST LE CŒUR DU TEST. Le module limite sur
+// `REMOTE_ADDR` ; sans cette ligne, chaque sous-processus n'avait AUCUNE adresse
+// (bac : aucune limitation, 144/144 acceptées) ou héritait de 127.0.0.1 pour
+// tous (CI : 144 réservations partageant un quota de 3, 24 refus). Les deux
+// rendaient les assertions « par IP » fausses. On la fixe donc explicitement.
+// En mode demande-http, c'est l'adresse du CLIENT qui compte : curl l'envoie au
+// serveur, et c'est le serveur qui l'applique. Écraser REMOTE_ADDR ici n'aurait
+// aucun effet sur la requête HTTP et masquerait la vraie valeur.
+if ($mode !== 'demande-http') {
+    $ipSimulee = ($opts['ip'] ?? '') !== '' && strpos((string) $opts['ip'], '::') === false ? $opts['ip'] : '127.0.0.1';
+    if (filter_var($ipSimulee, FILTER_VALIDATE_IP) !== false) {
+        $_SERVER['REMOTE_ADDR'] = (string) $ipSimulee;
+    }
+}
 $ipSous = (string) ($opts['ip'] ?? '');
 $scenarioSous = (string) ($opts['scenario'] ?? 'aucun');
 $urlSous = rtrim((string) ($opts['url'] ?? $urlHttp), '/');
@@ -178,7 +193,12 @@ if ($sousProcessus) {
     $ip = $ipSous;
     $scenario = $scenarioSous;
     $urlBase = $urlSous;
-    $_SERVER['REMOTE_ADDR'] = $ip;
+    // Le mode reservation tourne EN PROCESSUS : c'est ici que l'adresse simulée
+    // prend effet. Sans elle, le module ne voyait aucune adresse et toutes les
+    // « IP distinctes » partageaient le même compteur.
+    if ($mode === 'reservation') {
+        $_SERVER['REMOTE_ADDR'] = $ip;
+    }
 
     // Le témoin est TOUJOURS posé (même sans injection) : sans lui, un deadlock
     // réel survenu pendant une rafale passe inaperçu et le compteur tombe à zéro.
@@ -232,22 +252,31 @@ if ($sousProcessus) {
         imagejpeg($im, $jpg, 80);
         imagedestroy($im);
     }
+    // Repérage : requête VOLONTAIREMENT invalide (sans photo). Elle ne crée
+    // aucune demande, donc ne consomme aucun quota ; elle ne touche que le
+    // compteur de TENTATIVES, qui porte la même empreinte d'adresse.
+    $champs = ['restaurant_name' => 'Bac ' . $ip . ' ' . $suffixe];
+    if ($scenario !== 'reperage') {
+        $champs['menu_photo'] = new CURLFile($jpg, 'image/jpeg', 'menu.jpg');
+    }
     $ch = curl_init($urlBase . '/wp-json/tuc/v1/restaurant-applications');
     curl_setopt_array($ch, [
         CURLOPT_POST => true,
         CURLOPT_RETURNTRANSFER => true,
         CURLOPT_TIMEOUT => 60,
-        CURLOPT_POSTFIELDS => [
-            'restaurant_name' => 'Bac ' . $ip . ' ' . $suffixe,
-            'menu_photo' => new CURLFile($jpg, 'image/jpeg', 'menu.jpg'),
-        ],
+        CURLOPT_POSTFIELDS => $champs,
     ]);
     $corps = (string) curl_exec($ch);
     $statut = (int) curl_getinfo($ch, CURLINFO_HTTP_CODE);
+    $erreurCurl = (string) curl_error($ch);
     curl_close($ch);
     $json = json_decode($corps, true);
     $code = is_array($json) && isset($json['code']) ? (string) $json['code'] : '-';
-    echo $statut . ' ' . $code . "\n";
+    // Le corps est joint : sans lui, « 0 - » ne dit pas si curl a échoué, si le
+    // site a rendu une page d'erreur, ou si la route a répondu autre chose.
+    $extrait = trim(preg_replace('/\s+/', ' ', substr($corps, 0, 160)));
+    $erreur = $erreurCurl !== '' ? ' curl=' . $erreurCurl : '';
+    echo $statut . ' ' . $code . ' |' . $extrait . '|' . $erreur . "\n";
     exit(0);
 }
 
@@ -510,9 +539,10 @@ echo "\n=== 5. DEMANDE par HTTP MULTIPART RÉEL (serveur web, pas rest_do_reques
 //   - ce qui n'est PAS prouvé ici : le deadlock. Les requêtes HTTP séquentielles
 //     ne se croisent pas, donc aucun verrou ne s'affronte. La preuve du deadlock
 //     est faite au scénario 3, sur la MÊME section critique (c'est le même code).
-// L'IP vue par le serveur est celle du client local : on remet donc à zéro le
-// seul compteur de TENTATIVES entre deux requêtes (documenté, et le compteur de
-// demandes n'est jamais touché) pour ne pas buter sur la limite anti-abus.
+// L'IP vue par le serveur est celle du client (127.0.0.1 en bac local, autre
+// chose dans le conteneur) : le compteur est DÉCOUVERT par une requête de
+// repérage, jamais supposé. Aucune clé existante n'est supprimée : si le bac a
+// déjà servi pour cette adresse, le scénario est SAUTÉ et déclaré non concluant.
 @unlink($journal);
 @unlink('/tmp/tuc-injection.log');
 global $wpdb;
@@ -535,75 +565,136 @@ $ok($dejaUtilise === 0, 'bac frais : compteurs (quota + anti-abus) de 127.0.0.1 
 if ($dejaUtilise > 0) {
     echo "    -> le scénario HTTP est SAUTÉ, pas contourné : un bac neuf est requis.\n";
 }
-$idMaxAvant = (int) $wpdb->get_var("SELECT COALESCE(MAX(ID),0) FROM {$wpdb->posts}");
-$demandesAvant = $compteDemandes();
-
+// DÉCOUVERTE, PAS SUPPOSITION : le module limite sur `REMOTE_ADDR` vu par le
+// serveur. L'adresse du client dans le conteneur n'est pas forcément 127.0.0.1
+// (mesuré : série verte en bac local, §5 à « 0 » en CI). On envoie UNE requête
+// de repérage, puis on retient le compteur de demandes qui a réellement bougé.
 $requete = static function (string $scenario) use ($lancer, $ipHttp): string {
     return $lancer([$ipHttp], 'demande-http', $scenario)[$ipHttp] ?? '?';
 };
 
-// a) deux demandes valides : 201, quota +1 chacune, photo réelle.
-$r1 = $requete('aucun');
-$r2 = $requete('aucun');
-$ok(strpos($r1, '201') === 0, 'demande HTTP réelle acceptée : ' . $r1);
-$ok(strpos($r2, '201') === 0, 'deuxième demande HTTP réelle acceptée : ' . $r2);
-$quotaLoopbackApres2 = (int) explode('|', (string) $wpdb->get_var($wpdb->prepare(
-    "SELECT option_value FROM `{$wpdb->options}` WHERE option_name = %s",
-    $cleDemandesLoopback
-)))[0];
-$ok($quotaLoopbackApres2 === 2, 'quota vu par le serveur = 2 après deux demandes (' . $quotaLoopbackApres2 . ')');
-$ok($compteDemandes() - $demandesAvant === 2, 'deux demandes réellement créées (' . ($compteDemandes() - $demandesAvant) . ')');
-
-// b) panne SQL injectée sur le chemin HTTP : refus propre, rien d'orphelin.
-@unlink('/tmp/tuc-injection.log');
-$rPanne = $requete('panne');
-$ok(strpos($rPanne, '503') === 0, 'panne injectée sur le chemin HTTP => 503 : ' . $rPanne);
-$ok($compteEvenements('injection') >= 1, 'l’injection a réellement eu lieu (' . $compteEvenements('injection') . ')');
-$ok($compteDemandes() - $demandesAvant === 2, 'AUCUNE demande créée par la panne (' . ($compteDemandes() - $demandesAvant) . ')');
-$quotaApresPanne = (int) explode('|', (string) $wpdb->get_var($wpdb->prepare(
-    "SELECT option_value FROM `{$wpdb->options}` WHERE option_name = %s",
-    $cleDemandesLoopback
-)))[0];
-$ok($quotaApresPanne === 2, 'le quota N’A PAS bougé après la panne (' . $quotaApresPanne . ')');
-$verrouLoopback = (int) $wpdb->get_var($wpdb->prepare(
-    "SELECT COUNT(*) FROM `{$wpdb->options}` WHERE option_name = %s",
-    $cleDemandesLoopback . '_verrou'
-));
-$ok($verrouLoopback === 0, 'aucun verrou résiduel après la panne');
-
-// c) le service repart, et la photo est réellement stockée.
-$r3 = $requete('aucun');
-$ok(strpos($r3, '201') === 0, 'après l’incident, une demande HTTP valide repart : ' . $r3);
-$ok($compteDemandes() - $demandesAvant === 3, 'trois demandes créées au total (' . ($compteDemandes() - $demandesAvant) . ')');
-// Le module limite par IP RÉELLE vue par le serveur (127.0.0.1), pas par l'IP
-// symbolique passée au sous-processus : c'est donc la clé loopback qui porte le
-// quota. Vérifié explicitement plutôt que supposé.
-$quotaLoopback = (int) explode('|', (string) $wpdb->get_var($wpdb->prepare(
-    "SELECT option_value FROM `{$wpdb->options}` WHERE option_name = %s",
-    $cleDemandesLoopback
-)))[0];
-$ok($quotaLoopback === 3, 'quota réellement consommé côté serveur (127.0.0.1) = 3 (' . $quotaLoopback . ')');
-
-$ids = (array) $wpdb->get_col($wpdb->prepare(
-    "SELECT ID FROM {$wpdb->posts} WHERE post_type = 'attachment' AND ID > %d",
-    $idMaxAvant
-));
-$manquants = 0;
-$mauvaisType = 0;
-foreach ($ids as $idPiece) {
-    $chemin = get_attached_file((int) $idPiece);
-    if (!$chemin || !is_file($chemin) || filesize($chemin) === 0) {
-        $manquants++;
-    } elseif (get_post_mime_type((int) $idPiece) !== 'image/jpeg') {
-        $mauvaisType++;
-    }
+$cleDemandes = null;
+$scenarioHttpPossible = ($dejaUtilise === 0);
+if (!$scenarioHttpPossible) {
+    echo "    -> compteurs de 127.0.0.1 déjà présents : le scénario HTTP est SAUTÉ, pas contourné.\n";
 }
-$ok(count($ids) === 3, 'trois photos réellement stockées (' . count($ids) . '), aucune pour la panne');
-$ok($manquants === 0, 'chaque photo a un fichier non vide sur le disque (' . $manquants . ' manquant(s))');
-$ok($mauvaisType === 0, 'chaque photo stockée est un image/jpeg (' . $mauvaisType . ' anomalie(s))');
+if ($scenarioHttpPossible) {
+    // Découverte par le compteur de TENTATIVES : la requête de repérage n'a pas
+    // de photo, donc elle ne crée aucune demande (quota intact) mais elle
+    // incrémente les tentatives de CETTE adresse. L'empreinte md5 est la même
+    // dans les deux noms : elle nous donne la clé de quota sans la supposer.
+    $tentativesAvant = [];
+    foreach ((array) $wpdb->get_results("SELECT option_name FROM `{$wpdb->options}` WHERE option_name LIKE 'tuc_tentatives_%'") as $r) {
+        $tentativesAvant[(string) $r->option_name] = true;
+    }
+    $reperage = $requete('reperage');
+    $nouvelles = [];
+    foreach ((array) $wpdb->get_col("SELECT option_name FROM `{$wpdb->options}` WHERE option_name LIKE 'tuc_tentatives_%'") as $nom) {
+        if (!isset($tentativesAvant[(string) $nom])) {
+            $nouvelles[] = (string) $nom;
+        }
+    }
+    if (count($nouvelles) === 1 && preg_match('/^tuc_tentatives_([a-f0-9]{32})$/', $nouvelles[0], $m)) {
+        $cleDemandes = 'tuc_demandes_' . $m[1];
+        echo '    adresse vue par le serveur : empreinte ' . $m[1] . ' (repérage : ' . $reperage . ")\n";
+        echo '    compteur de demandes correspondant : ' . $cleDemandes . "\n";
+    } else {
+        echo '    repérage non concluant (' . count($nouvelles) . " nouvelle(s) empreinte(s)) : " . $reperage . "\n";
+        $scenarioHttpPossible = false;
+    }
+    // Le repérage n'a créé AUCUNE demande : le compteur de quota doit être absent
+    // ou vide. S'il porte déjà quelque chose, le bac a servi pour cette adresse.
+    $dejaDemande = 0;
+    if ($cleDemandes !== null) {
+        $valeurQuota = (string) $wpdb->get_var($wpdb->prepare(
+            "SELECT option_value FROM `{$wpdb->options}` WHERE option_name = %s",
+            $cleDemandes
+        ));
+        if ($valeurQuota !== '') {
+            $dejaDemande = (int) explode('|', $valeurQuota)[0];
+            if ($dejaDemande > 0) {
+                echo '    -> compteur de quota déjà utilisé (' . $dejaDemande . ') : scénario HTTP SAUTÉ, pas contourné' . "\n";
+                $scenarioHttpPossible = false;
+            }
+        }
+    }
+    $cleDemandesUtilisee = $cleDemandes;
+} else {
+    $dejaDemande = 0;
+    $cleDemandesUtilisee = null; // non exécuté : aucune conclusion tirée
+}
+$idMaxAvant = (int) $wpdb->get_var("SELECT COALESCE(MAX(ID),0) FROM {$wpdb->posts}");
+$demandesAvant = $compteDemandes();
 
-// =========================================================================
-@unlink('/tmp/tuc-injection.flag');
+if ($scenarioHttpPossible) {
+    // a) deux demandes valides : 201, quota +1 chacune, photo réelle.
+    $r1 = $requete('aucun');
+    $r2 = $requete('aucun');
+    $ok(strpos($r1, '201') === 0, 'demande HTTP réelle acceptée : ' . $r1);
+    $ok(strpos($r2, '201') === 0, 'deuxième demande HTTP réelle acceptée : ' . $r2);
+    $lireQuota = static function () use ($wpdb, $cleDemandesUtilisee): int {
+        if ($cleDemandesUtilisee === null) {
+            return -1;
+        }
+        return (int) explode('|', (string) $wpdb->get_var($wpdb->prepare(
+            "SELECT option_value FROM `{$wpdb->options}` WHERE option_name = %s",
+            $cleDemandesUtilisee
+        )))[0];
+    };
+    $quotaLoopbackApres2 = $lireQuota();
+    $ok($quotaLoopbackApres2 === 2 + $dejaDemande,
+        'quota vu par le serveur = ' . (2 + $dejaDemande) . ' après deux demandes (' . $quotaLoopbackApres2 . ')');
+    $ok($compteDemandes() - $demandesAvant === 2, 'deux demandes réellement créées (' . ($compteDemandes() - $demandesAvant) . ')');
+
+    // b) panne SQL injectée sur le chemin HTTP : refus propre, rien d'orphelin.
+    @unlink('/tmp/tuc-injection.log');
+    $rPanne = $requete('panne');
+    $ok(strpos($rPanne, '503') === 0, 'panne injectée sur le chemin HTTP => 503 : ' . $rPanne);
+    $ok($compteEvenements('injection') >= 1, 'l’injection a réellement eu lieu (' . $compteEvenements('injection') . ')');
+    $ok($compteDemandes() - $demandesAvant === 2, 'AUCUNE demande créée par la panne (' . ($compteDemandes() - $demandesAvant) . ')');
+    $quotaApresPanne = $lireQuota();
+    $ok($quotaApresPanne === 2 + $dejaDemande, 'le quota N’A PAS bougé après la panne (' . $quotaApresPanne . ')');
+    $verrouLoopback = (int) $wpdb->get_var($wpdb->prepare(
+        "SELECT COUNT(*) FROM `{$wpdb->options}` WHERE option_name = %s",
+        $cleDemandesLoopback . '_verrou'
+    ));
+    $ok($verrouLoopback === 0, 'aucun verrou résiduel après la panne');
+
+    // c) le service repart, et la photo est réellement stockée.
+    $r3 = $requete('aucun');
+    $ok(strpos($r3, '201') === 0, 'après l’incident, une demande HTTP valide repart : ' . $r3);
+    $ok($compteDemandes() - $demandesAvant === 3, 'trois demandes créées au total (' . ($compteDemandes() - $demandesAvant) . ')');
+    // Le module limite par IP RÉELLE vue par le serveur (127.0.0.1), pas par l'IP
+    // symbolique passée au sous-processus : c'est donc la clé loopback qui porte le
+    // quota. Vérifié explicitement plutôt que supposé.
+    $quotaLoopback = $lireQuota();
+    $ok($quotaLoopback === 3 + $dejaDemande,
+        'quota réellement consommé côté serveur (' . $cleDemandesUtilisee . ') = ' . (3 + $dejaDemande) . ' (' . $quotaLoopback . ')');
+
+    $ids = (array) $wpdb->get_col($wpdb->prepare(
+        "SELECT ID FROM {$wpdb->posts} WHERE post_type = 'attachment' AND ID > %d",
+        $idMaxAvant
+    ));
+    $manquants = 0;
+    $mauvaisType = 0;
+    foreach ($ids as $idPiece) {
+        $chemin = get_attached_file((int) $idPiece);
+        if (!$chemin || !is_file($chemin) || filesize($chemin) === 0) {
+            $manquants++;
+        } elseif (get_post_mime_type((int) $idPiece) !== 'image/jpeg') {
+            $mauvaisType++;
+        }
+    }
+    $ok(count($ids) === 3, 'trois photos réellement stockées (' . count($ids) . '), aucune pour la panne');
+    $ok($manquants === 0, 'chaque photo a un fichier non vide sur le disque (' . $manquants . ' manquant(s))');
+    $ok($mauvaisType === 0, 'chaque photo stockée est un image/jpeg (' . $mauvaisType . ' anomalie(s))');
+
+    // =========================================================================
+    @unlink('/tmp/tuc-injection.flag');
+} else {
+    // Rien n'est conclu : on ne transforme pas un bac déjà utilisé en vert.
+    $ok(false, 'scénario HTTP NON EXÉCUTÉ (bac déjà servi pour cette adresse) — non concluant, donc pas vert');
+}
 
 echo "\n=== 6. Clé témoin préexistante : intacte après tout le test ===\n";
 $valeurTemoinApres = (string) $wpdb->get_var($wpdb->prepare("SELECT option_value FROM `{$wpdb->options}` WHERE option_name = %s", $temoinCle));
