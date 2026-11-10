@@ -1369,12 +1369,17 @@ try {
     foreach ($sortieConv as $ligne) {
         WP_CLI::log('    [heic-conversion] ' . $ligne);
     }
+    // DÉFAUT ATTRAPÉ PAR LA CI DU 2026-11-10 : sans décodeur, le script sort en
+    // 0 parce qu'il a vérifié le CHEMIN D'ERREUR — et je lisais ce 0 comme une
+    // « conversion réussie ». La présence du décodeur se lit donc d'abord, dans
+    // la sortie ; le code de sortie ne départage qu'ensuite.
     $decodeurPresent = (bool) preg_match('/décodeur HEIC\s*:\s*oui/u', $texteConv);
-    if ($codeConv === 0) {
+    if (!$decodeurPresent) {
+        // Capacité NON TESTÉE : ce n'est ni un succès ni un échec du produit.
+        WP_CLI::warning('CONVERSION HEIC NON VÉRIFIÉE ICI : aucun décodeur HEIC dans ce conteneur. Ce n\'est pas un succès, c\'est une capacité non testée (seul le chemin d\'erreur est couvert).');
+    } elseif ($codeConv === 0) {
         $assert(true, 'conversion HEIC réelle côté web (décodeur présent, conversion réussie)');
-    } elseif (!$decodeurPresent) {
-        WP_CLI::warning('CONVERSION HEIC NON VÉRIFIÉE ICI : aucun décodeur HEIC dans ce conteneur. Ce n\'est pas un succès, c\'est une capacité non testée.');
     } else {
-        $assert(false, 'conversion HEIC réelle : décodeur présent mais la conversion a ÉCHOUÉ (code ' . $codeConv . ')');
+        $assert(false, 'conversion HEIC réelle : décodeur PRÉSENT mais la conversion a ÉCHOUÉ (code ' . $codeConv . ')');
     }
 }
