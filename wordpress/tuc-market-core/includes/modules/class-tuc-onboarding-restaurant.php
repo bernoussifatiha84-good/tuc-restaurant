@@ -199,6 +199,13 @@ final class TUC_Onboarding_Restaurant
                 $im->thumbnailImage(self::MAX_COTE_JPEG, self::MAX_COTE_JPEG, true, false);
             }
 
+            // `wp_tempnam()` vit dans wp-admin/includes/file.php, que le
+            // front-end REST ne charge PAS. Mesuré en HTTP réel (WebKit + php -S) :
+            // sans ce require, l'appel levait « Call to undefined function
+            // wp_tempnam() », attrapé par le catch, et la route rendait un 415
+            // « conversion impossible » alors qu'ImageMagick avait très bien
+            // converti. Les requires de la ligne ~1390 arrivent APRÈS : trop tard.
+            require_once ABSPATH . 'wp-admin/includes/file.php';
             $temporaire = wp_tempnam('tuc-heic-');
             if (!is_string($temporaire) || $temporaire === '') {
                 $im->clear();
