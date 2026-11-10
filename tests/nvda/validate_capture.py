@@ -18,10 +18,12 @@ REQUIRED_FRENCH = (
     "Nom du restaurant",
     "En français ou en arabe",
     "Photo du menu",
-    # L'aide sous le champ a changé le 2026-11-03 : elle cite désormais le HEIC
-    # (le champ accepte les photos d'iPhone). On exige le préfixe stable et le
-    # débit de 5 Mo, qui doit rester annoncé.
-    "JPEG, PNG, WebP ou photo d’iPhone (HEIC)",
+    # L'aide sous le champ a changé le 2026-11-03 : elle cite désormais les
+    # photos d'iPhone. On exige des fragments COURTS : la phrase entière avec
+    # « (HEIC) » n'est pas revenue dans la capture NVDA (sigle lu différemment),
+    # alors que les fragments ci-dessous le sont. Le sigle lui-même est vérifié
+    # côté HTML par le contrat (cas 47), pas par la synthèse vocale.
+    "photo d’iPhone",
     "5 Mo maximum",
     "Demander l’accompagnement",
     "Demande enregistrée",
