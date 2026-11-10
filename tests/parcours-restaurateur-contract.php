@@ -560,11 +560,21 @@ function tuc_parcours_restaurateur_contrat(?callable $assertExterne = null): int
         $demandesAvant = (int) $wpdb->get_var("SELECT COUNT(*) FROM {$wpdb->posts} WHERE post_type = 'tuc_demande_resto'");
         $piecesAvant = (int) $wpdb->get_var("SELECT COUNT(*) FROM {$wpdb->posts} WHERE post_type = 'attachment'");
 
+        // MESURÉ le 2026-11-03, avec un cache objet Redis actif : `update_option()`
+        // écrit bien NULL en base, mais `get_option()` continue de servir l'ANCIENNE
+        // valeur depuis le cache « alloptions ». Le sabotage n'atteignait donc pas le
+        // chemin de lecture et les cas 60-65 échouaient alors qu'ils passaient sans
+        // cache. On purge explicitement le cache de l'option comme le fait déjà le
+        // module pour ses compteurs (purger_cache_option()).
         $casseWa = static function (): void {
             update_option('tuc_wa_numero', '', false); // le lien ne peut plus être fabriqué
+            wp_cache_delete('tuc_wa_numero', 'options');
+            wp_cache_delete('alloptions', 'options');
         };
         $repareWa = static function (): void {
             update_option('tuc_wa_numero', '212600000000', false);
+            wp_cache_delete('tuc_wa_numero', 'options');
+            wp_cache_delete('alloptions', 'options');
         };
         $casseWa();
         $_SERVER['REMOTE_ADDR'] = $ipWa;
@@ -1128,6 +1138,18 @@ function tuc_parcours_restaurateur_contrat(?callable $assertExterne = null): int
         $compter(
             $constante('MAX_PHOTO_BYTES') === 5_242_880,
             '46. la limite d’envoi reste à 5 Mo : elle n’a pas été élargie pour faire passer le HEIC'
+        );
+        // Le champ doit ACCEPTER le HEIC côté sélecteur : il est converti plus
+        // loin, mais un `accept` qui l'exclut fait disparaître la photo de la
+        // photothèque sur iPhone. La limite de 5 Mo, elle, ne bouge pas (cas 46).
+        $htmlForm = TUC_Onboarding_Restaurant::render_form();
+        $compter(
+            strpos($htmlForm, 'image/heic') !== false && strpos($htmlForm, '.heic') !== false,
+            '47. le champ photo accepte le HEIC dans son attribut accept'
+        );
+        $compter(
+            strpos($htmlForm, '5 Mo') !== false,
+            '48. la limite de 5 Mo reste affichée sous le champ'
         );
     } finally {
         // Première instruction : on rend au serveur son état d'origine, quoi qu'il
