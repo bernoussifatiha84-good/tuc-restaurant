@@ -1211,11 +1211,23 @@ final class TUC_Onboarding_Restaurant
         [$pris, ] = self::sous_verrou($cle, static function (callable $garde, callable $annuler) use ($cle, &$resultat, &$ecrit): bool {
             [$n, $restant] = self::lire_compteur($cle);
             if (self::derniere_erreur_sql() !== '') {
-                $resultat = new WP_Error(
-                    'tuc_onboarding_storage',
-                    __('Le service est momentanément indisponible. Réessayez dans un instant.', 'tuc-core'),
-                    ['status' => 503]
-                );
+                // BARBIÈRE D'ENTRÉE : avant, TOUT conflit transitoire sur cette
+                // lecture remontait en 503 « service indisponible », quel que
+                // soit le message. Mesuré en CI (run sur c9540d7) : 16 refus 503
+                // sur 96 réservations d'IP distinctes et 25 sur 144 en rafale —
+                // exactement les chiffres qui résistaient aux trois corrections
+                // précédentes, toutes situées plus bas dans la même requête.
+                // Une lecture qui bute sur un deadlock n'a rien lu et n'a rien
+                // perdu : c'est à rejouer, pas une panne.
+                $messageLu = (string) self::derniere_erreur_sql();
+                self::oublier_erreur_sql();
+                if (self::erreur_recuperable($messageLu)) {
+                    self::$refusParPanne = false;
+                    self::$causeRefus = 'conflits';
+                    $resultat = self::erreur_occupation_passee();
+                    return false;
+                }
+                $resultat = self::erreur_stockage();
                 return false;
             }
             if ($n >= self::MAX_TENTATIVES_PAR_HEURE) {
@@ -1228,9 +1240,18 @@ final class TUC_Onboarding_Restaurant
             }
             $ecrit = self::incrementer_compteur($cle, $garde, $annuler);
             if ($ecrit === null) {
-                // GÉNÉRATION NON ALLOUÉE : refus explicite (503). Aucune tentative
-                // consommée, aucune demande acceptée.
-                $resultat = self::erreur_stockage();
+                // `null` = REFUS, et le refus a deux natures que ce bloc
+                // confondait : panne réelle du stockage, ou reprises épuisées sur
+                // conflits transitoires (deadlock, collision optimiste,
+                // allocation de génération sur transaction morte). C'est
+                // `incrementer_compteur()` qui le sait : on lit son verdict
+                // plutôt que de décréter la panne ici. Mesuré en CI (c9540d7) :
+                // ce site rendait à lui seul l'essentiel des 503 de la rafale.
+                // Aucun crédit consommé, aucune demande acceptée dans les deux cas.
+                $resultat = self::$refusParPanne
+                    ? self::erreur_stockage()
+                    : self::erreur_occupation_passee();
+                $annuler();
                 return false;
             }
             if ($ecrit === false) {
