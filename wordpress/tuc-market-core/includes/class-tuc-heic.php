@@ -99,3 +99,54 @@ function tuc_heic_decodeur_disponible(): bool
     }
     return $disponible;
 }
+
+/**
+ * Observe le fichier REÇU, avant toute conversion, et note le format d'après les
+ * premiers octets (boîte ISO/HEIF `ftyp`), jamais d'après l'extension.
+ *
+ * Corrige un défaut du protocole de la revue n°13 : `wp_check_filetype()` et
+ * l'inspection des fichiers APRÈS stockage ne peuvent pas dire si l'iPhone a
+ * envoyé un HEIC ou déjà un JPEG. Ici, la mesure a lieu à la réception et ne
+ * conserve que des métadonnées : aucun contenu, aucun nom d'origine, aucune
+ * donnée personnelle. Journal borné à 50 entrées.
+ *
+ * @param string $chemin  Fichier temporaire de la requête (jamais conservé).
+ * @param string $etape   '', 'apres-conversion', 'converti'
+ * @return string         Le format détecté ('heic', 'jpeg', 'png', 'webp', 'inconnu').
+ */
+function tuc_heic_observer_entree(string $chemin, string $etape = ''): string
+{
+    if (!is_file($chemin)) {
+        return 'inconnu';
+    }
+    $entete = (string) @file_get_contents($chemin, false, null, 0, 32);
+    $format = 'inconnu';
+    if (strlen($entete) >= 12 && substr($entete, 4, 4) === 'ftyp') {
+        $format = preg_match('/ftyp(heic|heix|hevc|heim|heis|hevm|hevs|mif1|msf1)/', $entete) === 1
+            ? 'heic'
+            : 'heif-autre';
+    } elseif (substr($entete, 0, 3) === "\xFF\xD8\xFF") {
+        $format = 'jpeg';
+    } elseif (substr($entete, 0, 8) === "\x89PNG\r\n\x1A\n") {
+        $format = 'png';
+    } elseif (substr($entete, 0, 4) === 'RIFF' && substr($entete, 8, 4) === 'WEBP') {
+        $format = 'webp';
+    }
+
+    $observation = [
+        'instant'        => gmdate('c'),
+        'format_detecte' => $format,
+        'methode'        => 'octets-magiques',
+        'octets_lus'     => strlen($entete),
+        'taille_ko'      => (int) round(filesize($chemin) / 1024),
+        'etape'          => $etape,
+    ];
+    $journal = get_option('tuc_heic_observations', []);
+    if (!is_array($journal)) {
+        $journal = [];
+    }
+    $journal[] = $observation;
+    update_option('tuc_heic_observations', array_slice($journal, -50), false);
+
+    return $format;
+}
