@@ -305,7 +305,12 @@ $testerGarde = static function (array $args, ?string $env = null): array {
     $cmd = escapeshellarg(PHP_BINARY) . ' ' . escapeshellarg(__FILE__) . ' ' . implode(' ', array_map('escapeshellarg', $args)) . ' 2>&1';
     $sortie = [];
     $code = 0;
-    $prefixe = $env === null ? '' : ('TUC_BAC_JETABLE=' . escapeshellarg($env) . ' ');
+    // La variable d'environnement est RETIRÉE explicitement : si le lanceur
+    // (CI, runner de régression) exporte TUC_BAC_JETABLE=1, le sous-processus
+    // hériterait de l'accord et le test de garde passerait à tort.
+    $prefixe = $env === null
+        ? 'env -u TUC_BAC_JETABLE '
+        : ('TUC_BAC_JETABLE=' . escapeshellarg($env) . ' ');
     exec($prefixe . $cmd, $sortie, $code);
     return [$code, implode(' ', $sortie)];
 };

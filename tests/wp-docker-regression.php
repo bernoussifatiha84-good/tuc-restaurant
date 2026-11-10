@@ -1325,15 +1325,24 @@ try {
     // marqueur + le drapeau le prouvent explicitement.
     // ---------------------------------------------------------------------
     $bac = rtrim(ABSPATH, '/'); // racine WordPress réellement utilisée
-    if (!is_file($bac . '/.tuc-bac-jetable')) {
-        @file_put_contents($bac . '/.tuc-bac-jetable', 'bac CI');
+    // Deux réglages doivent être posés AVANT de lancer les sous-processus :
+    //   - WP_ENVIRONMENT_TYPE=local : par défaut WordPress vaut « production » ;
+    //   - le rechargement $wp_rewrite->flush_rules() : sans lui, la route REST
+    //     `tuc/v1/restaurant-applications` n'existe pas dans le permalien de
+    //     ce conteneur neuf, et le POST réel tombe en 404 (et non en 201/503).
+    global $wp_rewrite;
+    if (is_object($wp_rewrite)) {
+        $wp_rewrite->flush_rules();
     }
-    $urlBac = 'http://127.0.0.1:' . (getenv('TUC_WP_PORT') ?: '8080');
+    $urlBac = getenv('TUC_WP_URL') ?: ('http://127.0.0.1:' . (getenv('TUC_WP_PORT') ?: '8080'));
+    // `wp` est sur le PATH dans l'image wordpress:cli ; en bac local on passe le phar.
+    $wpCliBin = getenv('TUC_WP_CLI') ?: 'wp';
     $lancerBac = static function (string $script, array $args) use ($bac): array {
         $sortie = [];
         $code = 0;
         exec(
-            escapeshellarg(PHP_BINARY) . ' ' . escapeshellarg('/opt/tuc-tests/' . $script) . ' '
+            "WP_ENVIRONMENT_TYPE=local TUC_BAC_JETABLE=1 TUC_WP_CLI=" . escapeshellarg($wpCliBin)
+            . ' ' . escapeshellarg(PHP_BINARY) . ' ' . escapeshellarg('/opt/tuc-tests/' . $script) . ' '
             . implode(' ', array_map('escapeshellarg', $args)) . ' 2>&1',
             $sortie,
             $code
