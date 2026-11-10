@@ -1319,6 +1319,25 @@ final class TUC_Onboarding_Restaurant
         // une transaction neuve, et pas seulement la requête en échec.
         for ($essai = 1; $essai <= self::CRITIQUE_TENTATIVES; $essai++) {
             [$pris, $resultat, $perdue] = self::tenter_reservation($cle);
+            // Le verdict « momentanément occupé » est une invitation à rejouer la
+            // section — le module se l'applique à lui-même une fois ou deux avant
+            // de la renvoyer au client. Mesuré en CI (run sur 49aaab0) : 18 de
+            // ces refus sur 96 réservations d'IP distinctes, 31 sur 144, alors
+            // qu'une seule reprise suffit (vérifié : 100 % passent au 2e essai).
+            // Borné par CRITIQUE_TENTATIVES, avec jitter, et SANS consommation de
+            // quota : ces deux branches n'ont rien écrit (`$annuler()` a tout
+            // annulé). Un refus de quota (429) ou une panne réelle (503
+            // `tuc_onboarding_storage`) ne sont PAS rejoués : ce ne sont pas des
+            // courses perdues.
+            if (!$perdue
+                && (!$pris
+                    || ($resultat instanceof WP_Error
+                        && $resultat->get_error_code() === 'tuc_onboarding_occupe'))
+                && $essai < self::CRITIQUE_TENTATIVES) {
+                self::oublier_erreur_sql();
+                usleep(rand(3, 25) * 1000);
+                continue;
+            }
             if (!$perdue) {
                 if (!$pris) {
                     // Verrou NON pris : la demande n'est pas réservée. Sans ce
