@@ -116,8 +116,8 @@ final class TUC_Onboarding_Restaurant
               </div>
               <div class="tuc-onboarding-field">
                 <label for="tuc-onboarding-menu-photo">Photo du menu</label>
-                <input id="tuc-onboarding-menu-photo" name="menu_photo" type="file" accept="image/jpeg,image/png,image/webp" required aria-describedby="tuc-onboarding-photo-help">
-                <small id="tuc-onboarding-photo-help">JPEG, PNG ou WebP · 5 Mo maximum · une photo nette suffit.</small>
+                <input id="tuc-onboarding-menu-photo" name="menu_photo" type="file" accept="image/jpeg,image/png,image/webp,image/heic,image/heif,.heic,.heif" required aria-describedby="tuc-onboarding-photo-help">
+                <small id="tuc-onboarding-photo-help">JPEG, PNG, WebP ou photo d’iPhone (HEIC) · 5 Mo maximum · une photo nette suffit.</small>
               </div>
               <button class="tuc-onboarding-submit" type="submit">Demander l’accompagnement</button>
             </form>
