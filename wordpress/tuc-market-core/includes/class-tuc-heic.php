@@ -42,14 +42,6 @@ function tuc_heic_aiguillage(string $chemin, string $nom): array|WP_Error
         return ['chemin' => $chemin, 'nom' => $nom, 'temporaire' => ''];
     }
 
-    if (!class_exists('Imagick') || !tuc_heic_decodeur_disponible()) {
-        return new WP_Error(
-            'tuc_onboarding_photo_heic',
-            __('Cette photo est au format HEIC (iPhone), que ce site ne sait pas encore convertir. Sur iPhone : Réglages → Appareil photo → Formats → « Le plus compatible », ou partagez la photo en JPEG.', 'tuc-core'),
-            ['status' => 415]
-        );
-    }
-
     // DÉPENDANCE : `wp_tempnam()` vit dans wp-admin/includes/file.php, que le
     // front-end REST ne charge PAS. Mesuré en HTTP réel : sans ce require, la
     // conversion échouait en 415 « n'a pas pu être convertie » alors qu'Imagick
@@ -62,6 +54,18 @@ function tuc_heic_aiguillage(string $chemin, string $nom): array|WP_Error
         return new WP_Error(
             'tuc_onboarding_photo_heic',
             __('Cette photo n’a pas pu être convertie.', 'tuc-core'),
+            ['status' => 415]
+        );
+    }
+
+    // Le refus « pas de décodeur » vient APRÈS le chargement de la dépendance :
+    // dans l'ordre inverse (mesuré en CI le 2026-11-10), la fonction s'arrêtait
+    // avant de charger `wp_tempnam()`, et le test de dépendance ne pouvait plus
+    // être vérifié sur les images sans libheif.
+    if (!class_exists('Imagick') || !tuc_heic_decodeur_disponible()) {
+        return new WP_Error(
+            'tuc_onboarding_photo_heic',
+            __('Cette photo est au format HEIC (iPhone), que ce site ne sait pas encore convertir. Sur iPhone : Réglages → Appareil photo → Formats → « Le plus compatible », ou partagez la photo en JPEG.', 'tuc-core'),
             ['status' => 415]
         );
     }
