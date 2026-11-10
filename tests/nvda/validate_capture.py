@@ -18,12 +18,12 @@ REQUIRED_FRENCH = (
     "Nom du restaurant",
     "En français ou en arabe",
     "Photo du menu",
-    # L'aide sous le champ a changé le 2026-11-03 : elle cite désormais les
-    # photos d'iPhone. On exige des fragments COURTS : la phrase entière avec
-    # « (HEIC) » n'est pas revenue dans la capture NVDA (sigle lu différemment),
-    # alors que les fragments ci-dessous le sont. Le sigle lui-même est vérifié
-    # côté HTML par le contrat (cas 47), pas par la synthèse vocale.
-    "photo d’iPhone",
+    # L'aide sous le champ a changé le 2026-11-03 (elle cite les photos
+    # d'iPhone). Fragment exigé d'après la capture RÉELLE du run 42864676015,
+    # annonce 000020 : 'JPEG, PNG, Web P ou photo d’i Phone (HEIC)   5 Mo maximum'.
+    # eSpeak coupe « WebP » et « iPhone » en deux mots ; `normalized()` recolle
+    # ces prononciations, donc on écrit le fragment tel que NVDA le découpe.
+    "photo d’i Phone",
     "5 Mo maximum",
     "Demander l’accompagnement",
     "Demande enregistrée",
