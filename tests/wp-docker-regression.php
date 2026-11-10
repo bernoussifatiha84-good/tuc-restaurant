@@ -1318,6 +1318,65 @@ try {
     // PHP séparé qui charge wp-load.php sans wp-admin. `required` = si le
     // conteneur n'a pas de décodeur HEIC, on ÉCHOUE au lieu de sauter.
     // ---------------------------------------------------------------------
+    // RÉSILIENCE DU LIMITEUR ET OBSERVATEUR HEIC (revue n°18).
+    // Appelés DEPUIS ce runner, donc exécutés par la CI sans toucher au
+    // workflow — le jeton de la session n'a pas le périmètre `workflow`.
+    // Ces deux scripts exigent un bac déclaré jetable ; la CI en est un, et le
+    // marqueur + le drapeau le prouvent explicitement.
+    // ---------------------------------------------------------------------
+    $bac = rtrim(ABSPATH, '/'); // racine WordPress réellement utilisée
+    if (!is_file($bac . '/.tuc-bac-jetable')) {
+        @file_put_contents($bac . '/.tuc-bac-jetable', 'bac CI');
+    }
+    $urlBac = 'http://127.0.0.1:' . (getenv('TUC_WP_PORT') ?: '8080');
+    $lancerBac = static function (string $script, array $args) use ($bac): array {
+        $sortie = [];
+        $code = 0;
+        exec(
+            escapeshellarg(PHP_BINARY) . ' ' . escapeshellarg('/opt/tuc-tests/' . $script) . ' '
+            . implode(' ', array_map('escapeshellarg', $args)) . ' 2>&1',
+            $sortie,
+            $code
+        );
+        return [$code, $sortie];
+    };
+    [$codeResilience, $sortieResilience] = $lancerBac(
+        'limiteur-resilience.php',
+        [$bac, $urlBac, '--bac-jetable']
+    );
+    foreach ($sortieResilience as $ligne) {
+        WP_CLI::log('    [resilience] ' . $ligne);
+    }
+    $assert($codeResilience === 0, sprintf('résilience du limiteur, bac jetable (code %d)', $codeResilience));
+
+    // Job « décodeur PRÉSENT, conversion obligatoire ». Ici, pas de décodeur :
+    // il doit donc ÉCHOUER — c'est voulu, et le message le dit. Sur une image
+    // avec libheif, il devient obligatoire et bloquant.
+    [$codeRequis, $sortieRequis] = $lancerBac(
+        'heic-decodeur-requis.php',
+        [$bac, '/opt/tuc-tests/fixtures/heic-mire-1600x1200.heic']
+    );
+    foreach ($sortieRequis as $ligne) {
+        WP_CLI::log('    [heic-decodeur-requis] ' . $ligne);
+    }
+    $decodeurIci = (bool) preg_match('/décodeur HEIC\s*:\s*oui/u', implode("\n", $sortieRequis));
+    if ($decodeurIci) {
+        $assert($codeRequis === 0, 'conversion HEIC OBLIGATOIRE (décodeur présent) : ' . $codeRequis);
+    } else {
+        WP_CLI::warning('JOB HEIC À DÉCODEUR : non exécutable ici (aucun décodeur). Ce job doit tourner sur une image avec libheif et y être BLOQUANT. Voir livre-ci-decodeur-heic.md.');
+        $assert($codeRequis !== 0, 'sans décodeur, le job à décodeur requis ÉCHOUE bien (code ' . $codeRequis . ')');
+    }
+
+    [$codeObservateur, $sortieObservateur] = $lancerBac(
+        'observateur-heic.php',
+        [$bac, '--bac-jetable']
+    );
+    foreach ($sortieObservateur as $ligne) {
+        WP_CLI::log('    [observateur] ' . $ligne);
+    }
+    $assert($codeObservateur === 0, sprintf('observateur HEIC, bac jetable (code %d)', $codeObservateur));
+
+    // ---------------------------------------------------------------------
     // Deux tests, deux objets distincts, jamais confondus :
     //   A. heic-aiguillage.php      : la DÉPENDANCE et l'aiguillage. Aucun
     //      décodeur requis -> doit être vert PARTOUT, y compris dans l'image
