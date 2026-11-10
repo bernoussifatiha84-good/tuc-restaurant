@@ -318,45 +318,67 @@ function tuc_parcours_restaurateur_contrat(?callable $assertExterne = null): int
         $cleV = 'tuc_demandes_' . md5($ipV);
 
         // a) le verrou s'obtient, puis se libère
-        $acquerir = static function (string $c) use ($appeler) { return $appeler('acquerir_verrou', [$c]); };
-        $liberer = static function (string $c) use ($appeler): void { $appeler('liberer_verrou', [$c]); };
-        $compter($acquerir($cleV) === true, '34. le verrou s’obtient quand personne ne le tient');
-        $compter(get_option($cleV . '_verrou') !== false, '35. le verrou est bien visible en base pendant qu’il est tenu');
-        $liberer($cleV);
-        $compter(get_option($cleV . '_verrou') === false, '36. le verrou est retiré après libération');
-        // un verrou orphelin (process tué) doit être repris
-        update_option($cleV . '_verrou', time() - 60, false);
-        $compter($acquerir($cleV) === true, '37. un verrou orphelin de plus de 5 s est repris, pas bloquant');
-        $liberer($cleV);
+        $nomV = $cleV . '_verrou';
+        $prendre = static function (string $n) use ($appeler) { return $appeler('prendre_verrou', [$n]); };
+        $rendre = static function (string $n, string $j) use ($appeler): void { $appeler('rendre_verrou', [$n, $j]); };
+        $lireVerrou = static function (string $n) {
+            global $wpdb;
+            return $wpdb->get_var($wpdb->prepare("SELECT option_value FROM {$wpdb->options} WHERE option_name = %s", $n));
+        };
+        global $wpdb;
+
+        $jA = $prendre($nomV);
+        $compter(is_string($jA) && $jA !== '', '34. le verrou s’obtient et rend un jeton unique');
+        $compter($prendre($nomV) === null, '35. un second preneur est refusé pendant que le verrou est tenu');
+
+        // le détenteur devient « orphelin » (process tué) : sa pose est antidatée
+        $wpdb->query($wpdb->prepare(
+            "UPDATE {$wpdb->options} SET option_value = %s WHERE option_name = %s",
+            $jA . '|' . (time() - 60),
+            $nomV
+        ));
+        $jB = $prendre($nomV);
+        $compter(is_string($jB) && $jB !== $jA, '36. un verrou orphelin de plus de 5 s est repris, avec un NOUVEAU jeton');
+
+        // LE POINT DE LA REVUE : le premier preneur, qui tourne encore, ne doit
+        // pas pouvoir effacer le verrou du second.
+        $rendre($nomV, $jA);
+        $encore = $lireVerrou($nomV);
+        $compter(
+            $encore !== null && explode('|', (string) $encore)[0] === $jB,
+            '37. un preneur expiré qui libère n’efface PAS le verrou du nouveau détenteur (compare-and-set)'
+        );
+        $rendre($nomV, $jB);
+        $compter($lireVerrou($nomV) === null, '38. le détenteur légitime libère bien son verrou');
 
         // b) restitution du crédit après échec
         $appeler('reserver_demande');
         [$nAvant, ] = $appeler('lire_compteur', [$cleV]);
         $appeler('rendre_demande');
         [$nApres, ] = $appeler('lire_compteur', [$cleV]);
-        $compter($nAvant === 1 && $nApres === 0, '38. un échec après réservation rend le crédit (1 → 0)');
+        $compter($nAvant === 1 && $nApres === 0, '39. un échec après réservation rend le crédit (1 → 0)');
         $appeler('rendre_demande');
         [$nPlancher, ] = $appeler('lire_compteur', [$cleV]);
-        $compter($nPlancher === 0, '39. rendre deux fois ne descend pas sous zéro');
+        $compter($nPlancher === 0, '40. rendre deux fois ne descend pas sous zéro');
 
         // c) pluriels
         $msg1 = $appeler('message_limite', [1]);
         $msg2 = $appeler('message_limite', [61]);
         $msg3 = $appeler('message_limite', [120]);
-        $compter(strpos($msg1, 'secondes') === false && strpos($msg1, 'seconde') !== false, '40. 1 seconde s’écrit au singulier (« ' . $msg1 . ' »)');
-        $compter(strpos($msg2, 'secondes') !== false, '41. 61 secondes s’écrit au pluriel');
-        $compter(strpos($msg3, 'minutes') !== false && strpos($msg3, 'minute.') === false, '42. 120 s devient « 2 minutes »');
+        $compter(strpos($msg1, 'secondes') === false && strpos($msg1, 'seconde') !== false, '41. 1 seconde s’écrit au singulier (« ' . $msg1 . ' »)');
+        $compter(strpos($msg2, 'secondes') !== false, '42. 61 secondes s’écrit au pluriel');
+        $compter(strpos($msg3, 'minutes') !== false && strpos($msg3, 'minute.') === false, '43. 120 s devient « 2 minutes »');
 
         // =====================================================================
         // 10. L'ancienne protection n'a pas disparu (pas de « suppression » pure)
         // =====================================================================
         $compter(
             method_exists(TUC_Onboarding_Restaurant::class, 'soumettre'),
-            '43. le point d’entrée public existe toujours'
+            '44. le point d’entrée public existe toujours'
         );
         $compter(
             $constante('MAX_PHOTO_BYTES') === 5_242_880,
-            '44. la limite d’envoi reste à 5 Mo : elle n’a pas été élargie pour faire passer le HEIC'
+            '45. la limite d’envoi reste à 5 Mo : elle n’a pas été élargie pour faire passer le HEIC'
         );
     } finally {
         // Première instruction : on rend au serveur son état d'origine, quoi qu'il
