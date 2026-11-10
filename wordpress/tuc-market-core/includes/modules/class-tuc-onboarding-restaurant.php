@@ -1285,6 +1285,27 @@ final class TUC_Onboarding_Restaurant
         [$pris, , $perdue] = self::sous_verrou($cle, static function (callable $garde, callable $annuler) use ($cle, &$resultat): bool {
             [$n, $restant] = self::lire_compteur($cle);
             if (self::derniere_erreur_sql() !== '') {
+                // La LECTURE du compteur a échoué. Deux mondes séparés par le
+                // message de la base, et le 503 « service indisponible » ne
+                // concerne que le second :
+                //   - conflit transitoire (deadlock, « Record has changed since
+                //     last read », « Lock wait timeout exceeded ») : rien n'a été
+                //     lu, rien n'est perdu, la section sera rejouée par
+                //     `sous_verrou` ;
+                //   - panne réelle (droits, table absente, disque) : là oui, le
+                //     service est indisponible et doit le dire.
+                // DÉFAUT MESURÉ en CI le 2026-11-10 (run sur 7e3a127) : ce chemin
+                // était le seul encore classé « panne » sans regarder le message —
+                // 19 refus 503 sur 96 réservations d'IP distinctes, 19 sur 144 en
+                // rafale, alors que 0 unité de quota n'était consommée à tort.
+                $messageLu = (string) self::derniere_erreur_sql();
+                self::oublier_erreur_sql();
+                if (self::erreur_recuperable($messageLu)) {
+                    self::$refusParPanne = false;
+                    self::$causeRefus = 'conflits';
+                    $resultat = self::erreur_occupation_passee();
+                    return false;
+                }
                 $resultat = self::erreur_stockage();
                 return false;
             }

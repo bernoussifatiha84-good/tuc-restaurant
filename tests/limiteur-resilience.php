@@ -572,7 +572,7 @@ $sondeHttp = static function (string $base): bool {
     return $statut > 0;
 };
 $urlHttpAvant = $urlHttp;
-$tenir = (object) ['proc' => null, 'routeur' => '', 'log' => '', 'port' => 0];
+$tenir = (object) ['proc' => null, 'routeur' => '', 'log' => '', 'port' => 0, 'ombre' => '', 'muPlugin' => ''];
 register_shutdown_function(static function () use ($tenir): void {
     if (is_resource($tenir->proc)) {
         proc_terminate($tenir->proc);
@@ -581,15 +581,78 @@ register_shutdown_function(static function () use ($tenir): void {
     if ($tenir->routeur !== '') {
         @unlink($tenir->routeur);
     }
+    // La racine ombre est jetable : liens, mu-plugin de test et dossiers sont
+    // démontés, l'installation réelle n'a jamais été touchée.
+    if ($tenir->muPlugin !== '') {
+        @unlink($tenir->muPlugin);
+    }
+    if ($tenir->ombre !== '') {
+        foreach (['plugins', 'themes', 'uploads', 'languages'] as $dossier) {
+            $lien = $tenir->ombre . '/wp-content/' . $dossier;
+            if (is_link($lien)) {
+                @unlink($lien);
+            }
+        }
+        @rmdir($tenir->ombre . '/wp-content/mu-plugins');
+        @rmdir($tenir->ombre . '/wp-content');
+        @rmdir($tenir->ombre);
+    }
     if ($tenir->log !== '') {
         @unlink($tenir->log);
     }
 });
 if (!$sondeHttp($urlHttp)) {
+    // --- RACINE OMBRE, pour pouvoir injecter CÔTÉ SERVEUR -------------------
+    // La panne de l'étape (b) doit frapper le processus qui sert la requête :
+    // un filtre posé dans ce processus CLI ne suffit pas. Le moyen usuel est un
+    // mu-plugin dans `wp-content` — mais écrire dans le `wp-content` d'une
+    // installation qui n'est pas la nôtre est exclu (mesuré en CI : il
+    // appartient à uid 33, le test tourne en uid 82). On monte donc une racine
+    // ombre dans /tmp : notre `wp-content`, avec `plugins`, `themes`, `uploads`
+    // et `languages` RELIÉS par symlink à l'installation réelle, plus un
+    // `mu-plugins` à nous. Rien n'est écrit dans l'installation : les photos
+    // passent par le lien et atterrissent dans le vrai `wp-content/uploads`,
+    // exactement là où les assertions vont les chercher.
+    $ombre = sys_get_temp_dir() . '/tuc-ombre-' . getmypid();
+    $tenir->ombre = $ombre;
+    @mkdir($ombre . '/wp-content/mu-plugins', 0777, true);
+    foreach (['plugins', 'themes', 'uploads', 'languages'] as $dossier) {
+        if (is_dir($wpRoot . '/wp-content/' . $dossier) && !file_exists($ombre . '/wp-content/' . $dossier)) {
+            @symlink($wpRoot . '/wp-content/' . $dossier, $ombre . '/wp-content/' . $dossier);
+        }
+    }
+    $tenir->muPlugin = $ombre . '/wp-content/mu-plugins/tuc-injection-bac.php';
+    file_put_contents($tenir->muPlugin, "<?php\n"
+        . "// INSTRUMENTATION DE TEST — générée par " . basename(__FILE__) . ", détruite à la fin de la section.\n"
+        . "// Lit un drapeau et, selon sa valeur, remplace l'écriture du compteur\n"
+        . "// par une requête vouée à l'échec. Elle ne touche AUCUNE donnée existante.\n"
+        . "\$drapeau = getenv('TUC_INJECTION_FLAG') ?: '/tmp/tuc-injection.flag';\n"
+        . "\$journal = " . var_export($journal, true) . ";\n"
+        . "if (!is_file(\$drapeau)) { return; }\n"
+        . "\$mode = trim((string) file_get_contents(\$drapeau));\n"
+        . "if (\$mode === '') { return; }\n"
+        . "\$deadlockVu = false;\n"
+        . "add_filter('query', static function (string \$q) use (&\$deadlockVu, \$mode, \$journal): string {\n"
+        . "    \$err = (string) (\$GLOBALS['wpdb']->last_error ?? '');\n"
+        . "    if (stripos(\$err, 'Deadlock') !== false || stripos(\$err, 'try restarting') !== false) {\n"
+        . "        \$deadlockVu = true;\n"
+        . "        @file_put_contents(\$journal, \"deadlock\\n\", FILE_APPEND);\n"
+        . "    }\n"
+        . "    \$ecriture = (stripos(ltrim(\$q), 'UPDATE') === 0 || stripos(ltrim(\$q), 'INSERT') === 0)\n"
+        . "        && strpos(\$q, 'tuc_demandes_') !== false && strpos(\$q, '_verrou') === false;\n"
+        . "    if (!\$ecriture) { return \$q; }\n"
+        . "    if (\$mode === 'panne' || (\$mode === 'panne-apres-reprise' && \$deadlockVu)) {\n"
+        . "        \$deadlockVu = false;\n"
+        . "        @file_put_contents(\$journal, \"injection\\n\", FILE_APPEND);\n"
+        . "        return \"UPDATE \\`{\" . \$GLOBALS['wpdb']->prefix . \"}table_absente_du_test\\` SET option_value = 1\";\n"
+        . "    }\n"
+        . "    return \$q;\n"
+        . "}, 10, 1);\n");
     $tenir->routeur = sys_get_temp_dir() . '/tuc-routeur-' . getmypid() . '.php';
-    // Routeur minimal : servir le fichier s'il existe, sinon laisser WordPress
-    // répondre (le serveur intégré de PHP ne lit pas .htaccess).
-    file_put_contents($tenir->routeur, "<?php\n\$racine = \$_SERVER['DOCUMENT_ROOT'];\n\$chemin = parse_url(\$_SERVER['REQUEST_URI'], PHP_URL_PATH) ?: '/';\nif (\$chemin !== '/' && is_file(\$racine . \$chemin)) { return false; }\nrequire \$racine . '/index.php';\n");
+    // Routeur : servir le fichier s'il existe, sinon laisser WordPress répondre
+    // (le serveur intégré de PHP ne lit pas .htaccess), en pointant le contenu
+    // vers la racine ombre.
+    file_put_contents($tenir->routeur, "<?php\n\$racine = " . var_export($wpRoot, true) . ";\n\$ombre = " . var_export($ombre, true) . ";\nif (!defined('WP_CONTENT_DIR')) { define('WP_CONTENT_DIR', \$ombre . '/wp-content'); }\n\$chemin = parse_url(\$_SERVER['REQUEST_URI'], PHP_URL_PATH) ?: '/';\nif (\$chemin !== '/' && is_file(\$racine . \$chemin)) { return false; }\nrequire \$racine . '/index.php';\n");
     $tenir->log = sys_get_temp_dir() . '/tuc-serveur-' . getmypid() . '.log';
     for ($essai = 0; $essai < 8 && !is_resource($tenir->proc); $essai++) {
         $ecoute = @stream_socket_server('tcp://127.0.0.1:0', $errNo, $errStr);
@@ -807,7 +870,17 @@ if (is_resource($tenir->proc)) {
     $tenir->proc = null;
     @unlink($tenir->routeur);
     @unlink($tenir->log);
-    echo "    serveur HTTP auto-démarré : ARRÊTÉ (port " . $tenir->port . ")\n";
+    @unlink($tenir->muPlugin);
+    foreach (['plugins', 'themes', 'uploads', 'languages'] as $dossier) {
+        $lien = $tenir->ombre . '/wp-content/' . $dossier;
+        if (is_link($lien)) {
+            @unlink($lien);
+        }
+    }
+    @rmdir($tenir->ombre . '/wp-content/mu-plugins');
+    @rmdir($tenir->ombre . '/wp-content');
+    @rmdir($tenir->ombre);
+    echo "    serveur HTTP auto-démarré : ARRÊTÉ (port " . $tenir->port . "), racine ombre démontée\n";
 }
 echo "\n=== 6. Clé témoin préexistante : intacte après tout le test ===\n";
 $valeurTemoinApres = (string) $wpdb->get_var($wpdb->prepare("SELECT option_value FROM `{$wpdb->options}` WHERE option_name = %s", $temoinCle));
