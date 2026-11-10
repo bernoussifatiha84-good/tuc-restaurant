@@ -404,14 +404,59 @@ final class TUC_Onboarding_Restaurant
                 self::purger_cache_option(self::OPTION_GENERATION);
                 return $suivant;
             }
+
             if ($touche === false) {
-                return null; // erreur SQL : refus, jamais de valeur de secours
+                // -----------------------------------------------------------------
+                // DÉFAUT MESURÉ les 2026-11-03 et 2026-11-10 (bac + CI, 12 IP
+                // distinctes en rafale) : cette branche rendait `null`, donc un
+                // 503 « service indisponible » à l'utilisateur. Or `false` ici
+                // n'est PAS une panne : c'est MariaDB qui signale une collision
+                // de mise à jour optimiste, ou un DEADLOCK entre deux
+                // transactions concurrentes sur la même ligne.
+                //   « Record has changed since last read in table 'wp_options' »
+                //   « Deadlock found when trying to get lock; try restarting »
+                // Le message SQL dit lui-même « try restarting transaction ».
+                // Ce sont des conflits RÉCUPÉRABLES : on relit et on réessaie,
+                // dans la limite de GENERATION_TENTATIVES (10, déjà en place).
+                // -----------------------------------------------------------------
+                if (!self::erreur_recuperable((string) $wpdb->last_error)) {
+                    return null; // vraie panne (droits, table absente...) : refus
+                }
+                self::oublier_erreur_sql(); // ne pas laisser une trace périmée
+                usleep(rand(2, 12) * 1000); // désynchronise les reprises (jitter)
+                continue;
             }
             // 0 ligne touchée : un autre processus a pris ce numéro. On relit.
         }
         // Épuisement des tentatives : AUCUN repli horodaté (deux créations dans
         // la même seconde partageraient la même valeur — mesuré). null = refus.
         return null;
+    }
+
+    /**
+     * Cette erreur SQL est-elle un conflit de concurrence RÉCUPÉRABLE ?
+     *
+     * Volontairement restrictif : trois motifs connus, rien d'autre. Une vraie
+     * panne (table absente, droits refusés, disque plein, « MySQL server has
+     * gone away ») n'est PAS récupérable : elle doit continuer à produire un
+     * refus propre, jamais une boucle de reprise qui masquerait la panne.
+     */
+    private static function erreur_recuperable(string $message): bool
+    {
+        if ($message === '') {
+            return false;
+        }
+        foreach ([
+            'Record has changed since last read', // CAS : ligne modifiée entre SELECT et UPDATE
+            'Deadlock found',                      // deux transactions qui se croisent
+            'try restarting transaction',          // formulation MariaDB du deadlock
+            'Lock wait timeout exceeded',          // attente de verrou trop longue
+        ] as $motif) {
+            if (stripos($message, $motif) !== false) {
+                return true;
+            }
+        }
+        return false;
     }
 
     /**
@@ -486,6 +531,13 @@ final class TUC_Onboarding_Restaurant
         ));
         self::purger_cache_option($cle);
         if ((int) $touche !== 1) {
+            // `false` = erreur SQL (collision optimiste ou deadlock), pas une
+            // course ordinaire. On NETTOIE le message avant de rendre, sinon la
+            // barrière appelante (`derniere_erreur_sql()`) le prendrait pour une
+            // panne de stockage et rendrait un 503.
+            if ($touche === false) {
+                self::oublier_erreur_sql();
+            }
             return false; // ligne disparue ou état changé : on n'écrit rien
         }
         return self::relire_egal($cle, $valeur);
@@ -998,10 +1050,14 @@ final class TUC_Onboarding_Restaurant
                 return false;
             }
             if ($ecrit === false) {
-                // Ligne apparue/disparue entre la lecture et l'écriture : nouvel
-                // essai (idempotent, aucun crédit consommé). On ne peut pas
-                // relancer ici : on le signale comme une occupation.
-                $resultat = self::erreur_stockage();
+                // Ligne apparue/disparue, verrou perdu, ou collision optimiste :
+                // AUCUN crédit n'a été consommé. Ce n'est pas une panne de
+                // service : on invite à réessayer (et on ANNULE la transaction,
+                // pour ne rien laisser derrière) au lieu de rendre un 503.
+                // Mesuré le 2026-11-10 : ce seul `return false` muet produisait
+                // 6 refus 503 sur 12 demandes d'IP distinctes.
+                $resultat = self::erreur_occupation_passee();
+                $annuler();
                 return false;
             }
             return true;
