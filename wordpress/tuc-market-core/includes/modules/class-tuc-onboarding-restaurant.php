@@ -311,40 +311,81 @@ final class TUC_Onboarding_Restaurant
     }
 
     /**
-     * Écrit un compteur (SQL direct + purge du cache objet). À appeler SOUS verrou.
+     * Écrit un compteur. Le résultat est VÉRIFIÉ en base : on ne suppose jamais
+     * qu'un UPDATE a fait ce qu'on lui demandait.
      *
-     * Rend true seulement si la base a VRAIMENT une ligne avec cette valeur
-     * après coup. Un échec d'écriture ne doit jamais passer pour un succès :
-     * l'appelant voit false et refuse la demande.
+     * `$attendu` (facultatif) rend l'écriture CONDITIONNELLE : elle ne s'applique
+     * que si la ligne vaut encore exactement `$attendu`. C'est ce qui empêche
+     * qu'une écriture préparée par un détenteur de verrou expiré écrase celle
+     * d'un autre : la condition est évaluée PAR LA BASE au moment d'écrire.
      */
-    private static function ecrire_compteur(string $cle, int $compte, int $fin): bool
+    private static function ecrire_compteur(string $cle, int $compte, int $fin, ?string $attendu = null): bool
     {
         global $wpdb;
         $valeur = $compte . '|' . $fin;
-        $insert = $wpdb->query($wpdb->prepare(
-            "INSERT IGNORE INTO `{$wpdb->options}` (option_name, option_value, autoload) VALUES (%s, %s, 'no')",
-            $cle,
-            $valeur
-        ));
-        if ($insert !== 1) {
+
+        if ($attendu !== null || self::ligne_existe($cle) === false) {
+            $insert = $wpdb->query($wpdb->prepare(
+                "INSERT IGNORE INTO `{$wpdb->options}` (option_name, option_value, autoload) VALUES (%s, %s, 'no')",
+                $cle,
+                $valeur
+            ));
+            if ($insert === 1) {
+                self::purger_cache_option($cle);
+                return self::relire_egal($cle, $valeur);
+            }
+        }
+
+        if ($attendu === null) {
             $wpdb->query($wpdb->prepare(
                 "UPDATE `{$wpdb->options}` SET option_value = %s WHERE option_name = %s",
                 $valeur,
                 $cle
             ));
+        } else {
+            if (self::lire_brut($cle) !== $attendu) {
+                self::purger_cache_option($cle);
+                return false; // la ligne a changé : on n'écrase pas
+            }
+            $touche = $wpdb->query($wpdb->prepare(
+                "UPDATE `{$wpdb->options}` SET option_value = %s WHERE option_name = %s AND option_value = %s",
+                $valeur,
+                $cle,
+                $attendu
+            ));
+            if ((int) $touche !== 1) {
+                self::purger_cache_option($cle);
+                // 0 ligne touchée = le compteur n'est plus ce qu'on avait lu.
+                return self::relire_egal($cle, $valeur) && false;
+            }
         }
         self::purger_cache_option($cle);
-        // Vérification du RÉSULTAT FINAL, pas de la valeur retournée par l'UPDATE :
-        // deux lignes homonymes n'existent pas (index UNIQUE), donc relire suffit
-        // et ne peut pas être trompé par un compteur affecté.
-        $relu = $wpdb->get_var($wpdb->prepare(
+        // Vérification du RÉSULTAT FINAL, pas de la valeur retournée par l'UPDATE.
+        return self::relire_egal($cle, $valeur);
+    }
+
+    /** Valeur brute d'une ligne d'option, sans cache. */
+    private static function lire_brut(string $cle): ?string
+    {
+        global $wpdb;
+        $valeur = $wpdb->get_var($wpdb->prepare(
             "SELECT option_value FROM `{$wpdb->options}` WHERE option_name = %s",
             $cle
         ));
-        return is_string($relu) && $relu === $valeur;
+        return $valeur === null ? null : (string) $valeur;
     }
 
-    /** Remet un compteur à zéro (SQL direct + purge). À appeler SOUS verrou. */
+    private static function ligne_existe(string $cle): bool
+    {
+        return self::lire_brut($cle) !== null;
+    }
+
+    private static function relire_egal(string $cle, string $valeur): bool
+    {
+        return self::lire_brut($cle) === $valeur;
+    }
+
+    /** Remet un compteur à zéro (SQL direct + purge). Rend true si la ligne a disparu. */
     private static function supprimer_compteur(string $cle): bool
     {
         global $wpdb;
@@ -353,11 +394,7 @@ final class TUC_Onboarding_Restaurant
             $cle
         ));
         self::purger_cache_option($cle);
-        $restant = $wpdb->get_var($wpdb->prepare(
-            "SELECT COUNT(*) FROM `{$wpdb->options}` WHERE option_name = %s",
-            $cle
-        ));
-        return (int) $restant === 0;
+        return !self::ligne_existe($cle);
     }
 
     /**
@@ -408,6 +445,9 @@ final class TUC_Onboarding_Restaurant
     /** Durée au-delà de laquelle un verrou est considéré orphelin (process tué). */
     private const VERROU_TTL = 5;
 
+    /** Une transaction est-elle ouverte par `sous_verrou()` ? */
+    private static bool $transactionOuverte = false;
+
     /**
      * Exécute `$action` en section critique. Rend null si le verrou n'a pas pu
      * être pris — l'appelant décide alors de refuser plutôt que de laisser passer.
@@ -425,9 +465,12 @@ final class TUC_Onboarding_Restaurant
         }
         $resultat = null;
         $garde = false;
+        $transaction = self::ouvrir_transaction();
         try {
-            // Si le verrou nous a échappé pendant l'opération (process suspendu
-            // au-delà du TTL, reprise par un autre), l'action ne doit pas écrire.
+            // Sous transaction, la ligne du verrou est verrouillée (FOR UPDATE en
+            // MariaDB/InnoDB) : un autre processus ne peut pas nous reprendre au
+            // milieu. Vérifier puis écrire ne peut plus être séparé par une reprise.
+            self::verrouiller_ligne($nom);
             if (!self::verrou_est_a_nous($nom, $jeton)) {
                 return [false, null];
             }
@@ -435,10 +478,85 @@ final class TUC_Onboarding_Restaurant
             // Après l'action : si le verrou n'est plus à nous, le travail n'est
             // pas fiable et on le signale à l'appelant.
             $garde = self::verrou_est_a_nous($nom, $jeton);
+            if ($transaction === 'transaction') {
+                self::valider_transaction();
+            }
+        } catch (Throwable $e) {
+            if (self::$transactionOuverte) {
+                self::annuler_transaction();
+            }
+            throw $e;
         } finally {
+            if (self::$transactionOuverte) {
+                self::annuler_transaction();
+            }
             self::rendre_verrou($nom, $jeton);
         }
         return [$garde, $resultat];
+    }
+
+    /**
+     * Ouvre une transaction. Rend 'transaction' si la base l'a acceptée,
+     * 'aucune' sinon — et dans ce cas la protection repose uniquement sur les
+     * mutations conditionnelles, ce que le code dit au lieu de le taire.
+     */
+    private static function ouvrir_transaction(): string
+    {
+        global $wpdb;
+        if (self::$transactionOuverte) {
+            return 'transaction';
+        }
+        foreach (['START TRANSACTION', 'BEGIN IMMEDIATE', 'BEGIN'] as $ordre) {
+            $wpdb->last_error = '';
+            if ($wpdb->query($ordre) !== false && $wpdb->last_error === '') {
+                self::$transactionOuverte = true;
+                return 'transaction';
+            }
+        }
+        $wpdb->last_error = '';
+        return 'aucune';
+    }
+
+    /** Verrouille la ligne du verrou pour la durée de la transaction (si la base sait le faire). */
+    private static function verrouiller_ligne(string $nom): bool
+    {
+        global $wpdb;
+        if (!self::$transactionOuverte) {
+            return false;
+        }
+        $wpdb->last_error = '';
+        $wpdb->get_var($wpdb->prepare(
+            "SELECT option_value FROM `{$wpdb->options}` WHERE option_name = %s FOR UPDATE",
+            $nom
+        ));
+        if ($wpdb->last_error === '') {
+            return true;
+        }
+        // SQLite ne connaît pas FOR UPDATE : sa transaction en écriture
+        // (BEGIN IMMEDIATE) verrouille déjà la base entière.
+        $wpdb->last_error = '';
+        return false;
+    }
+
+    private static function valider_transaction(): void
+    {
+        global $wpdb;
+        $wpdb->query('COMMIT');
+        self::$transactionOuverte = false;
+        wp_cache_delete('alloptions', 'options');
+        wp_cache_delete('notoptions', 'options');
+    }
+
+    private static function annuler_transaction(): void
+    {
+        global $wpdb;
+        if (!self::$transactionOuverte) {
+            return;
+        }
+        $wpdb->query('ROLLBACK');
+        self::$transactionOuverte = false;
+        wp_cache_delete('alloptions', 'options');
+        wp_cache_delete('notoptions', 'options');
     }
 
     /**
@@ -565,21 +683,29 @@ final class TUC_Onboarding_Restaurant
 
     /**
      * Incrémente un compteur à fenêtre fixe. À appeler DANS `sous_verrou()`.
-     * Le compteur est lu AVANT d'écrire, dans la même section critique que la
-     * décision : c'est le point que la revue a mis en évidence.
      *
-     * Rend false si l'écriture n'a pas été vérifiée en base : l'appelant refuse
-     * alors, il ne fait pas comme si la protection avait fonctionné.
+     * LA COURSE QUE LA REVUE N°3 A NOMMÉE : vérifier la garde puis écrire sont
+     * deux opérations ; entre les deux, le verrou peut expirer et un autre
+     * processus peut reprendre et écrire. Une vérification APRÈS coup ne défait
+     * pas l'écriture déjà faite.
+     *
+     * D'où deux protections qui ne laissent pas d'espace :
+     * 1. la mutation est CONDITIONNELLE sur la valeur lue (`$attendu`), donc une
+     *    écriture préparée sur un état périmé est refusée par la base ;
+     * 2. le verrou est VERROUILLÉ (SELECT ... FOR UPDATE en transaction) pendant
+     *    lecture → garde → écriture → relecture du verrou : un preneur ne peut
+     *    pas nous reprendre au milieu (voir `sous_verrou()`).
      */
     private static function incrementer_compteur(string $cle, ?callable $garde = null): bool
     {
+        $brut = self::lire_brut($cle);
         [$n, $restant] = self::lire_compteur($cle);
         $fin = $restant > 0 ? time() + $restant : time() + HOUR_IN_SECONDS;
         // Avant d'écrire : le verrou est-il toujours le nôtre ?
         if ($garde !== null && !$garde()) {
             return false;
         }
-        return self::ecrire_compteur($cle, $n + 1, $fin);
+        return self::ecrire_compteur($cle, $n + 1, $fin, $brut);
     }
 
     /**
@@ -595,6 +721,7 @@ final class TUC_Onboarding_Restaurant
         }
         self::oublier_erreur_sql();
         [$pris, $rendu] = self::sous_verrou($cle, static function (callable $garde) use ($cle): bool {
+            $brut = self::lire_brut($cle);
             [$n, $restant] = self::lire_compteur($cle);
             if ($n <= 0) {
                 return false; // rien à rendre
@@ -605,7 +732,7 @@ final class TUC_Onboarding_Restaurant
             if ($restant <= 0) {
                 return self::supprimer_compteur($cle);
             }
-            return self::ecrire_compteur($cle, $n - 1, time() + $restant);
+            return self::ecrire_compteur($cle, $n - 1, time() + $restant, $brut);
         });
         return $pris && $rendu === true && self::derniere_erreur_sql() === '';
     }
@@ -714,41 +841,78 @@ final class TUC_Onboarding_Restaurant
      * RETENTION_COMPTEUR et verrous orphelins très anciens. Sans lui, chaque
      * nouvelle IP laisserait une ligne d'options pour toujours.
      *
-     * Portable À DESSEIN : pas de `SUBSTRING_INDEX` (MySQL seulement), pas de
-     * `CAST(... AS SIGNED)`. La sélection est un LIKE, le tri par âge se fait en
-     * PHP. Mesuré sur MariaDB 10.11.13 ET SQLite : la version SQL « élégante »
-     * marchait sur MariaDB et échouait sur SQLite — c'est le test qui l'a dit.
+     * DEUX DÉFAUTS CORRIGÉS (revue n°3, point 2) :
      *
-     * Sûreté : on ne supprime QUE des lignes dont l'instant de fin (ou de pose)
-     * est dépassé depuis plus de 24 h. Une ligne vivante n'est jamais touchée.
-     * Ces lignes ne sont protégées par aucun verrou : la pire conséquence d'un
-     * balayage est de remettre à zéro un compteur déjà logiquement à zéro.
+     * 1. la suppression se faisait PAR NOM, après une sélection : une ligne
+     *    renouvelée entre les deux (nouvelle écriture d'un autre processus)
+     *    aurait été effacée. Désormais le DELETE est conditionnel à la valeur
+     *    EXACTE qui a été lue (`AND option_value = %s`) : si la ligne a changé,
+     *    zéro ligne touchée, elle survit.
+     * 2. le `LIKE 'tuc_%'` ramenait d'autres clés du site (tuc_vapid_*, etc.) qui
+     *    pouvaient remplir la fenêtre de 500 et laisser les mêmes lignes
+     *    anciennes hors de portée pour toujours. La sélection vise maintenant
+     *    EXACTEMENT nos deux préfixes, triés par nom : chaque passe supprime ce
+     *    qu'elle a lu, donc la fenêtre avance et le balayage progresse.
+     *
+     * Portable À DESSEIN : pas de `SUBSTRING_INDEX` (MySQL seulement), pas de
+     * `CAST(... AS SIGNED)` — la version SQL « élégante » marchait sur MariaDB et
+     * échouait sur SQLite, c'est le test qui l'a dit.
      */
-    private static function purger_lignes_perimees(): void
+    private static function purger_lignes_perimees(int $plafond = 500): int
     {
         if (wp_rand(1, self::PURGE_UN_SUR) !== 1) {
-            return;
+            return 0;
         }
+        return self::balayer_lignes_perimees($plafond);
+    }
+
+    /**
+     * Le balayage lui-même, sans le tirage aléatoire : c'est lui qu'on teste.
+     * Rend le nombre de lignes réellement supprimées.
+     */
+    private static function balayer_lignes_perimees(int $plafond = 500): int
+    {
         global $wpdb;
         $limite = time() - self::RETENTION_COMPTEUR;
         $lignes = $wpdb->get_results($wpdb->prepare(
-            "SELECT option_name, option_value FROM `{$wpdb->options}` WHERE option_name LIKE %s LIMIT 500",
-            $wpdb->esc_like('tuc_') . '%'
+            "SELECT option_name, option_value FROM `{$wpdb->options}`
+              WHERE option_name LIKE %s OR option_name LIKE %s
+              ORDER BY option_name ASC
+              LIMIT %d",
+            $wpdb->esc_like('tuc_tentatives_') . '%',
+            $wpdb->esc_like('tuc_demandes_') . '%',
+            max(1, $plafond)
         ), ARRAY_A);
+        $supprimees = 0;
         foreach ((array) $lignes as $ligne) {
             $nom = (string) ($ligne['option_name'] ?? '');
+            $valeur = (string) ($ligne['option_value'] ?? '');
             if (!preg_match('/^tuc_(tentatives|demandes)_[a-z0-9]+(_verrou)?$/', $nom)) {
-                continue; // jamais autre chose que nos clés, même si le LIKE est large
+                continue; // ceinture et bretelles : jamais autre chose que nos clés
             }
-            $parties = explode('|', (string) ($ligne['option_value'] ?? ''));
-            $instant = (int) ($parties[1] ?? 0);
-            if ($instant > 0 && $instant < $limite) {
-                $wpdb->query($wpdb->prepare("DELETE FROM `{$wpdb->options}` WHERE option_name = %s", $nom));
+            $instant = (int) (explode('|', $valeur)[1] ?? 0);
+            if ($instant <= 0 || $instant >= $limite) {
+                continue; // vivante (ou sans horodatage) : intouchable
+            }
+            // Point d'observation (action WordPress) : sans auditeur, aucun effet.
+            // Il existe pour que le test puisse renouveler la ligne EXACTEMENT
+            // entre la sélection et la suppression, au lieu de le simuler.
+            do_action('tuc_avant_suppression_ligne_perimee', $nom, $valeur);
+
+            // CONDITIONNEL : ne supprime que si la valeur est encore celle lue.
+            $touche = $wpdb->query($wpdb->prepare(
+                "DELETE FROM `{$wpdb->options}` WHERE option_name = %s AND option_value = %s",
+                $nom,
+                $valeur
+            ));
+            if ((int) $touche === 1) {
+                $supprimees++;
                 self::purger_cache_option($nom);
             }
         }
         wp_cache_delete('alloptions', 'options');
         wp_cache_delete('notoptions', 'options');
+        return $supprimees;
     }
 
     /** Message avec un délai lisible : « dans 42 minutes », pas « plus tard ». */
