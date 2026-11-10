@@ -1303,12 +1303,10 @@ try {
     require_once '/opt/tuc-tests/parcours-restaurateur-contract.php';
     $casParcours = tuc_parcours_restaurateur_contrat($assert);
     $assert(
-        // 46 est MESURÉ, pas estimé : « CAS EXECUTES : 46 » en MariaDB 10.11.13
-        // ET en SQLite, zéro échec. Deux estimations à la main se sont déjà
-        // trompées (35 puis 42) : cette valeur se lit dans un run, elle ne se
-        // calcule pas.
-        $casParcours === 46,
-        sprintf('contrat parcours restaurateur : 46 cas attendus, %d exécutés', $casParcours)
+        // MESURÉ, jamais estimé : 37 → 46 → 47. Trois estimations à la main se
+        // sont déjà trompées. Cette valeur se lit dans un run.
+        $casParcours === 47,
+        sprintf('contrat parcours restaurateur : 47 cas attendus, %d exécutés', $casParcours)
     );
     WP_CLI::log(sprintf('Contrat parcours restaurateur : %d cas verts.', $casParcours));
 }

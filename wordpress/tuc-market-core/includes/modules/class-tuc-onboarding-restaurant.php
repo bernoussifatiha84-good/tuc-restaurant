@@ -287,89 +287,154 @@ final class TUC_Onboarding_Restaurant
     }
 
     /**
-     * Verrou court, atomique, par `add_option()`.
+     * VERROU — et pourquoi il est écrit en SQL direct.
      *
-     * POURQUOI. `get_transient()` puis `set_transient()` n'est pas atomique :
-     * deux requêtes simultanées lisent la même valeur et écrivent chacune leur
-     * +1. MESURÉ : 12 requêtes lancées au même instant sur un seuil de 3 ont
-     * donné **4 acceptées** (et un compteur final à 3). Le verrou ferme cette
-     * fenêtre : `add_option()` échoue si l'option existe déjà, ce qui s'appuie
-     * sur l'index UNIQUE de `wp_options.option_name` — atomique en InnoDB comme
-     * en SQLite.
+     * Trois défauts trouvés en testant ce que la revue demandait :
      *
-     * Portée assumée : ce n'est pas un verrou distribué. Il protège contre la
-     * concurrence sur UN serveur, ce qui est le cas ici. Un verrou de plus de
-     * 5 s est considéré comme orphelin (process tué) et repris.
+     * 1. La LECTURE du compteur et la DÉCISION étaient hors du verrou : seule
+     *    l'écriture était protégée. Deux requêtes pouvaient lire « 2 », décider
+     *    toutes les deux « 2 < 3, j'y vais », et n'être sérialisées qu'au moment
+     *    d'écrire. Il faut une SECTION CRITIQUE qui englobe lire + décider +
+     *    écrire — c'est ce que fait `sous_verrou()`.
+     *
+     * 2. `delete_option($nom)` supprime PAR NOM : un preneur qui avait perdu son
+     *    verrou (repris après expiration) effaçait celui du nouveau preneur.
+     *    D'où un JETON unique par prise et des opérations COMPARE-AND-SET :
+     *    on ne libère ou ne reprend que si la valeur en base est encore la nôtre.
+     *
+     * 3. `add_option()`/`get_option()` passent par le cache objet. Avec un cache
+     *    persistant (Redis, Memcached), deux processus peuvent lire un état
+     *    périmé sans jamais toucher la base : le verrou devient décoratif.
+     *    D'où le SQL direct ci-dessous — `INSERT IGNORE` sur l'index UNIQUE de
+     *    `option_name`, et `UPDATE ... WHERE option_value = <notre jeton>`.
+     *    Ces opérations sont atomiques en InnoDB comme en SQLite, avec ou sans
+     *    cache objet persistant.
+     *
+     * PORTÉE ASSUMÉE : verrou par processus sur UN serveur de base. Ce n'est pas
+     * un verrou distribué et il ne prétend pas l'être.
      */
-    private static function acquerir_verrou(string $cle): bool
+
+    /** Durée au-delà de laquelle un verrou est considéré orphelin (process tué). */
+    private const VERROU_TTL = 5;
+
+    /**
+     * Exécute `$action` en section critique. Rend null si le verrou n'a pas pu
+     * être pris — l'appelant décide alors de refuser plutôt que de laisser passer.
+     *
+     * @template T
+     * @param callable():T $action
+     * @return array{0:bool,1:mixed} [verrou_pris, résultat]
+     */
+    private static function sous_verrou(string $cle, callable $action): array
     {
         $nom = $cle . '_verrou';
+        $jeton = self::prendre_verrou($nom);
+        if ($jeton === null) {
+            return [false, null];
+        }
+        try {
+            return [true, $action()];
+        } finally {
+            self::rendre_verrou($nom, $jeton);
+        }
+    }
+
+    /** Rend un jeton si le verrou est pris, null sinon. */
+    private static function prendre_verrou(string $nom): ?string
+    {
+        global $wpdb;
+        $jeton = wp_generate_password(20, false, false);
+        $table = $wpdb->options;
+
         for ($essai = 0; $essai < 3; $essai++) {
-            if (add_option($nom, time(), '', false)) {
-                return true;
+            // Atomique : l'index UNIQUE sur option_name fait échouer le doublon.
+            $ok = $wpdb->query($wpdb->prepare(
+                "INSERT IGNORE INTO `{$table}` (option_name, option_value, autoload) VALUES (%s, %s, 'no')",
+                $nom,
+                $jeton
+            ));
+            if ($ok === 1) {
+                self::purger_cache_option($nom);
+                return $jeton;
             }
-            $pose = (int) get_option($nom, 0);
-            if ($pose > 0 && (time() - $pose) > 5) {
-                delete_option($nom); // orphelin : on le reprend
-                continue;
+
+            // Occupé : reprendre SEULEMENT si le détenteur est expiré, et
+            // seulement si la valeur n'a pas changé entre-temps (compare-and-set).
+            $actuel = $wpdb->get_var($wpdb->prepare(
+                "SELECT option_value FROM `{$table}` WHERE option_name = %s",
+                $nom
+            ));
+            if ($actuel === null) {
+                continue; // libéré entre-temps : on retente le INSERT
+            }
+            $parties = explode('|', (string) $actuel);
+            $pose = (int) ($parties[1] ?? 0);
+            if ($pose > 0 && (time() - $pose) > self::VERROU_TTL) {
+                $reprise = $wpdb->query($wpdb->prepare(
+                    "UPDATE `{$table}` SET option_value = %s WHERE option_name = %s AND option_value = %s",
+                    $jeton . '|' . time(),
+                    $nom,
+                    $actuel
+                ));
+                if ($reprise === 1) {
+                    self::purger_cache_option($nom);
+                    return $jeton;
+                }
+                continue; // quelqu'un d'autre l'a repris : on retente
             }
             usleep(20000); // 20 ms
         }
-        return false;
-    }
-
-    private static function liberer_verrou(string $cle): void
-    {
-        delete_option($cle . '_verrou');
-    }
-
-    /** Incrémente un compteur à fenêtre fixe, sous verrou. */
-    private static function incrementer_compteur(string $cle): bool
-    {
-        if (!self::acquerir_verrou($cle)) {
-            return false;
-        }
-        try {
-            [$n, $restant] = self::lire_compteur($cle);
-            if ($restant <= 0) {
-                $restant = HOUR_IN_SECONDS;
-            }
-            set_transient($cle, ['n' => $n + 1, 'fin' => time() + $restant], $restant);
-            return true;
-        } finally {
-            self::liberer_verrou($cle);
-        }
+        return null;
     }
 
     /**
-     * Rend un crédit de demande quand la création échoue APRÈS réservation.
-     *
-     * Sans ça, une erreur de base (ou une pièce jointe refusée) consommait
-     * définitivement une des 3 places horaires alors qu'aucune demande n'existe.
-     * La réservation est prise après validation : le seul échec possible ensuite
-     * est technique, jamais une faute de saisie.
+     * Libère le verrou SEULEMENT s'il est encore le nôtre (compare-and-set).
+     * C'est ce qui empêche un ancien détenteur d'effacer le verrou d'un autre.
      */
-    private static function rendre_demande(): void
+    private static function rendre_verrou(string $nom, string $jeton): void
     {
-        $cle = self::cle_limitation('demandes');
-        if ($cle === null || !self::acquerir_verrou($cle)) {
+        global $wpdb;
+        $table = $wpdb->options;
+        $actuel = $wpdb->get_var($wpdb->prepare(
+            "SELECT option_value FROM `{$table}` WHERE option_name = %s",
+            $nom
+        ));
+        if ($actuel === null) {
+            self::purger_cache_option($nom);
             return;
         }
-        try {
-            [$n, $restant] = self::lire_compteur($cle);
-            if ($n > 0) {
-                if ($restant <= 0) {
-                    delete_transient($cle);
-                } else {
-                    set_transient($cle, ['n' => $n - 1, 'fin' => time() + $restant], $restant);
-                }
-            }
-        } finally {
-            self::liberer_verrou($cle);
+        $parties = explode('|', (string) $actuel);
+        if (($parties[0] ?? '') !== $jeton) {
+            return; // plus nôtre : on ne touche pas au verrou d'autrui
         }
+        $wpdb->query($wpdb->prepare(
+            "DELETE FROM `{$table}` WHERE option_name = %s AND option_value = %s",
+            $nom,
+            $actuel
+        ));
+        self::purger_cache_option($nom);
     }
 
-    /** Clé de limitation : l'adresse vue par le serveur, jamais un en-tête client. */
+    /** Un verrou écrit en SQL direct doit aussi disparaître du cache objet. */
+    private static function purger_cache_option(string $nom): void
+    {
+        wp_cache_delete($nom, 'options');
+        wp_cache_delete('alloptions', 'options');
+        wp_cache_delete('notoptions', 'options');
+    }
+
+
+    /**
+     * Incrémente un compteur à fenêtre fixe. À appeler DANS `sous_verrou()`.
+     * Le compteur est lu AVANT d'écrire, dans la même section critique que la
+     * décision : c'est le point que la revue a mis en évidence.
+     */
+    /**
+     * Clé de limitation : l'adresse vue par le serveur, JAMAIS un en-tête
+     * fourni par le client (`X-Forwarded-For`, `X-Real-IP` sont falsifiables :
+     * mesuré, une valeur forgee arrive intacte, et aucune liste de proxys de
+     * confiance n'est declaree sur ce site).
+     */
     private static function cle_limitation(string $prefixe): ?string
     {
         $ip = filter_var((string) ($_SERVER['REMOTE_ADDR'] ?? ''), FILTER_VALIDATE_IP);
@@ -379,9 +444,45 @@ final class TUC_Onboarding_Restaurant
         return 'tuc_' . $prefixe . '_' . md5((string) $ip);
     }
 
+    private static function incrementer_compteur(string $cle): void
+    {
+        [$n, $restant] = self::lire_compteur($cle);
+        if ($restant <= 0) {
+            $restant = HOUR_IN_SECONDS;
+        }
+        // get/set_transient purge son propre cache : pas de lecture périmée.
+        set_transient($cle, ['n' => $n + 1, 'fin' => time() + $restant], $restant);
+    }
+
     /**
-     * Barrière d'entrée : compte TOUTE tentative. Rend un WP_Error avec le délai
-     * restant quand la limite est atteinte, null sinon.
+     * Rend un crédit de demande quand la création échoue APRÈS réservation.
+     * Plancher à 0.
+     */
+    private static function rendre_demande(): void
+    {
+        $cle = self::cle_limitation('demandes');
+        if ($cle === null) {
+            return;
+        }
+        [$pris, ] = self::sous_verrou($cle, static function () use ($cle): bool {
+            [$n, $restant] = self::lire_compteur($cle);
+            if ($n <= 0) {
+                return false;
+            }
+            if ($restant <= 0) {
+                delete_transient($cle);
+                return true;
+            }
+            set_transient($cle, ['n' => $n - 1, 'fin' => time() + $restant], $restant);
+            return true;
+        });
+        // Si le verrou n'a pas pu être pris, le crédit n'est pas rendu : c'est un
+        // échec silencieux, mais préférable à une écriture non protégée.
+    }
+
+    /**
+     * Barrière d'entrée : compte TOUTE tentative, lecture + décision + écriture
+     * dans la MÊME section critique.
      */
     private static function limiter_tentative(): ?WP_Error
     {
@@ -389,21 +490,33 @@ final class TUC_Onboarding_Restaurant
         if ($cle === null) {
             return null; // pas d'adresse exploitable : on ne bloque pas au hasard
         }
-        [$n, $restant] = self::lire_compteur($cle);
-        if ($n >= self::MAX_TENTATIVES_PAR_HEURE) {
+        $resultat = null;
+        [$pris, ] = self::sous_verrou($cle, static function () use ($cle, &$resultat): bool {
+            [$n, $restant] = self::lire_compteur($cle);
+            if ($n >= self::MAX_TENTATIVES_PAR_HEURE) {
+                $resultat = new WP_Error(
+                    'tuc_onboarding_rate',
+                    self::message_limite($restant),
+                    ['status' => 429, 'retry_after' => $restant]
+                );
+                return false;
+            }
+            self::incrementer_compteur($cle);
+            return true;
+        });
+        if (!$pris) {
             return new WP_Error(
-                'tuc_onboarding_rate',
-                self::message_limite($restant),
-                ['status' => 429, 'retry_after' => $restant]
+                'tuc_onboarding_occupe',
+                __('Le service est momentanément occupé. Réessayez dans un instant.', 'tuc-core'),
+                ['status' => 503]
             );
         }
-        self::incrementer_compteur($cle);
-        return null;
+        return $resultat instanceof WP_Error ? $resultat : null;
     }
 
     /**
      * Barrière des demandes créées. À appeler UNIQUEMENT quand tout le reste a
-     * validé : une erreur de saisie ne doit jamais consommer ce quota.
+     * validé. Lecture + décision + incrément sont dans la même section critique.
      */
     private static function reserver_demande(): ?WP_Error
     {
@@ -411,24 +524,28 @@ final class TUC_Onboarding_Restaurant
         if ($cle === null) {
             return null;
         }
-        [$n, $restant] = self::lire_compteur($cle);
-        if ($n >= self::MAX_DEMANDES_PAR_HEURE) {
+        $resultat = null;
+        [$pris, ] = self::sous_verrou($cle, static function () use ($cle, &$resultat): bool {
+            [$n, $restant] = self::lire_compteur($cle);
+            if ($n >= self::MAX_DEMANDES_PAR_HEURE) {
+                $resultat = new WP_Error(
+                    'tuc_onboarding_quota',
+                    self::message_limite($restant),
+                    ['status' => 429, 'retry_after' => $restant]
+                );
+                return false;
+            }
+            self::incrementer_compteur($cle);
+            return true;
+        });
+        if (!$pris) {
             return new WP_Error(
-                'tuc_onboarding_quota',
-                self::message_limite($restant),
-                ['status' => 429, 'retry_after' => $restant]
-            );
-        }
-        // Si le verrou ne s'obtient pas, on REFUSE plutôt que de laisser passer :
-        // un compteur qu'on ne peut pas tenir n'est pas un compteur.
-        if (!self::incrementer_compteur($cle)) {
-            return new WP_Error(
-                'tuc_onboarding_quota',
+                'tuc_onboarding_occupe',
                 __('Le service est momentanément occupé. Réessayez dans un instant.', 'tuc-core'),
                 ['status' => 503]
             );
         }
-        return null;
+        return $resultat instanceof WP_Error ? $resultat : null;
     }
 
     /** Message avec un délai lisible : « dans 42 minutes », pas « plus tard ». */
