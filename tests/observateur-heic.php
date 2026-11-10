@@ -143,16 +143,42 @@ $ok(wp_next_scheduled('tuc_heic_observation_purge') !== false
 // 200 sans corps et n'exécute rien — l'échéance a été vérifiée « due », puis
 // l'exécution passe par le runner. Sur un site réel, le déclencheur est le
 // trafic ou une entrée de crontab ; aucune des deux n'est disponible ici.
-$wpCli = getenv('TUC_WP_CLI') ?: '/home/user/bacs/wp-cli.phar';
+// Le binaire n'est PAS une constante d'environnement : `TUC_WP_CLI` si fourni,
+// sinon le premier candidat qui répond. DÉFAUT MESURÉ en CI (run sur d8e4497) :
+// la valeur par défaut pointait sur le phar du bac, inexistant dans le conteneur
+// d'intégration — le runner rendait « code 1 » sans que la commande elle-même
+// soit visible, et l'échec passait pour un défaut de l'observateur.
+$candidats = array_values(array_unique(array_filter([
+    (string) (getenv('TUC_WP_CLI') ?: ''),
+    'wp',
+    '/usr/local/bin/wp',
+    '/home/user/bacs/wp-cli.phar',
+])));
+$wpCli = '';
+foreach ($candidats as $candidat) {
+    $sonde = $candidat === 'wp'
+        ? 'wp --version 2>/dev/null'
+        : escapeshellarg(PHP_BINARY) . ' ' . escapeshellarg($candidat) . ' --version 2>/dev/null';
+    $sortieSonde = [];
+    exec($sonde, $sortieSonde, $codeSonde);
+    if ($codeSonde === 0) {
+        $wpCli = $candidat;
+        break;
+    }
+}
+$ok($wpCli !== '', 'runner WP-Cron disponible : ' . ($wpCli !== '' ? $wpCli . ' (parmi ' . count($candidats) . ' candidats)' : 'AUCUN candidat ne répond : le déclenchement autonome ne peut pas être joué ici'));
 $sortieCron = [];
 $codeCron = 0;
-exec(
-    escapeshellarg(PHP_BINARY) . ' ' . escapeshellarg($wpCli) . ' --path=' . escapeshellarg($wpRoot)
-    . ' --allow-root cron event run tuc_heic_observation_purge 2>&1',
-    $sortieCron,
-    $codeCron
-);
-$ok($codeCron === 0, 'le runner WP-Cron exécute la tâche (code ' . $codeCron . ')');
+$commandeCron = ($wpCli === 'wp' ? '' : escapeshellarg(PHP_BINARY) . ' ')
+    . ($wpCli === 'wp' ? 'wp' : escapeshellarg($wpCli))
+    . ' --path=' . escapeshellarg($wpRoot)
+    . ' --allow-root cron event run tuc_heic_observation_purge 2>&1';
+exec($commandeCron, $sortieCron, $codeCron);
+// Le rendu du runner est joint au verdict : « code 1 » seul ne dit pas si le
+// binaire manque, si l'événement est inconnu ou si la tâche a planté.
+$echoCron = trim(preg_replace('/\s+/', ' ', implode(' | ', array_slice($sortieCron, 0, 3))));
+$ok($codeCron === 0, 'le runner WP-Cron exécute la tâche (code ' . $codeCron
+    . ($echoCron !== '' ? ', sortie : ' . substr($echoCron, 0, 160) : '') . ')');
 // Relecture FRAÎCHE depuis la base : le cache du processus courant est périmé.
 $lireOptions = static function (string $cle) use ($wpdb): string {
     return (string) $wpdb->get_var($wpdb->prepare("SELECT option_value FROM `{$wpdb->options}` WHERE option_name = %s", $cle));
