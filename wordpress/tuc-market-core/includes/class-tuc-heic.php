@@ -101,52 +101,130 @@ function tuc_heic_decodeur_disponible(): bool
 }
 
 /**
- * Observe le fichier REÇU, avant toute conversion, et note le format d'après les
- * premiers octets (boîte ISO/HEIF `ftyp`), jamais d'après l'extension.
+ * OBSERVATEUR DU FORMAT REÇU — désactivé par défaut.
  *
- * Corrige un défaut du protocole de la revue n°13 : `wp_check_filetype()` et
- * l'inspection des fichiers APRÈS stockage ne peuvent pas dire si l'iPhone a
- * envoyé un HEIC ou déjà un JPEG. Ici, la mesure a lieu à la réception et ne
- * conserve que des métadonnées : aucun contenu, aucun nom d'origine, aucune
- * donnée personnelle. Journal borné à 50 entrées.
+ * Pourquoi ce journal existe : un JPEG dans `uploads` ne prouve pas que l'iPhone
+ * a envoyé un JPEG (iOS convertit parfois avant l'envoi), et `wp_check_filetype()`
+ * lit l'extension. On mesure donc le contenu À LA RÉCEPTION.
  *
- * @param string $chemin  Fichier temporaire de la requête (jamais conservé).
- * @param string $etape   '', 'apres-conversion', 'converti'
- * @return string         Le format détecté ('heic', 'jpeg', 'png', 'webp', 'inconnu').
+ * Il ne collecte QUE trois champs, et rien d'autre :
+ *   - `instant`     : date UTC, pour corréler avec le test ;
+ *   - `format`      : heic / jpeg / png / webp / heif-autre / inconnu (premiers octets) ;
+ *   - `avant_apres` : 'avant-conversion' ou 'converti-heic-vers-jpeg'.
+ *
+ * JAMAIS : la photo, son nom, son contenu, l'adresse IP, la taille exacte, le
+ * nom du restaurant, la référence de demande.
+ *
+ * Activation EXPLICITE et TEMPORAIRE : `tuc_heic_observer_activer(60)` (minutes).
+ * Durée de vie des entrées : `TUC_HEIC_OBSERVATION_TTL` (2 jours par défaut),
+ * appliquée À LA LECTURE — donc sans attendre un nouvel envoi.
  */
-function tuc_heic_observer_entree(string $chemin, string $etape = ''): string
+const TUC_HEIC_OBSERVATION_OPTION = 'tuc_heic_observations';
+const TUC_HEIC_OBSERVATION_JETON = 'tuc_heic_observation_jeton';
+const TUC_HEIC_OBSERVATION_TTL = 2 * 86400;
+const TUC_HEIC_OBSERVATION_MAX = 50;
+
+/** L'observateur est-il actif ? Faux par défaut, vrai seulement sur activation valide. */
+function tuc_heic_observations_actif(): bool
 {
-    if (!is_file($chemin)) {
-        return 'inconnu';
+    $actif = get_option(TUC_HEIC_OBSERVATION_JETON, null);
+    if (!is_array($actif) || empty($actif['jeton']) || empty($actif['jusqu_a'])) {
+        return false;
     }
-    $entete = (string) @file_get_contents($chemin, false, null, 0, 32);
+    if ((int) $actif['jusqu_a'] < time()) {
+        delete_option(TUC_HEIC_OBSERVATION_JETON); // activation expirée : on nettoie
+        return false;
+    }
+    return true;
+}
+
+/**
+ * Active l'observateur pour N minutes. Rend un jeton à conserver.
+ * Sans cette activation, aucune écriture n'a lieu.
+ */
+function tuc_heic_observer_activer(int $minutes = 60): string
+{
+    $jeton = wp_generate_password(24, false, false);
+    update_option(TUC_HEIC_OBSERVATION_JETON, [
+        'jeton'    => $jeton,
+        'jusqu_a'  => time() + max(1, $minutes) * 60,
+        'active_le' => gmdate('c'),
+    ], false);
+    return $jeton;
+}
+
+/** Désactive l'observateur. Les entrées déjà écrites restent jusqu'à purge. */
+function tuc_heic_observer_desactiver(): void
+{
+    delete_option(TUC_HEIC_OBSERVATION_JETON);
+}
+
+/** Vide le journal. À utiliser avec l'accord du propriétaire. */
+function tuc_heic_observations_purger(): bool
+{
+    delete_option(TUC_HEIC_OBSERVATION_OPTION);
+    return get_option(TUC_HEIC_OBSERVATION_OPTION, null) === null;
+}
+
+/**
+ * Lit le journal en appliquant l'expiration — même si aucun envoi n'a eu lieu.
+ * Une entrée trop vieille est retirée de la base, pas seulement ignorée.
+ */
+function tuc_heic_observations_lire(): array
+{
+    $journal = get_option(TUC_HEIC_OBSERVATION_OPTION, []);
+    if (!is_array($journal)) {
+        return [];
+    }
+    $limite = time() - TUC_HEIC_OBSERVATION_TTL;
+    $gardees = [];
+    foreach ($journal as $entree) {
+        $instant = isset($entree['instant']) ? strtotime((string) $entree['instant']) : false;
+        if ($instant === false || $instant >= $limite) {
+            $gardees[] = $entree;
+        }
+    }
+    if (count($gardees) !== count($journal)) {
+        update_option(TUC_HEIC_OBSERVATION_OPTION, $gardees, false);
+    }
+    return $gardees;
+}
+
+/**
+ * Observe le fichier REÇU (avant conversion) et note le format d'après les
+ * premiers octets. N'écrit RIEN si l'observateur n'est pas activé.
+ *
+ * @return string le format détecté, même quand l'observateur est inactif
+ */
+function tuc_heic_observer_entree(string $chemin, string $avantApres = 'avant-conversion'): string
+{
     $format = 'inconnu';
-    if (strlen($entete) >= 12 && substr($entete, 4, 4) === 'ftyp') {
-        $format = preg_match('/ftyp(heic|heix|hevc|heim|heis|hevm|hevs|mif1|msf1)/', $entete) === 1
-            ? 'heic'
-            : 'heif-autre';
-    } elseif (substr($entete, 0, 3) === "\xFF\xD8\xFF") {
-        $format = 'jpeg';
-    } elseif (substr($entete, 0, 8) === "\x89PNG\r\n\x1A\n") {
-        $format = 'png';
-    } elseif (substr($entete, 0, 4) === 'RIFF' && substr($entete, 8, 4) === 'WEBP') {
-        $format = 'webp';
+    if (is_file($chemin)) {
+        $entete = (string) @file_get_contents($chemin, false, null, 0, 32);
+        if (strlen($entete) >= 12 && substr($entete, 4, 4) === 'ftyp') {
+            $format = preg_match('/ftyp(heic|heix|hevc|heim|heis|hevm|hevs|mif1|msf1)/', $entete) === 1
+                ? 'heic'
+                : 'heif-autre';
+        } elseif (substr($entete, 0, 3) === "\xFF\xD8\xFF") {
+            $format = 'jpeg';
+        } elseif (substr($entete, 0, 8) === "\x89PNG\r\n\x1A\n") {
+            $format = 'png';
+        } elseif (substr($entete, 0, 4) === 'RIFF' && substr($entete, 8, 4) === 'WEBP') {
+            $format = 'webp';
+        }
     }
 
-    $observation = [
-        'instant'        => gmdate('c'),
-        'format_detecte' => $format,
-        'methode'        => 'octets-magiques',
-        'octets_lus'     => strlen($entete),
-        'taille_ko'      => (int) round(filesize($chemin) / 1024),
-        'etape'          => $etape,
-    ];
-    $journal = get_option('tuc_heic_observations', []);
-    if (!is_array($journal)) {
-        $journal = [];
+    if (!tuc_heic_observations_actif()) {
+        return $format; // désactivé : mesure possible, aucune écriture
     }
-    $journal[] = $observation;
-    update_option('tuc_heic_observations', array_slice($journal, -50), false);
+
+    $journal = tuc_heic_observations_lire(); // applique l'expiration
+    $journal[] = [
+        'instant'     => gmdate('c'),
+        'format'      => $format,
+        'avant_apres' => $avantApres,
+    ];
+    update_option(TUC_HEIC_OBSERVATION_OPTION, array_slice($journal, -TUC_HEIC_OBSERVATION_MAX), false);
 
     return $format;
 }

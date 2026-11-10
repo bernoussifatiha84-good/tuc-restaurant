@@ -358,6 +358,12 @@ final class TUC_Onboarding_Restaurant
     /** Tentatives d'allocation du compteur global avant de REFUSER (aucun repli). */
     private const GENERATION_TENTATIVES = 10;
 
+    /** Reprises d'écriture d'un compteur quand l'erreur est un conflit récupérable. */
+    private const COMPTEUR_TENTATIVES = 3;
+
+    /** Reprises de la SECTION CRITIQUE ENTIÈRE quand un deadlock a tué la transaction. */
+    private const CRITIQUE_TENTATIVES = 5;
+
     /**
      * Rend la génération suivante. Strictement croissante, jamais réutilisée,
      * y compris après suppression de la ligne du compteur : c'est ce qui rend
@@ -422,6 +428,20 @@ final class TUC_Onboarding_Restaurant
                 if (!self::erreur_recuperable((string) $wpdb->last_error)) {
                     return null; // vraie panne (droits, table absente...) : refus
                 }
+                // -----------------------------------------------------------------
+                // NE JAMAIS RÉESSAYER DANS UNE TRANSACTION MORTE.
+                // Mesuré (bac, 2026-11-03) : après un deadlock, `@@in_transaction`
+                // vaut 0 et tout s'exécute en AUTOCOMMIT. Réessayer ici validait
+                // donc immédiatement l'écriture du compteur, puis la reprise de la
+                // section critique en écrivait une seconde : DEUX crédits pour une
+                // seule demande (133 compteurs à 2 sur 300, constatés).
+                // On signale la perte et on laisse l'appelant rejouer la section
+                // ENTIÈRE dans une transaction neuve.
+                // -----------------------------------------------------------------
+                if (!self::dans_une_transaction()) {
+                    self::$transactionPerdue = true;
+                    return null;
+                }
                 self::oublier_erreur_sql(); // ne pas laisser une trace périmée
                 usleep(rand(2, 12) * 1000); // désynchronise les reprises (jitter)
                 continue;
@@ -431,6 +451,15 @@ final class TUC_Onboarding_Restaurant
         // Épuisement des tentatives : AUCUN repli horodaté (deux créations dans
         // la même seconde partageraient la même valeur — mesuré). null = refus.
         return null;
+    }
+
+    /** Deadlock (ou attente de verrou expirée) : la seule erreur qui justifie une reprise immédiate. */
+    private static function erreur_deadlock(string $message): bool
+    {
+        return $message !== ''
+            && (stripos($message, 'Deadlock found') !== false
+                || stripos($message, 'try restarting transaction') !== false
+                || stripos($message, 'Lock wait timeout exceeded') !== false);
     }
 
     /**
@@ -485,6 +514,25 @@ final class TUC_Onboarding_Restaurant
      */
     private static function ecrire_compteur(string $cle, int $compte, int $fin, ?string $attendu = null, ?int $generation = null, ?callable $annuler = null): ?bool
     {
+        $etat = self::tenter_ecrire_compteur($cle, $compte, $fin, $attendu, $generation, $annuler);
+        if ($etat === 'conflit') {
+            // Contrat (cas 44) : une écriture refusée par la base rend false,
+            // et l'appelant décide. La panne reste mémorisée pour que la
+            // réservation, plus haut, sache qu'il s'agit d'une vraie panne.
+            self::$refusParPanne = true;
+            self::$causeRefus = 'sql';
+            return false;
+        }
+        if ($etat === null) {
+            self::$refusParPanne = self::$causeRefus !== 'generation';
+            return self::$causeRefus === 'generation' ? null : false;
+        }
+        return $etat;
+    }
+
+    /** @return bool|string|null true, false (course), null (refus), 'conflit' (réessayable) */
+    private static function tenter_ecrire_compteur(string $cle, int $compte, int $fin, ?string $attendu = null, ?int $generation = null, ?callable $annuler = null): bool|string|null
+    {
         global $wpdb;
 
         if ($attendu === null) {
@@ -503,6 +551,7 @@ final class TUC_Onboarding_Restaurant
                     if ($annuler !== null) {
                         $annuler();
                     }
+                    self::$causeRefus = 'generation';
                     return null;
                 }
             }
@@ -513,6 +562,13 @@ final class TUC_Onboarding_Restaurant
                 $valeur
             ));
             self::purger_cache_option($cle);
+            if ($insert === false) {
+                $message = (string) $wpdb->last_error;
+                self::oublier_erreur_sql();
+                self::$derniereErreurSql = $message;
+                self::$causeRefus = 'sql';
+                return self::erreur_recuperable($message) ? 'conflit' : null;
+            }
             if ((int) $insert !== 1) {
                 return false; // la ligne existe déjà : ce n'est pas nous qui l'avons créée
             }
@@ -530,14 +586,20 @@ final class TUC_Onboarding_Restaurant
             $attendu
         ));
         self::purger_cache_option($cle);
+        if ($touche === false) {
+            // Erreur SQL. DEUX cas très différents :
+            //   - conflit récupérable (deadlock, collision optimiste) : on rend
+            //     'conflit', l'appelant relit et recommence ;
+            //   - vraie panne (droits, table, disque) : on rend NULL, donc refus.
+            // Dans les deux cas on efface le message : sinon la barrière
+            // appelante (`derniere_erreur_sql()`) le relirait comme une panne.
+            $message = (string) $wpdb->last_error;
+            self::oublier_erreur_sql();
+            self::$derniereErreurSql = $message;
+            self::$causeRefus = 'sql';
+            return self::erreur_recuperable($message) ? 'conflit' : null;
+        }
         if ((int) $touche !== 1) {
-            // `false` = erreur SQL (collision optimiste ou deadlock), pas une
-            // course ordinaire. On NETTOIE le message avant de rendre, sinon la
-            // barrière appelante (`derniere_erreur_sql()`) le prendrait pour une
-            // panne de stockage et rendrait un 503.
-            if ($touche === false) {
-                self::oublier_erreur_sql();
-            }
             return false; // ligne disparue ou état changé : on n'écrit rien
         }
         return self::relire_egal($cle, $valeur);
@@ -647,6 +709,23 @@ final class TUC_Onboarding_Restaurant
     /** Une transaction est-elle ouverte par `sous_verrou()` ? */
     private static bool $transactionOuverte = false;
 
+    /** Le dernier `sous_verrou()` a-t-il perdu sa transaction (deadlock) ? */
+    private static bool $transactionPerdue = false;
+
+    /** Dernier message SQL vu par les écritures de compteur (pour la reprise). */
+    private static string $derniereErreurSql = '';
+
+    /**
+     * Cause du dernier refus `null` : true = VRAIE PANNE (SQL, allocation
+     * impossible), false = reprises épuisées sur des conflits transitoires.
+     * C'est ce qui permet de rendre 503 `storage` dans un cas et l'invitation
+     * à réessayer (`occupe`) dans l'autre, sans jamais confondre les deux.
+     */
+    private static bool $refusParPanne = false;
+
+    /** Cause du dernier refus : 'generation' (identité non allouable), 'sql' (panne), 'conflits' (reprises épuisées). */
+    private static string $causeRefus = '';
+
     /**
      * Exécute `$action` en section critique. Rend null si le verrou n'a pas pu
      * être pris — l'appelant décide alors de refuser plutôt que de laisser passer.
@@ -660,11 +739,12 @@ final class TUC_Onboarding_Restaurant
         $nom = $cle . '_verrou';
         $jeton = self::prendre_verrou($nom);
         if ($jeton === null) {
-            return [false, null];
+            return [false, null, false];
         }
         $resultat = null;
         $garde = false;
         $annuler = false; // l'action demande un ROLLBACK (refus sans trace)
+        self::$transactionPerdue = false;
         $transaction = self::ouvrir_transaction();
         try {
             // Sous transaction, la ligne du verrou est verrouillée (FOR UPDATE en
@@ -672,11 +752,41 @@ final class TUC_Onboarding_Restaurant
             // milieu. Vérifier puis écrire ne peut plus être séparé par une reprise.
             self::verrouiller_ligne($nom);
             if (!self::verrou_est_a_nous($nom, $jeton)) {
-                return [false, null];
+                return [false, null, false];
             }
-            $resultat = $action(static fn (): bool => self::verrou_est_a_nous($nom, $jeton), static function () use (&$annuler): void {
+            // État observé AVANT l'action : sert à détecter qu'un deadlock nous a
+            // fait PERDRE la transaction en cours de route.
+            $dansTransactionAuDepart = self::dans_une_transaction();
+            $gardeAction = static function () use ($nom, $jeton, $transaction): bool {
+                if (!self::verrou_est_a_nous($nom, $jeton)) {
+                    return false;
+                }
+                // Si nous avions une transaction et qu'elle a disparu (deadlock),
+                // toute écriture partirait en AUTOCOMMIT : on refuse d'écrire.
+                return $transaction !== 'transaction' || self::dans_une_transaction();
+            };
+            $resultat = $action($gardeAction, static function () use (&$annuler): void {
                 $annuler = true;
             });
+
+            // -----------------------------------------------------------------
+            // MESURÉ (bac, MariaDB 11.8, 21 deadlocks) : après un deadlock,
+            // `SELECT @@in_transaction` rend **0**. MariaDB a annulé TOUTE la
+            // transaction, y compris le verrou et la réservation faite avant.
+            // Les reprises internes, elles, s'exécutent alors en autocommit :
+            // elles aboutissent, mais le verrou n'est plus tenu et rien n'est
+            // plus atomique.
+            //
+            // La seule reprise SÛRE est donc au niveau de la section critique
+            // entière : on rend le verrou tel quel, on REFERME la transaction
+            // morte, puis l'appelant relance TOUT (verrou + compteur) dans une
+            // transaction neuve.
+            // -----------------------------------------------------------------
+            if ($transaction === 'transaction'
+                && $dansTransactionAuDepart
+                && !self::dans_une_transaction()) {
+                self::$transactionPerdue = true;
+            }
             // Après l'action : si le verrou n'est plus à nous, le travail n'est
             // pas fiable et on le signale à l'appelant.
             $garde = self::verrou_est_a_nous($nom, $jeton);
@@ -698,7 +808,7 @@ final class TUC_Onboarding_Restaurant
             }
             self::rendre_verrou($nom, $jeton);
         }
-        return [$garde, $resultat];
+        return [$garde, $resultat, self::$transactionPerdue];
     }
 
     /**
@@ -742,6 +852,30 @@ final class TUC_Onboarding_Restaurant
         // (BEGIN IMMEDIATE) verrouille déjà la base entière.
         $wpdb->last_error = '';
         return false;
+    }
+
+    /**
+     * La session est-elle encore DANS une transaction ?
+     *
+     * `SELECT @@in_transaction` répond directement (MariaDB/MySQL). Si le SGBD
+     * ne connaît pas la variable, on renvoie true : « je ne sais pas » ne doit
+     * jamais être interprété comme « transaction perdue » (sinon on relancerait
+     * à tort).
+     */
+    private static function dans_une_transaction(): bool
+    {
+        global $wpdb;
+        $avant = (string) $wpdb->last_error;
+        $valeur = $wpdb->get_var('SELECT @@in_transaction');
+        $erreur = (string) $wpdb->last_error;
+        $wpdb->last_error = $avant; // on ne pollue pas l'état de l'appelant
+        if ($erreur !== '') {
+            return true; // inconnu : on ne conclut pas à une perte
+        }
+        if (is_null($valeur)) {
+            return false;
+        }
+        return (int) $valeur === 1;
     }
 
     private static function valider_transaction(): void
@@ -912,8 +1046,65 @@ final class TUC_Onboarding_Restaurant
      */
     private static function incrementer_compteur(string $cle, ?callable $garde = null, ?callable $annuler = null): ?bool
     {
-        // null = la GÉNÉRATION n'a pas pu être allouée de façon unique : refus.
+        // null = refus (génération non allouée, ou vraie panne SQL).
         // false = course ordinaire (ligne apparue/disparue, verrou perdu).
+        //
+        // REPRISE SUR CONFLIT RÉCUPÉRABLE : un deadlock ou une collision
+        // optimiste pendant l'écriture du compteur ne consomme rien et ne
+        // laisse rien de partiel. On relit et on recommence, dans la limite de
+        // COMPTEUR_TENTATIVES. Toute erreur non récupérable sort en `null` :
+        // une vraie panne ne doit jamais être « réessayée » en boucle.
+        self::$derniereErreurSql = '';
+        for ($essai = 1; $essai <= self::COMPTEUR_TENTATIVES; $essai++) {
+            // DÉFAUT MESURÉ (bac, 2026-11-03) : sans cette garde, une reprise
+            // après deadlock écrivait en AUTOCOMMIT (la transaction était morte)
+            // et consommait un crédit, puis la reprise de la section critique en
+            // consommait un second : deux crédits pour une seule demande.
+            // Ici, plus aucune écriture n'est tentée si le verrou ou la
+            // transaction ne sont plus à nous.
+            // La garde (verrou à nous + transaction vivante) est vérifiée DANS
+            // `tenter_increment()`, entre la lecture et l'écriture — jamais
+            // avant la lecture : sinon on relirait un état frais après la pause
+            // du concurrent et l'écriture « préparée sur un état périmé »
+            // réussirait (cas 74/84/87 du contrat).
+            $etat = self::tenter_increment($cle, $garde, $annuler);
+            if ($etat !== 'conflit') {
+                if ($etat === false) {
+                    self::$refusParPanne = false; // course ordinaire
+                    self::$causeRefus = 'conflits';
+                }
+                if ($etat === null) {
+                    self::$refusParPanne = self::$causeRefus !== 'conflits';
+                }
+                return $etat;
+            }
+            // Un deadlock est TRANSITOIRE : le relancer a un sens. Une collision
+            // optimiste vient au contraire d'avoir lu un état périmé : la bonne
+            // réponse est de rendre false (l'appelant rejoue la section entière),
+            // pas de réécrire avec la même valeur attendue. Mesuré sur le
+            // contrat : réessayer ici faisait passer 14 cas de refus attendus en
+            // acceptations silencieuses.
+            if (!self::erreur_deadlock(self::$derniereErreurSql)) {
+                self::$refusParPanne = false;
+                self::$causeRefus = 'conflits';
+                return false;
+            }
+            if ($essai < self::COMPTEUR_TENTATIVES) {
+                self::oublier_erreur_sql();
+                usleep(rand(2, 15) * 1000); // jitter : désynchronise les reprises
+            }
+        }
+        // Reprises épuisées sur des deadlocks : conflit persistant, pas une
+        // panne. L'appelant invite à réessayer (jamais un 503 « indisponible »).
+        self::$refusParPanne = false;
+        self::$causeRefus = 'conflits';
+        return null; // refus propre, rien de partiel écrit
+    }
+
+    /** Un essai d'incrément. Rend true / false / null, ou 'conflit' si réessayable. */
+    private static function tenter_increment(string $cle, ?callable $garde, ?callable $annuler): bool|string|null
+    {
+        global $wpdb;
         $brut = self::lire_brut($cle);
         // Avant d'écrire : le verrou est-il toujours le nôtre ?
         if ($garde !== null && !$garde()) {
@@ -922,7 +1113,7 @@ final class TUC_Onboarding_Restaurant
         if ($brut === null) {
             // Aucun compteur : création atomique à 1. Si quelqu'un a créé la
             // ligne entre la lecture et l'instant présent, on n'écrase pas.
-            return self::ecrire_compteur($cle, 1, time() + HOUR_IN_SECONDS, null, null, $annuler);
+            return self::tenter_ecrire_compteur($cle, 1, time() + HOUR_IN_SECONDS, null, null, $annuler);
         }
         // On réutilise la valeur lue pour décider, et c'est CETTE valeur qui
         // sert d'attendu au CAS : relire une seconde fois (ancienne version)
@@ -933,9 +1124,9 @@ final class TUC_Onboarding_Restaurant
             // Fenêtre échue : on repart à un, MAIS en écriture CONDITIONNELLE
             // sur la valeur lue — donc la génération de la ligne est conservée et
             // aucune purge concurrente ne peut être « annulée » par ce reset.
-            return self::ecrire_compteur($cle, 1, $fin, $brut);
+            return self::tenter_ecrire_compteur($cle, 1, $fin, $brut);
         }
-        return self::ecrire_compteur($cle, $n + 1, $fin, $brut);
+        return self::tenter_ecrire_compteur($cle, $n + 1, $fin, $brut);
     }
 
     /**
@@ -1025,9 +1216,35 @@ final class TUC_Onboarding_Restaurant
         if ($cle === null) {
             return null;
         }
+        // REPRISE DE LA SECTION CRITIQUE ENTIÈRE : si un deadlock a annulé la
+        // transaction, tout ce qui a été fait dedans (verrou compris) est perdu.
+        // On relance DONC la section complète — verrou, lecture, écriture — dans
+        // une transaction neuve, et pas seulement la requête en échec.
+        for ($essai = 1; $essai <= self::CRITIQUE_TENTATIVES; $essai++) {
+            [$pris, $resultat, $perdue] = self::tenter_reservation($cle);
+            if (!$perdue) {
+                if (!$pris) {
+                    // Verrou NON pris : la demande n'est pas réservée. Sans ce
+                    // garde-fou (perdu lors du passage aux 3 valeurs de retour),
+                    // un verrou refusé sortait en `null` = « accepté » — c'est
+                    // exactement ce que le cas 118 a attrapé.
+                    return $resultat instanceof WP_Error ? $resultat : self::erreur_occupe();
+                }
+                return $resultat instanceof WP_Error ? $resultat : null;
+            }
+            // Transaction morte : rien n'a été validé, on recommence proprement.
+            self::oublier_erreur_sql();
+            usleep(rand(5, 40) * 1000);
+        }
+        return self::erreur_occupation_passee();
+    }
+
+    /** Une tentative complète de réservation. @return array{0:bool,1:mixed,2:bool} */
+    private static function tenter_reservation(string $cle): array
+    {
         self::oublier_erreur_sql();
         $resultat = null;
-        [$pris, ] = self::sous_verrou($cle, static function (callable $garde, callable $annuler) use ($cle, &$resultat): bool {
+        [$pris, , $perdue] = self::sous_verrou($cle, static function (callable $garde, callable $annuler) use ($cle, &$resultat): bool {
             [$n, $restant] = self::lire_compteur($cle);
             if (self::derniere_erreur_sql() !== '') {
                 $resultat = self::erreur_stockage();
@@ -1043,10 +1260,20 @@ final class TUC_Onboarding_Restaurant
             }
             $ecrit = self::incrementer_compteur($cle, $garde, $annuler);
             if ($ecrit === null) {
-                // GÉNÉRATION NON ALLOUÉE : refus explicite, aucune demande créée ;
-                // on rend false pour que `sous_verrou()` ANNULE (ROLLBACK) la
-                // réservation faite plus haut dans la même section critique.
-                $resultat = self::erreur_stockage();
+                // Deux causes très différentes, et le refus doit le dire :
+                //  - VRAIE PANNE SQL (table absente, droits, disque) : c'est une
+                //    indisponibilité du service, pas une file d'attente. On rend
+                //    503 `tuc_onboarding_storage` et on n'invite pas à réessayer
+                //    comme si c'était un simple conflit (exigence du donneur
+                //    d'ordre : ne pas transformer une panne en conflit).
+                //  - reprises épuisées sur deadlocks / courses : là, oui, inviter
+                //    à réessayer.
+                // Rien n'a été écrit dans les deux cas (toutes les écritures ont
+                // échoué), donc le ROLLBACK ne perd rien.
+                $resultat = self::$refusParPanne
+                    ? self::erreur_stockage()
+                    : self::erreur_occupation_passee();
+                $annuler();
                 return false;
             }
             if ($ecrit === false) {
@@ -1062,10 +1289,7 @@ final class TUC_Onboarding_Restaurant
             }
             return true;
         });
-        if (!$pris) {
-            return $resultat instanceof WP_Error ? $resultat : self::erreur_occupe();
-        }
-        return $resultat instanceof WP_Error ? $resultat : null;
+        return [$pris, $resultat, $perdue];
     }
 
     /** La ligne a bougé pendant la section critique : nouvel essai invité, pas un 503. */
