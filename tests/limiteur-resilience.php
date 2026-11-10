@@ -232,7 +232,27 @@ if ($sousProcessus) {
         $ref = new ReflectionMethod('TUC_Onboarding_Restaurant', 'reserver_demande');
         $ref->setAccessible(true);
         $r = $ref->invoke(null);
-        echo is_wp_error($r) ? $r->get_error_code() : 'reserve', "\n";
+        if (!is_wp_error($r)) {
+            echo "reserve\n";
+            exit(0);
+        }
+        echo $r->get_error_code(), "\n";
+        // DEUXIÈME LIGNE = la classification interne du refus. Un refus 503
+        // `tuc_onboarding_storage` n'a de sens que comme PANNE ; s'il est produit
+        // par un conflit transitoire, ces trois champs le disent (cause,
+        // transaction perdue, dernier message SQL). C'est ce détail qui a permis
+        // de trouver, en trois itérations CI, les chemins qui déclaraient une
+        // panne là où il fallait rejouer.
+        $rc = new ReflectionClass('TUC_Onboarding_Restaurant');
+        $lire = static function (string $nom) use ($rc) {
+            $p = $rc->getProperty($nom);
+            $p->setAccessible(true);
+            return $p->getValue();
+        };
+        echo 'cause=' . (string) $lire('causeRefus')
+            . ' perdue=' . ($lire('transactionPerdue') ? '1' : '0')
+            . ' panne=' . ($lire('refusParPanne') ? '1' : '0')
+            . ' sql=' . substr(preg_replace('/\s+/', ' ', (string) $lire('derniereErreurSql')), 0, 90), "\n";
         exit(0);
     }
 
@@ -284,7 +304,8 @@ if ($sousProcessus) {
 // Orchestrateur
 // -------------------------------------------------------------------------
 @unlink($journal);
-$lancer = static function (array $ips, string $mode, string $scenario = 'aucun') use ($wpRoot, &$urlHttp, $journal): array {
+$detailsRefus = [];
+$lancer = static function (array $ips, string $mode, string $scenario = 'aucun') use ($wpRoot, &$urlHttp, $journal, &$detailsRefus): array {
     $procs = [];
     foreach ($ips as $ip) {
         $cmd = escapeshellarg(PHP_BINARY) . ' ' . escapeshellarg(__FILE__) . ' '
@@ -297,8 +318,18 @@ $lancer = static function (array $ips, string $mode, string $scenario = 'aucun')
     }
     $sortie = [];
     foreach ($procs as $ip => $h) {
-        $sortie[$ip] = trim((string) stream_get_contents($h));
+        $brut = trim((string) stream_get_contents($h));
         pclose($h);
+        $lignes = preg_split('/\R+/', $brut) ?: [];
+        $sortie[$ip] = trim((string) ($lignes[0] ?? ''));
+        // Le verdict reste la PREMIÈRE ligne (les assertions comparent ce
+        // verdict) ; les lignes suivantes sont des détails, comptés à part.
+        foreach (array_slice($lignes, 1) as $detail) {
+            $detail = trim($detail);
+            if ($detail !== '') {
+                $detailsRefus[$detail] = ($detailsRefus[$detail] ?? 0) + 1;
+            }
+        }
     }
     return $sortie;
 };
@@ -399,6 +430,7 @@ $ok($collisionDetectee, 'une clé préexistante dans le lot est DÉTECTÉE et fa
 $wpdb->query($wpdb->prepare("DELETE FROM `{$wpdb->options}` WHERE option_name = %s", $cleCollision));
 
 // =========================================================================
+$detailsRefus = [];
 echo "\n=== 1. RÉSERVATIONS isolées : 96 IP distinctes (aucune contention attendue) ===\n";
 $acceptes = 0;
 $refus = [];
@@ -439,10 +471,14 @@ $ok($acceptes + $refusFile1 === $attendu1,
 $ok($acceptes >= (int) round($attendu1 * 0.9),
     'taux d\'acceptation en cas d\'affluence : ' . $acceptes . '/' . $attendu1);
 echo '    detail 1 : ' . $acceptes . ' acceptees, refus ' . json_encode($refus) . "\n";
+if ($detailsRefus !== []) {
+    echo '    classification des refus : ' . json_encode(array_slice($detailsRefus, 0, 4, true), JSON_UNESCAPED_UNICODE) . "\n";
+}
 $ok(max(array_map(static fn ($e) => $e['quota'], $etat1)) <= 1, 'aucune IP au-dessus de 1 unité de quota');
 $ok(count(array_filter($etat1, static fn ($e) => $e['verrou'] > 0)) === 0, 'aucun verrou résiduel, par IP');
 
 // =========================================================================
+$detailsRefus = [];
 echo "\n=== 1b. CONTENTION RÉELLE : 144 réservations concurrentes — deadlock EXIGÉ ===\n";
 // Constat mesuré : des IP DISTINCTES lancées par petits lots ne se croisent pas
 // (96 réservations, 0 deadlock). La contention vient du NOMBRE de processus
@@ -488,6 +524,9 @@ $ok($acceptesContention + (int) ($refusContention['tuc_onboarding_occupe'] ?? 0)
 $ok($auDessusContention === [], 'AUCUNE IP au-dessus de 1 unité (aucune double consommation) : ' . count($auDessusContention) . ' anomalie(s)');
 $ok(count(array_filter($etatContention, static fn ($e) => $e['verrou'] > 0)) === 0, 'aucun verrou résiduel');
 echo '    refus observés : ' . json_encode($refusContention) . "\n";
+if ($detailsRefus !== []) {
+    echo '    classification des refus : ' . json_encode(array_slice($detailsRefus, 0, 4, true), JSON_UNESCAPED_UNICODE) . "\n";
+}
 
 // =========================================================================
 echo "\n=== 2. RÉSERVATION, panne non récupérable : refus, rien de consommé ===\n";
@@ -502,6 +541,7 @@ $ok(($etat2[$ips2[0]]['quota'] ?? 0) === 0, 'aucune unité de quota consommée p
 $ok(($etat2[$ips2[0]]['verrou'] ?? 0) === 0, 'aucun verrou résiduel');
 
 // =========================================================================
+$detailsRefus = [];
 echo "\n=== 3. RÉSERVATION, injection APRÈS reprise : événements EXIGÉS ===\n";
 @unlink($journal);
 $acceptes3 = 0;
