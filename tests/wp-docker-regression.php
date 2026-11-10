@@ -1329,11 +1329,15 @@ try {
     //      de la conversion est alors assurée par le bac jetable, où libheif
     //      est présent (logs livrés).
     $php = PHP_BINARY;
+    // Le témoin est surchargeable UNIQUEMENT pour démontrer le comportement
+    // « décodeur présent mais conversion en échec » (fixture volontairement
+    // corrompue). En CI, la variable n'est pas posée : c'est le vrai témoin.
+    $temoin = getenv('TUC_HEIC_FIXTURE') ?: 'fixtures/heic-mire-1600x1200.heic';
     $sortie = [];
     $codeSortie = 0;
     exec(
         escapeshellarg($php) . ' ' . escapeshellarg('/opt/tuc-tests/heic-aiguillage.php') . ' '
-        . escapeshellarg(ABSPATH) . ' fixtures/heic-mire-1600x1200.heic 2>&1',
+        . escapeshellarg(ABSPATH) . ' ' . escapeshellarg($temoin) . ' 2>&1',
         $sortie,
         $codeSortie
     );
@@ -1345,22 +1349,32 @@ try {
         sprintf('aiguillage HEIC + dépendance wp_tempnam() côté web (code %d)', $codeSortie)
     );
 
+    // ---------------------------------------------------------------------
+    // DEUX comportements distincts, deux verdicts distincts :
+    //   - décodeur ABSENT  => capacité NON VÉRIFIÉE. Le job reste vert, mais le
+    //     log le dit en clair (ce n'est pas un skip silencieux).
+    //   - décodeur PRÉSENT mais conversion en échec => job ROUGE. Un échec réel
+    //     n'est jamais dégradé en avertissement.
+    // Mesuré en CI le 2026-11-10 : l'image wordpress:cli n'a pas de décodeur.
+    // ---------------------------------------------------------------------
     $sortieConv = [];
     $codeConv = 0;
     exec(
         escapeshellarg($php) . ' ' . escapeshellarg('/opt/tuc-tests/heic-dependance-http.php') . ' '
-        . escapeshellarg(ABSPATH) . ' fixtures/heic-mire-1600x1200.heic required 2>&1',
+        . escapeshellarg(ABSPATH) . ' ' . escapeshellarg($temoin) . ' 2>&1',
         $sortieConv,
         $codeConv
     );
+    $texteConv = implode("\n", $sortieConv);
     foreach ($sortieConv as $ligne) {
         WP_CLI::log('    [heic-conversion] ' . $ligne);
     }
+    $decodeurPresent = (bool) preg_match('/décodeur HEIC\s*:\s*oui/u', $texteConv);
     if ($codeConv === 0) {
-        $assert(true, 'conversion HEIC réelle côté web (décodeur présent)');
+        $assert(true, 'conversion HEIC réelle côté web (décodeur présent, conversion réussie)');
+    } elseif (!$decodeurPresent) {
+        WP_CLI::warning('CONVERSION HEIC NON VÉRIFIÉE ICI : aucun décodeur HEIC dans ce conteneur. Ce n\'est pas un succès, c\'est une capacité non testée.');
     } else {
-        WP_CLI::warning('CONVERSION HEIC NON VÉRIFIÉE ICI : ' . trim((string) end($sortieConv)));
-        WP_CLI::log('    -> ce conteneur n’a pas de décodeur HEIC ; la conversion est vérifiée');
-        WP_CLI::log('       dans le bac jetable (livrables/revue13/heic-http-*.log), pas ici.');
+        $assert(false, 'conversion HEIC réelle : décodeur présent mais la conversion a ÉCHOUÉ (code ' . $codeConv . ')');
     }
 }
