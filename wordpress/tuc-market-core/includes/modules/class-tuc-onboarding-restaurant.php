@@ -286,14 +286,87 @@ final class TUC_Onboarding_Restaurant
         return [(int) $valeur['n'], $restant];
     }
 
-    /** Incrémente un compteur à fenêtre fixe (la fenêtre ne glisse pas). */
-    private static function incrementer_compteur(string $cle): void
+    /**
+     * Verrou court, atomique, par `add_option()`.
+     *
+     * POURQUOI. `get_transient()` puis `set_transient()` n'est pas atomique :
+     * deux requêtes simultanées lisent la même valeur et écrivent chacune leur
+     * +1. MESURÉ : 12 requêtes lancées au même instant sur un seuil de 3 ont
+     * donné **4 acceptées** (et un compteur final à 3). Le verrou ferme cette
+     * fenêtre : `add_option()` échoue si l'option existe déjà, ce qui s'appuie
+     * sur l'index UNIQUE de `wp_options.option_name` — atomique en InnoDB comme
+     * en SQLite.
+     *
+     * Portée assumée : ce n'est pas un verrou distribué. Il protège contre la
+     * concurrence sur UN serveur, ce qui est le cas ici. Un verrou de plus de
+     * 5 s est considéré comme orphelin (process tué) et repris.
+     */
+    private static function acquerir_verrou(string $cle): bool
     {
-        [$n, $restant] = self::lire_compteur($cle);
-        if ($restant <= 0) {
-            $restant = HOUR_IN_SECONDS;
+        $nom = $cle . '_verrou';
+        for ($essai = 0; $essai < 3; $essai++) {
+            if (add_option($nom, time(), '', false)) {
+                return true;
+            }
+            $pose = (int) get_option($nom, 0);
+            if ($pose > 0 && (time() - $pose) > 5) {
+                delete_option($nom); // orphelin : on le reprend
+                continue;
+            }
+            usleep(20000); // 20 ms
         }
-        set_transient($cle, ['n' => $n + 1, 'fin' => time() + $restant], $restant);
+        return false;
+    }
+
+    private static function liberer_verrou(string $cle): void
+    {
+        delete_option($cle . '_verrou');
+    }
+
+    /** Incrémente un compteur à fenêtre fixe, sous verrou. */
+    private static function incrementer_compteur(string $cle): bool
+    {
+        if (!self::acquerir_verrou($cle)) {
+            return false;
+        }
+        try {
+            [$n, $restant] = self::lire_compteur($cle);
+            if ($restant <= 0) {
+                $restant = HOUR_IN_SECONDS;
+            }
+            set_transient($cle, ['n' => $n + 1, 'fin' => time() + $restant], $restant);
+            return true;
+        } finally {
+            self::liberer_verrou($cle);
+        }
+    }
+
+    /**
+     * Rend un crédit de demande quand la création échoue APRÈS réservation.
+     *
+     * Sans ça, une erreur de base (ou une pièce jointe refusée) consommait
+     * définitivement une des 3 places horaires alors qu'aucune demande n'existe.
+     * La réservation est prise après validation : le seul échec possible ensuite
+     * est technique, jamais une faute de saisie.
+     */
+    private static function rendre_demande(): void
+    {
+        $cle = self::cle_limitation('demandes');
+        if ($cle === null || !self::acquerir_verrou($cle)) {
+            return;
+        }
+        try {
+            [$n, $restant] = self::lire_compteur($cle);
+            if ($n > 0) {
+                if ($restant <= 0) {
+                    delete_transient($cle);
+                } else {
+                    set_transient($cle, ['n' => $n - 1, 'fin' => time() + $restant], $restant);
+                }
+            }
+        } finally {
+            self::liberer_verrou($cle);
+        }
     }
 
     /** Clé de limitation : l'adresse vue par le serveur, jamais un en-tête client. */
@@ -346,7 +419,15 @@ final class TUC_Onboarding_Restaurant
                 ['status' => 429, 'retry_after' => $restant]
             );
         }
-        self::incrementer_compteur($cle);
+        // Si le verrou ne s'obtient pas, on REFUSE plutôt que de laisser passer :
+        // un compteur qu'on ne peut pas tenir n'est pas un compteur.
+        if (!self::incrementer_compteur($cle)) {
+            return new WP_Error(
+                'tuc_onboarding_quota',
+                __('Le service est momentanément occupé. Réessayez dans un instant.', 'tuc-core'),
+                ['status' => 503]
+            );
+        }
         return null;
     }
 
@@ -358,13 +439,24 @@ final class TUC_Onboarding_Restaurant
         }
         if ($secondes < 120) {
             return sprintf(
-                __('Trop de demandes depuis cet appareil. Réessayez dans %d seconde(s).', 'tuc-core'),
+                _n(
+                    'Trop de demandes depuis cet appareil. Réessayez dans %d seconde.',
+                    'Trop de demandes depuis cet appareil. Réessayez dans %d secondes.',
+                    $secondes,
+                    'tuc-core'
+                ),
                 $secondes
             );
         }
+        $minutes = (int) ceil($secondes / 60);
         return sprintf(
-            __('Trop de demandes depuis cet appareil. Réessayez dans %d minutes.', 'tuc-core'),
-            (int) ceil($secondes / 60)
+            _n(
+                'Trop de demandes depuis cet appareil. Réessayez dans %d minute.',
+                'Trop de demandes depuis cet appareil. Réessayez dans %d minutes.',
+                $minutes,
+                'tuc-core'
+            ),
+            $minutes
         );
     }
 
@@ -445,6 +537,7 @@ final class TUC_Onboarding_Restaurant
             'post_name' => 'demande-' . wp_generate_password(12, false, false),
         ], true);
         if (is_wp_error($applicationId)) {
+            self::rendre_demande(); // le credit est rendu : aucune demande n'existe
             return new WP_Error('tuc_onboarding_save', 'La demande n’a pas pu être enregistrée.', ['status' => 500]);
         }
 
@@ -454,6 +547,7 @@ final class TUC_Onboarding_Restaurant
         $attachmentId = media_handle_sideload($photo, (int) $applicationId, 'Photo du menu — ' . $name);
         if (is_wp_error($attachmentId)) {
             wp_delete_post((int) $applicationId, true);
+            self::rendre_demande(); // la demande est supprimee : le credit est rendu
             return new WP_Error(
                 'tuc_onboarding_photo_save',
                 __('La photo n’a pas pu être enregistrée. Réessayez avec une photo JPEG, PNG ou WebP.', 'tuc-core'),
