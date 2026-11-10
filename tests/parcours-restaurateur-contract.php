@@ -670,8 +670,9 @@ function tuc_parcours_restaurateur_contrat(?callable $assertExterne = null): int
         $wpdb->query($wpdb->prepare(
             "INSERT INTO {$wpdb->options} (option_name, option_value, autoload) VALUES (%s, %s, 'no')",
             $cleEnt,
-            '2|' . (time() + 3600)
+            '2|' . (time() + 3600) . '|3'
         ));
+        $GLOBALS['finEnt'] = time() + 3600;
         $jEntA = $appeler('prendre_verrou', [$nomEnt]);
         $jEntB = null;
         // La garde de A fait ce que ferait le monde extérieur pendant sa pause :
@@ -683,7 +684,10 @@ function tuc_parcours_restaurateur_contrat(?callable $assertExterne = null): int
                 $nomEnt
             ));
             $jEntB = $appeler('prendre_verrou', [$nomEnt]);
-            $appeler('ecrire_compteur', [$cleEnt, 3, time() + 3000]);
+            // B écrit comme le fait le module : CAS sur la valeur qu'il a lue.
+            // (le mode « création » ne sert QU'à créer : sur une ligne existante,
+            // il rend false — c'est ce que la revue n°5 a exigé)
+            $appeler('ecrire_compteur', [$cleEnt, 3, time() + 3000, '2|' . ($GLOBALS['finEnt'] ?? time() + 3600) . '|3']);
             return true;
         };
         $ecritEntA = $appeler('incrementer_compteur', [$cleEnt, $gardeEnt]);
@@ -692,7 +696,7 @@ function tuc_parcours_restaurateur_contrat(?callable $assertExterne = null): int
         $compter($ecritEntA === false, '74. l’écriture de A, préparée sur un état périmé, est refusée');
         $compter((int) explode('|', $valeurEnt)[0] === 3, '75. le compteur garde la valeur de B : ' . $valeurEnt);
         $appeler('rendre_verrou', [$nomEnt, $jEntB]);
-        $compter($appeler('ecrire_compteur', [$cleEnt, 99, time() + 60, '2|0']) === false, '76. une écriture conditionnelle sur une valeur disparue est refusée par la base');
+        $compter($appeler('ecrire_compteur', [$cleEnt, 99, time() + 60, '2|0|0']) === false, '76. une écriture conditionnelle sur une valeur disparue est refusée par la base');
         $jEntC = $appeler('prendre_verrou', [$nomEnt]);
         $compter($appeler('incrementer_compteur', [$cleEnt, static fn (): bool => true]) === true, '77. témoin : sans concurrent, l’incrément s’applique');
         $appeler('rendre_verrou', [$nomEnt, $jEntC]);
@@ -827,6 +831,94 @@ function tuc_parcours_restaurateur_contrat(?callable $assertExterne = null): int
         $compter($appeler('incrementer_compteur', [$cleAba, static fn (): bool => true]) === true, '89. témoin : un incrément normal repasse ensuite');
         foreach ([$cleAba, $nomAba] as $nn) {
             $wpdb->query($wpdb->prepare("DELETE FROM {$wpdb->options} WHERE option_name = %s", $nn));
+        }
+
+        // =====================================================================
+        // 17. Création concurrente du compteur (revue n°5, point 1)
+        // =====================================================================
+        $cleCrea = 'tuc_demandes_' . md5('192.0.2.150');
+        $nomCrea = $cleCrea . '_verrou';
+        foreach ([$cleCrea, $nomCrea] as $nn) {
+            $wpdb->query($wpdb->prepare("DELETE FROM {$wpdb->options} WHERE option_name = %s", $nn));
+        }
+        $jCreaA = $appeler('prendre_verrou', [$nomCrea]);
+        $jCreaB = null;
+        $creeB = null;
+        $gardeCrea = static function () use (&$jCreaB, &$creeB, $nomCrea, $jCreaA, $cleCrea, $appeler, $wpdb): bool {
+            // Pendant la pause de A : son verrou expire, B reprend et CRÉE.
+            $wpdb->query($wpdb->prepare(
+                "UPDATE {$wpdb->options} SET option_value = %s WHERE option_name = %s",
+                $jCreaA . '|' . (time() - 60),
+                $nomCrea
+            ));
+            $jCreaB = $appeler('prendre_verrou', [$nomCrea]);
+            $creeB = $appeler('ecrire_compteur', [$cleCrea, 1, time() + 3600, null]);
+            $appeler('incrementer_compteur', [$cleCrea, static fn (): bool => true]);
+            return true; // A a vu son propre verrou
+        };
+        $ecritCreaA = $appeler('incrementer_compteur', [$cleCrea, $gardeCrea]);
+        $valeurCrea = (string) $lu($cleCrea);
+        $compter($creeB === true, '90. B crée le compteur pendant la pause de A');
+        $compter($ecritCreaA === false, '91. A n’écrase pas la création de B : son incrément est refusé');
+        $compter((int) explode('|', $valeurCrea)[0] === 2, '92. le compteur porte l’écriture de B (2) : ' . $valeurCrea);
+        $compter((int) explode('|', $valeurCrea)[2] === 2, '93. la séquence est celle de B : aucune écriture de A ne l’a fait bouger');
+        $compter($appeler('ecrire_compteur', [$cleCrea, 99, time() + 60, null]) === false, '94. le mode création refuse d’écrire sur une ligne existante');
+        $appeler('rendre_verrou', [$nomCrea, $jCreaB]);
+
+        // suppression puis recréation : pas de retour en arrière
+        $ancienne = '2|' . (time() + 3600) . '|2';
+        $appeler('supprimer_compteur', [$cleCrea]);
+        $compter($lu($cleCrea) === null, '95. la ligne est supprimée (purge ou restitution)');
+        $compter(
+            $appeler('ecrire_compteur', [$cleCrea, 3, time() + 3600, $ancienne]) === false && $lu($cleCrea) === null,
+            '96. une écriture préparée sur l’ancienne ligne ne peut pas la recréer'
+        );
+        $jCreaC = $appeler('prendre_verrou', [$nomCrea]);
+        $compter($appeler('ecrire_compteur', [$cleCrea, 1, time() + 3600, null]) === true, '97. la création après suppression réussit');
+        $compter($appeler('ecrire_compteur', [$cleCrea, 3, time() + 3600, $ancienne]) === false, '98. l’ancienne valeur ne peut plus servir : pas d’ABA de recréation');
+        $appeler('rendre_verrou', [$nomCrea, $jCreaC]);
+
+        // purge : 6 000 vivantes devant une périmée, en un seul appel
+        $serieLongue = [];
+        for ($i = 0; $i < 6000; $i++) {
+            $serieLongue[] = 'tuc_tentatives_' . sprintf('%04d', $i) . str_repeat('b', 28);
+        }
+        foreach (array_chunk($serieLongue, 200) as $lot) {
+            $valeurs = [];
+            $params = [];
+            foreach ($lot as $nn) {
+                $valeurs[] = "(%s, %s, 'no')";
+                $params[] = $nn;
+                $params[] = '5|' . (time() + 1800);
+            }
+            $wpdb->query($wpdb->prepare(
+                "INSERT INTO {$wpdb->options} (option_name, option_value, autoload) VALUES " . implode(',', $valeurs),
+                ...$params
+            ));
+        }
+        $perdue = 'tuc_tentatives_zzzz' . str_repeat('w', 18);
+        $wpdb->query($wpdb->prepare(
+            "INSERT INTO {$wpdb->options} (option_name, option_value, autoload) VALUES (%s, %s, 'no')",
+            $perdue,
+            '9|' . (time() - 3 * 86400)
+        ));
+        $appeler('balayer_lignes_perimees', [500]);
+        $compter((int) $wpdb->get_var($wpdb->prepare(
+            "SELECT COUNT(*) FROM {$wpdb->options} WHERE option_name = %s", $perdue)) === 0,
+            '99. une périmée DERRIÈRE 6 000 vivantes est atteinte en un seul appel');
+        $vivantesRestantes = 0;
+        foreach (array_chunk($serieLongue, 500) as $lot) {
+            $vivantesRestantes += (int) $wpdb->get_var($wpdb->prepare(
+                "SELECT COUNT(*) FROM {$wpdb->options} WHERE option_name IN (" . implode(',', array_fill(0, count($lot), '%s')) . ")",
+                ...$lot
+            ));
+        }
+        $compter($vivantesRestantes === 6000, '100. aucune des 6 000 vivantes n’a été supprimée (' . $vivantesRestantes . '/6000)');
+        foreach (array_chunk($serieLongue, 500) as $lot) {
+            $wpdb->query($wpdb->prepare(
+                "DELETE FROM {$wpdb->options} WHERE option_name IN (" . implode(',', array_fill(0, count($lot), '%s')) . ")",
+                ...$lot
+            ));
         }
 
         // =====================================================================

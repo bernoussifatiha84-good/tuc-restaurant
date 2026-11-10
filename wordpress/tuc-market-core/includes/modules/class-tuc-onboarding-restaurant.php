@@ -291,17 +291,18 @@ final class TUC_Onboarding_Restaurant
      */
     private static function lire_compteur(string $cle): array
     {
-        global $wpdb;
         // SQL direct, comme le verrou : un transient passe par le cache objet,
         // et un cache persistant peut servir un compte périmé.
-        $valeur = $wpdb->get_var($wpdb->prepare(
-            "SELECT option_value FROM `{$wpdb->options}` WHERE option_name = %s",
-            $cle
-        ));
+        return self::lire_valeur(self::lire_brut($cle));
+    }
+
+    /** Décode une valeur de compteur. Rend [compte, secondes_restantes]. */
+    private static function lire_valeur(?string $valeur): array
+    {
         if ($valeur === null) {
             return [0, 0];
         }
-        $parties = explode('|', (string) $valeur);
+        $parties = explode('|', $valeur);
         $compte = (int) ($parties[0] ?? 0);
         $fin = (int) ($parties[1] ?? 0);
         $restant = $fin - time();
@@ -318,44 +319,39 @@ final class TUC_Onboarding_Restaurant
      * FORMAT DE LA VALEUR : « compte|fin|séquence ». La séquence est incrémentée
      * à CHAQUE écriture et fait partie de la valeur comparée par le CAS. C'est
      * ce qui règle le cas ABA (retour à la même valeur après d'autres écritures)
-     * SANS seconde vérification après coup : la base refuse d'un bloc une
-     * écriture préparée sur un état périmé, même si le compte et la fenêtre sont
-     * revenus identiques.
+     * SANS seconde vérification après coup.
      *
-     * DEUX MODES, et le second ne recrée JAMAIS une ligne disparue :
-     * - `$attendu === null` : écriture inconditionnelle (création d'un compteur
-     *   neuf, sous verrou, par le détenteur courant) ;
-     * - `$attendu !== null` : écriture CONDITIONNELLE sur la valeur complète. Si
-     *   la ligne a disparu (purge, restitution, autre processus), **aucun INSERT
-     *   n'est tenté** : on rend false. Un ancien détenteur ne peut pas recréer un
-     *   compteur qui n'existe plus.
+     * TROIS MODES, et aucun ne peut écraser une écriture concurrente :
+     *
+     * 1. `$attendu === null` (création) : **un seul INSERT IGNORE**, jamais
+     *    suivi d'un UPDATE. Si la ligne existait déjà, on rend false : « je n'ai
+     *    pas créé ». Un créateur concurrent ne peut donc pas écraser celui qui a
+     *    gagné — c'était le défaut signalé par la revue n°5 (INSERT puis UPDATE
+     *    sans condition).
+     *
+     * 2. `$attendu !== null` : UPDATE CONDITIONNEL sur la valeur complète. Si la
+     *    ligne a disparu, **aucun INSERT** n'est tenté : on rend false.
+     *
+     * 3. `$creeeSeulement === true` : création stricte, réservée au cas où la
+     *    clé porte une génération neuve ; sans ligne, on échoue plutôt que de
+     *    recréer.
      */
     private static function ecrire_compteur(string $cle, int $compte, int $fin, ?string $attendu = null): bool
     {
         global $wpdb;
 
         if ($attendu === null) {
-            $sequence = self::sequence_de($cle) + 1;
-            $valeur = $compte . '|' . $fin . '|' . $sequence;
-            if (!self::ligne_existe($cle)) {
-                $insert = $wpdb->query($wpdb->prepare(
-                    "INSERT IGNORE INTO `{$wpdb->options}` (option_name, option_value, autoload) VALUES (%s, %s, 'no')",
-                    $cle,
-                    $valeur
-                ));
-                if ($insert === 1) {
-                    self::purger_cache_option($cle);
-                    return self::relire_egal($cle, $valeur);
-                }
-            }
-            // Une autre écriture a pu se glisser : on relit la séquence VRAIE.
-            $valeur = $compte . '|' . $fin . '|' . (self::sequence_de($cle) + 1);
-            $wpdb->query($wpdb->prepare(
-                "UPDATE `{$wpdb->options}` SET option_value = %s WHERE option_name = %s",
-                $valeur,
-                $cle
+            // Création : un seul INSERT, atomique. Rien d'autre.
+            $valeur = $compte . '|' . $fin . '|1';
+            $insert = $wpdb->query($wpdb->prepare(
+                "INSERT IGNORE INTO `{$wpdb->options}` (option_name, option_value, autoload) VALUES (%s, %s, 'no')",
+                $cle,
+                $valeur
             ));
             self::purger_cache_option($cle);
+            if ((int) $insert !== 1) {
+                return false; // la ligne existe déjà : ce n'est pas nous qui l'avons créée
+            }
             return self::relire_egal($cle, $valeur);
         }
 
@@ -388,7 +384,10 @@ final class TUC_Onboarding_Restaurant
         return $brut === null ? 0 : self::sequence_dans($brut);
     }
 
-    /** Valeur brute d'une ligne d'option, sans cache. */
+    /**
+     * Valeur brute d'une ligne d'option, sans cache.
+     *
+     */
     private static function lire_brut(string $cle): ?string
     {
         global $wpdb;
@@ -399,6 +398,8 @@ final class TUC_Onboarding_Restaurant
         return $valeur === null ? null : (string) $valeur;
     }
 
+
+
     private static function ligne_existe(string $cle): bool
     {
         return self::lire_brut($cle) !== null;
@@ -406,6 +407,8 @@ final class TUC_Onboarding_Restaurant
 
     private static function relire_egal(string $cle, string $valeur): bool
     {
+        // Comparaison sur la ligne de CETTE clé : une valeur héritée ne doit pas
+        // faire croire que notre écriture a réussi.
         return self::lire_brut($cle) === $valeur;
     }
 
@@ -644,7 +647,7 @@ final class TUC_Onboarding_Restaurant
                 ));
                 if ($reprise === 1) {
                     self::purger_cache_option($nom);
-                    return $jeton;
+                        return $jeton;
                 }
                 continue; // quelqu'un d'autre l'a repris : on retente
             }
@@ -708,17 +711,18 @@ final class TUC_Onboarding_Restaurant
     /**
      * Incrémente un compteur à fenêtre fixe. À appeler DANS `sous_verrou()`.
      *
-     * Deux courses ont été trouvées par les revues, et chacune a sa réponse :
+     * Trois courses ont été trouvées par les revues, et chacune a sa réponse :
      *
-     * 1. (revue n°3) vérifier la garde puis écrire sont deux opérations ; entre
-     *    les deux, le verrou peut expirer et un autre processus peut écrire. Une
-     *    vérification APRÈS coup ne défait pas l'écriture déjà faite.
-     *    → l'écriture est CONDITIONNELLE sur la valeur lue : la base refuse.
-     *
-     * 2. (revue n°4) ABA : si la ligne revient à la même valeur après d'autres
-     *    écritures, une comparaison de compte seule ne voit rien.
-     *    → la séquence est incluse dans la valeur comparée, donc le CAS échoue
-     *      même quand le compte et la fenêtre sont revenus identiques.
+     * 1. (n°3) vérifier la garde puis écrire sont deux opérations ; entre les
+     *    deux, le verrou peut expirer et un autre processus écrire.
+     *    → l'écriture est CONDITIONNELLE sur la valeur lue.
+     * 2. (n°4) ABA : la ligne revient à la même valeur après d'autres écritures.
+     *    → la séquence fait partie de la valeur comparée.
+     * 3. (n°5) création concurrente : INSERT puis UPDATE sans condition laissait
+     *    un processus écraser l'écriture d'un autre.
+     *    → la création est un INSERT unique (jamais suivi d'un UPDATE) ; si la
+     *      ligne apparaît entre-temps, on rend false et l'appelant retente sous
+     *      verrou, au lieu d'écraser.
      */
     private static function incrementer_compteur(string $cle, ?callable $garde = null): bool
     {
@@ -728,7 +732,8 @@ final class TUC_Onboarding_Restaurant
             return false;
         }
         if ($brut === null) {
-            // Aucun compteur : le détenteur courant en crée un à 1.
+            // Aucun compteur : création atomique à 1. Si quelqu'un a créé la
+            // ligne entre la lecture et l'instant présent, on n'écrase pas.
             return self::ecrire_compteur($cle, 1, time() + HOUR_IN_SECONDS, null);
         }
         [$n, $restant] = self::lire_compteur($cle);
@@ -738,8 +743,7 @@ final class TUC_Onboarding_Restaurant
 
     /**
      * Rend un crédit de demande quand la création échoue APRÈS réservation.
-     * Plancher à 0. Rend true seulement si le crédit est réellement rendu :
-     * un échec ici laisse un crédit consommé à tort, il ne doit pas être masqué.
+     * Plancher à 0. Rend true seulement si le crédit est réellement rendu.
      */
     private static function rendre_demande(): bool
     {
@@ -750,8 +754,8 @@ final class TUC_Onboarding_Restaurant
         self::oublier_erreur_sql();
         [$pris, $rendu] = self::sous_verrou($cle, static function (callable $garde) use ($cle): bool {
             $brut = self::lire_brut($cle);
-            [$n, $restant] = self::lire_compteur($cle);
-            if ($n <= 0) {
+            [$n, $restant] = self::lire_valeur($brut);
+            if ($n <= 0 || $brut === null) {
                 return false; // rien à rendre
             }
             if (!$garde()) {
@@ -908,17 +912,20 @@ final class TUC_Onboarding_Restaurant
      * vivantes. Ces noms ne sont gardés qu'en mémoire ; aucun registre n'est
      * écrit en base.
      */
-    private static function balayer_lignes_perimees(int $plafond = 500): int
+    private static function balayer_lignes_perimees(int $plafond = 500, int $fenetresMax = 2000): int
     {
         global $wpdb;
         $limite = time() - self::RETENTION_COMPTEUR;
         $vuesVivantes = [];
         $supprimees = 0;
         $passes = 0;
+        $lues = 0;
 
-        // On boucle jusqu'à avoir parcouru toute la file (au plus 200 fenêtres),
-        // en excluant à chaque tour ce qui a déjà été vu vivant.
-        while ($passes < 200) {
+        // On boucle jusqu'à avoir parcouru TOUTE la file, en excluant à chaque
+        // tour ce qui a déjà été vu vivant. La borne n'est qu'un garde-fou de
+        // temps de requête : 2000 fenêtres de 500 = 1 000 000 de lignes lues en
+        // un appel, et `$GLOBALS['tuc_purge_lues']` dit où l'on s'est arrêté.
+        while ($passes < max(1, $fenetresMax)) {
             $passes++;
             $exclure = array_keys($vuesVivantes);
             $exclusion = '';
@@ -940,6 +947,7 @@ final class TUC_Onboarding_Restaurant
             if (empty($lignes)) {
                 break; // plus rien à voir : la file est parcourue
             }
+            $lues += count($lignes);
 
             foreach ((array) $lignes as $ligne) {
                 $nom = (string) ($ligne['option_name'] ?? '');
@@ -972,15 +980,13 @@ final class TUC_Onboarding_Restaurant
                 }
             }
 
-            // Sécurité mémoire : au-delà de 5 000 noms retenus, on s'arrête pour
-            // cette requête et la passe suivante reprendra depuis le début.
-            if (count($vuesVivantes) > 5000) {
-                break;
-            }
         }
 
         wp_cache_delete('alloptions', 'options');
         wp_cache_delete('notoptions', 'options');
+        // Diagnostic : ce que cette passe a réellement lu, et en combien de fenêtres.
+        $GLOBALS['tuc_purge_lues'] = $lues;
+        $GLOBALS['tuc_purge_fenetres'] = $passes;
         return $supprimees;
     }
 

@@ -1305,8 +1305,8 @@ try {
     $assert(
         // MESURÉ, jamais estimé (37, 46, 47, 48, 65). Cinq estimations à la main
         // se sont déjà trompées. Cette valeur se lit dans un run.
-        $casParcours === 89,
-        sprintf('contrat parcours restaurateur : 89 cas attendus, %d exécutés', $casParcours)
+        $casParcours === 100,
+        sprintf('contrat parcours restaurateur : 100 cas attendus, %d exécutés', $casParcours)
     );
     WP_CLI::log(sprintf('Contrat parcours restaurateur : %d cas verts.', $casParcours));
 }
