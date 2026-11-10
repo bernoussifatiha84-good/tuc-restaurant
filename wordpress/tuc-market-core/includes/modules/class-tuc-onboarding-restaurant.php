@@ -264,11 +264,27 @@ final class TUC_Onboarding_Restaurant
     /** Tentatives par heure et par adresse. Large : c'est l'anti-abus. */
     private const MAX_TENTATIVES_PAR_HEURE = 20;
 
+    /**
+     * Rétention des lignes de compteur et de verrou (secondes).
+     * Une ligne périmée depuis plus de 24 h ne protège plus rien : on la
+     * supprime. Sans ce balayage, chaque nouvelle IP laisserait une ligne
+     * pour toujours (elles ne sont que « logiquement » expirées).
+     */
+    private const RETENTION_COMPTEUR = 86_400;
+
+    /** Probabilité de balayage par requête (1 sur 20), pour ne pas payer à chaque fois. */
+    private const PURGE_UN_SUR = 20;
+
     /** Demandes créées par heure et par adresse. Strict : c'est l'anti-spam. */
     private const MAX_DEMANDES_PAR_HEURE = 3;
 
     /**
      * Lit un compteur à fenêtre fixe. Rend [compte, secondes_restantes].
+     *
+     * En cas d'ERREUR DE LECTURE, rend [0, 0] : l'appelant ne peut alors pas
+     * distinguer « compteur vide » d'« erreur ». C'est volontaire et c'est
+     * l'appelant qui tranche, via `derniere_erreur_sql()` : un quota calculé sur
+     * une lecture ratée refuserait ou laisserait passer au hasard.
      *
      * @return array{0:int,1:int}
      */
@@ -294,17 +310,23 @@ final class TUC_Onboarding_Restaurant
         return [$compte, $restant];
     }
 
-    /** Écrit un compteur (SQL direct + purge du cache objet). À appeler SOUS verrou. */
-    private static function ecrire_compteur(string $cle, int $compte, int $fin): void
+    /**
+     * Écrit un compteur (SQL direct + purge du cache objet). À appeler SOUS verrou.
+     *
+     * Rend true seulement si la base a VRAIMENT une ligne avec cette valeur
+     * après coup. Un échec d'écriture ne doit jamais passer pour un succès :
+     * l'appelant voit false et refuse la demande.
+     */
+    private static function ecrire_compteur(string $cle, int $compte, int $fin): bool
     {
         global $wpdb;
         $valeur = $compte . '|' . $fin;
-        $ok = $wpdb->query($wpdb->prepare(
+        $insert = $wpdb->query($wpdb->prepare(
             "INSERT IGNORE INTO `{$wpdb->options}` (option_name, option_value, autoload) VALUES (%s, %s, 'no')",
             $cle,
             $valeur
         ));
-        if ($ok !== 1) {
+        if ($insert !== 1) {
             $wpdb->query($wpdb->prepare(
                 "UPDATE `{$wpdb->options}` SET option_value = %s WHERE option_name = %s",
                 $valeur,
@@ -312,10 +334,18 @@ final class TUC_Onboarding_Restaurant
             ));
         }
         self::purger_cache_option($cle);
+        // Vérification du RÉSULTAT FINAL, pas de la valeur retournée par l'UPDATE :
+        // deux lignes homonymes n'existent pas (index UNIQUE), donc relire suffit
+        // et ne peut pas être trompé par un compteur affecté.
+        $relu = $wpdb->get_var($wpdb->prepare(
+            "SELECT option_value FROM `{$wpdb->options}` WHERE option_name = %s",
+            $cle
+        ));
+        return is_string($relu) && $relu === $valeur;
     }
 
     /** Remet un compteur à zéro (SQL direct + purge). À appeler SOUS verrou. */
-    private static function supprimer_compteur(string $cle): void
+    private static function supprimer_compteur(string $cle): bool
     {
         global $wpdb;
         $wpdb->query($wpdb->prepare(
@@ -323,6 +353,28 @@ final class TUC_Onboarding_Restaurant
             $cle
         ));
         self::purger_cache_option($cle);
+        $restant = $wpdb->get_var($wpdb->prepare(
+            "SELECT COUNT(*) FROM `{$wpdb->options}` WHERE option_name = %s",
+            $cle
+        ));
+        return (int) $restant === 0;
+    }
+
+    /**
+     * La dernière opération SQL a-t-elle échoué ? On remet `last_error` à zéro
+     * AVANT chaque opération protégée, sinon un `$wpdb->last_error` laissé par
+     * une requête précédente ferait échouer du travail correct.
+     */
+    private static function derniere_erreur_sql(): string
+    {
+        global $wpdb;
+        return trim((string) $wpdb->last_error);
+    }
+
+    private static function oublier_erreur_sql(): void
+    {
+        global $wpdb;
+        $wpdb->last_error = '';
     }
 
     /**
@@ -371,11 +423,44 @@ final class TUC_Onboarding_Restaurant
         if ($jeton === null) {
             return [false, null];
         }
+        $resultat = null;
+        $garde = false;
         try {
-            return [true, $action()];
+            // Si le verrou nous a échappé pendant l'opération (process suspendu
+            // au-delà du TTL, reprise par un autre), l'action ne doit pas écrire.
+            if (!self::verrou_est_a_nous($nom, $jeton)) {
+                return [false, null];
+            }
+            $resultat = $action(static fn (): bool => self::verrou_est_a_nous($nom, $jeton));
+            // Après l'action : si le verrou n'est plus à nous, le travail n'est
+            // pas fiable et on le signale à l'appelant.
+            $garde = self::verrou_est_a_nous($nom, $jeton);
         } finally {
             self::rendre_verrou($nom, $jeton);
         }
+        return [$garde, $resultat];
+    }
+
+    /**
+     * Le verrou `$nom` est-il encore le nôtre ET pas expiré ?
+     * Une seule requête, pas de cache : c'est la seule vérité.
+     */
+    private static function verrou_est_a_nous(string $nom, string $jeton): bool
+    {
+        global $wpdb;
+        $valeur = $wpdb->get_var($wpdb->prepare(
+            "SELECT option_value FROM `{$wpdb->options}` WHERE option_name = %s",
+            $nom
+        ));
+        if (!is_string($valeur)) {
+            return false;
+        }
+        $parties = explode('|', $valeur);
+        if (($parties[0] ?? '') !== $jeton) {
+            return false;
+        }
+        $pose = (int) ($parties[1] ?? 0);
+        return $pose > 0 && (time() - $pose) <= self::VERROU_TTL;
     }
 
     /** Rend un jeton si le verrou est pris, null sinon. */
@@ -482,38 +567,47 @@ final class TUC_Onboarding_Restaurant
      * Incrémente un compteur à fenêtre fixe. À appeler DANS `sous_verrou()`.
      * Le compteur est lu AVANT d'écrire, dans la même section critique que la
      * décision : c'est le point que la revue a mis en évidence.
+     *
+     * Rend false si l'écriture n'a pas été vérifiée en base : l'appelant refuse
+     * alors, il ne fait pas comme si la protection avait fonctionné.
      */
-    private static function incrementer_compteur(string $cle): void
+    private static function incrementer_compteur(string $cle, ?callable $garde = null): bool
     {
         [$n, $restant] = self::lire_compteur($cle);
         $fin = $restant > 0 ? time() + $restant : time() + HOUR_IN_SECONDS;
-        self::ecrire_compteur($cle, $n + 1, $fin);
+        // Avant d'écrire : le verrou est-il toujours le nôtre ?
+        if ($garde !== null && !$garde()) {
+            return false;
+        }
+        return self::ecrire_compteur($cle, $n + 1, $fin);
     }
 
     /**
      * Rend un crédit de demande quand la création échoue APRÈS réservation.
-     * Plancher à 0.
+     * Plancher à 0. Rend true seulement si le crédit est réellement rendu :
+     * un échec ici laisse un crédit consommé à tort, il ne doit pas être masqué.
      */
-    private static function rendre_demande(): void
+    private static function rendre_demande(): bool
     {
         $cle = self::cle_limitation('demandes');
         if ($cle === null) {
-            return;
+            return false;
         }
-        [$pris, ] = self::sous_verrou($cle, static function () use ($cle): bool {
+        self::oublier_erreur_sql();
+        [$pris, $rendu] = self::sous_verrou($cle, static function (callable $garde) use ($cle): bool {
             [$n, $restant] = self::lire_compteur($cle);
             if ($n <= 0) {
-                return false;
+                return false; // rien à rendre
+            }
+            if (!$garde()) {
+                return false; // verrou perdu pendant l'opération : on n'écrit pas
             }
             if ($restant <= 0) {
-                self::supprimer_compteur($cle);
-                return true;
+                return self::supprimer_compteur($cle);
             }
-            self::ecrire_compteur($cle, $n - 1, time() + $restant);
-            return true;
+            return self::ecrire_compteur($cle, $n - 1, time() + $restant);
         });
-        // Si le verrou n'a pas pu être pris, le crédit n'est pas rendu : c'est un
-        // échec silencieux, mais préférable à une écriture non protégée.
+        return $pris && $rendu === true && self::derniere_erreur_sql() === '';
     }
 
     /**
@@ -526,9 +620,19 @@ final class TUC_Onboarding_Restaurant
         if ($cle === null) {
             return null; // pas d'adresse exploitable : on ne bloque pas au hasard
         }
+        self::oublier_erreur_sql();
         $resultat = null;
-        [$pris, ] = self::sous_verrou($cle, static function () use ($cle, &$resultat): bool {
+        $ecrit = false;
+        [$pris, ] = self::sous_verrou($cle, static function (callable $garde) use ($cle, &$resultat, &$ecrit): bool {
             [$n, $restant] = self::lire_compteur($cle);
+            if (self::derniere_erreur_sql() !== '') {
+                $resultat = new WP_Error(
+                    'tuc_onboarding_storage',
+                    __('Le service est momentanément indisponible. Réessayez dans un instant.', 'tuc-core'),
+                    ['status' => 503]
+                );
+                return false;
+            }
             if ($n >= self::MAX_TENTATIVES_PAR_HEURE) {
                 $resultat = new WP_Error(
                     'tuc_onboarding_rate',
@@ -537,15 +641,14 @@ final class TUC_Onboarding_Restaurant
                 );
                 return false;
             }
-            self::incrementer_compteur($cle);
+            $ecrit = self::incrementer_compteur($cle, $garde);
+            if (!$ecrit) {
+                $resultat = self::erreur_stockage();
+            }
             return true;
         });
         if (!$pris) {
-            return new WP_Error(
-                'tuc_onboarding_occupe',
-                __('Le service est momentanément occupé. Réessayez dans un instant.', 'tuc-core'),
-                ['status' => 503]
-            );
+            return $resultat instanceof WP_Error ? $resultat : self::erreur_occupe();
         }
         return $resultat instanceof WP_Error ? $resultat : null;
     }
@@ -560,9 +663,14 @@ final class TUC_Onboarding_Restaurant
         if ($cle === null) {
             return null;
         }
+        self::oublier_erreur_sql();
         $resultat = null;
-        [$pris, ] = self::sous_verrou($cle, static function () use ($cle, &$resultat): bool {
+        [$pris, ] = self::sous_verrou($cle, static function (callable $garde) use ($cle, &$resultat): bool {
             [$n, $restant] = self::lire_compteur($cle);
+            if (self::derniere_erreur_sql() !== '') {
+                $resultat = self::erreur_stockage();
+                return false;
+            }
             if ($n >= self::MAX_DEMANDES_PAR_HEURE) {
                 $resultat = new WP_Error(
                     'tuc_onboarding_quota',
@@ -571,17 +679,76 @@ final class TUC_Onboarding_Restaurant
                 );
                 return false;
             }
-            self::incrementer_compteur($cle);
+            if (!self::incrementer_compteur($cle, $garde)) {
+                $resultat = self::erreur_stockage();
+            }
             return true;
         });
         if (!$pris) {
-            return new WP_Error(
-                'tuc_onboarding_occupe',
-                __('Le service est momentanément occupé. Réessayez dans un instant.', 'tuc-core'),
-                ['status' => 503]
-            );
+            return $resultat instanceof WP_Error ? $resultat : self::erreur_occupe();
         }
         return $resultat instanceof WP_Error ? $resultat : null;
+    }
+
+    /** Lecture ou écriture du compteur ratée : on refuse, on ne « laisse pas passer ». */
+    private static function erreur_stockage(): WP_Error
+    {
+        return new WP_Error(
+            'tuc_onboarding_storage',
+            __('Le service est momentanément indisponible. Réessayez dans un instant.', 'tuc-core'),
+            ['status' => 503]
+        );
+    }
+
+    private static function erreur_occupe(): WP_Error
+    {
+        return new WP_Error(
+            'tuc_onboarding_occupe',
+            __('Le service est momentanément occupé. Réessayez dans un instant.', 'tuc-core'),
+            ['status' => 503]
+        );
+    }
+
+    /**
+     * Balayage des lignes périmées : compteurs échus depuis plus de
+     * RETENTION_COMPTEUR et verrous orphelins très anciens. Sans lui, chaque
+     * nouvelle IP laisserait une ligne d'options pour toujours.
+     *
+     * Portable À DESSEIN : pas de `SUBSTRING_INDEX` (MySQL seulement), pas de
+     * `CAST(... AS SIGNED)`. La sélection est un LIKE, le tri par âge se fait en
+     * PHP. Mesuré sur MariaDB 10.11.13 ET SQLite : la version SQL « élégante »
+     * marchait sur MariaDB et échouait sur SQLite — c'est le test qui l'a dit.
+     *
+     * Sûreté : on ne supprime QUE des lignes dont l'instant de fin (ou de pose)
+     * est dépassé depuis plus de 24 h. Une ligne vivante n'est jamais touchée.
+     * Ces lignes ne sont protégées par aucun verrou : la pire conséquence d'un
+     * balayage est de remettre à zéro un compteur déjà logiquement à zéro.
+     */
+    private static function purger_lignes_perimees(): void
+    {
+        if (wp_rand(1, self::PURGE_UN_SUR) !== 1) {
+            return;
+        }
+        global $wpdb;
+        $limite = time() - self::RETENTION_COMPTEUR;
+        $lignes = $wpdb->get_results($wpdb->prepare(
+            "SELECT option_name, option_value FROM `{$wpdb->options}` WHERE option_name LIKE %s LIMIT 500",
+            $wpdb->esc_like('tuc_') . '%'
+        ), ARRAY_A);
+        foreach ((array) $lignes as $ligne) {
+            $nom = (string) ($ligne['option_name'] ?? '');
+            if (!preg_match('/^tuc_(tentatives|demandes)_[a-z0-9]+(_verrou)?$/', $nom)) {
+                continue; // jamais autre chose que nos clés, même si le LIKE est large
+            }
+            $parties = explode('|', (string) ($ligne['option_value'] ?? ''));
+            $instant = (int) ($parties[1] ?? 0);
+            if ($instant > 0 && $instant < $limite) {
+                $wpdb->query($wpdb->prepare("DELETE FROM `{$wpdb->options}` WHERE option_name = %s", $nom));
+                self::purger_cache_option($nom);
+            }
+        }
+        wp_cache_delete('alloptions', 'options');
+        wp_cache_delete('notoptions', 'options');
     }
 
     /** Message avec un délai lisible : « dans 42 minutes », pas « plus tard ». */
@@ -619,6 +786,7 @@ final class TUC_Onboarding_Restaurant
         if ($limite instanceof WP_Error) {
             return $limite;
         }
+        self::purger_lignes_perimees();
         $waNumber = preg_replace('/[^0-9]/', '', (string) get_option('tuc_wa_numero', ''));
         if ($waNumber === '') {
             return new WP_Error('tuc_onboarding_whatsapp', 'Le contact WhatsApp de TUC n’est pas configuré.', ['status' => 503]);
@@ -676,37 +844,86 @@ final class TUC_Onboarding_Restaurant
             }
 
 
-        // Dernière barrière, et seulement ici : tout ce qui précède a validé,
-        // donc une erreur de saisie n'a jamais consommé ce quota.
-        $quota = self::reserver_demande();
-        if ($quota instanceof WP_Error) {
-            return $quota;
-        }
+            // Dernière barrière, et seulement ici : tout ce qui précède a validé,
+            // donc une erreur de saisie n'a jamais consommé ce quota.
+            $quota = self::reserver_demande();
+            if ($quota instanceof WP_Error) {
+                return $quota;
+            }
 
-        $applicationId = wp_insert_post([
-            'post_type' => self::CPT,
-            'post_status' => 'private',
-            'post_title' => $name,
-            'post_name' => 'demande-' . wp_generate_password(12, false, false),
-        ], true);
-        if (is_wp_error($applicationId)) {
-            self::rendre_demande(); // le credit est rendu : aucune demande n'existe
-            return new WP_Error('tuc_onboarding_save', 'La demande n’a pas pu être enregistrée.', ['status' => 500]);
-        }
+            /**
+             * Tout ce qui peut échouer APRÈS la réservation passe par ici : on
+             * nettoie ce qui a été créé, on rend le crédit, et si la restitution
+             * elle-même échoue on le DIT au lieu de le masquer.
+             */
+            $echouer = static function (WP_Error $erreur, int $piece = 0, int $demande = 0): WP_Error {
+                if ($piece > 0) {
+                    wp_delete_attachment($piece, true);
+                }
+                if ($demande > 0) {
+                    wp_delete_post($demande, true);
+                }
+                if (!self::rendre_demande()) {
+                    // Le crédit reste consommé à tort. On ne renvoie pas l'erreur
+                    // d'origine comme si de rien n'était : le code et la donnée
+                    // disent ce qui s'est vraiment passé.
+                    return new WP_Error(
+                        'tuc_onboarding_credit',
+                        __('La demande n’a pas abouti et le crédit n’a pas pu être rendu. Réessayez plus tard ou contactez TUC.', 'tuc-core'),
+                        ['status' => 500, 'cause' => $erreur->get_error_code()]
+                    );
+                }
+                return $erreur;
+            };
 
-        require_once ABSPATH . 'wp-admin/includes/file.php';
-        require_once ABSPATH . 'wp-admin/includes/media.php';
-        require_once ABSPATH . 'wp-admin/includes/image.php';
-        $attachmentId = media_handle_sideload($photo, (int) $applicationId, 'Photo du menu — ' . $name);
-        if (is_wp_error($attachmentId)) {
-            wp_delete_post((int) $applicationId, true);
-            self::rendre_demande(); // la demande est supprimee : le credit est rendu
-            return new WP_Error(
-                'tuc_onboarding_photo_save',
-                __('La photo n’a pas pu être enregistrée. Réessayez avec une photo JPEG, PNG ou WebP.', 'tuc-core'),
-                ['status' => 500]
-            );
-        }
+            $applicationId = wp_insert_post([
+                'post_type' => self::CPT,
+                'post_status' => 'private',
+                'post_title' => $name,
+                'post_name' => 'demande-' . wp_generate_password(12, false, false),
+            ], true);
+            if (is_wp_error($applicationId)) {
+                return $echouer(new WP_Error('tuc_onboarding_save', 'La demande n’a pas pu être enregistrée.', ['status' => 500]));
+            }
+            $applicationId = (int) $applicationId;
+
+            require_once ABSPATH . 'wp-admin/includes/file.php';
+            require_once ABSPATH . 'wp-admin/includes/media.php';
+            require_once ABSPATH . 'wp-admin/includes/image.php';
+            $attachmentId = media_handle_sideload($photo, $applicationId, 'Photo du menu — ' . $name);
+            if (is_wp_error($attachmentId)) {
+                return $echouer(
+                    new WP_Error(
+                        'tuc_onboarding_photo_save',
+                        __('La photo n’a pas pu être enregistrée. Réessayez avec une photo JPEG, PNG ou WebP.', 'tuc-core'),
+                        ['status' => 500]
+                    ),
+                    0,
+                    $applicationId
+                );
+            }
+            $attachmentId = (int) $attachmentId;
+
+            update_post_meta($applicationId, 'tuc_onboarding_menu_photo', $attachmentId);
+            update_post_meta($applicationId, 'tuc_onboarding_state', 'pending');
+            update_post_meta($applicationId, 'tuc_onboarding_reference', strtoupper(wp_generate_password(10, false, false)));
+            update_post_meta($applicationId, 'tuc_onboarding_created_at', current_time('mysql', true));
+            $waProof = wp_generate_password(40, false, false);
+            update_post_meta($applicationId, 'tuc_onboarding_wa_proof_hash', hash('sha256', $waProof));
+
+            $waRequest = new WP_REST_Request('POST', '/tuc/v1/wa-lien');
+            $waRequest->set_param('but', 'restaurant_onboarding');
+            $waRequest->set_param('application_id', $applicationId);
+            $waRequest->set_param('wa_proof', $waProof);
+            $waResult = TUC_Compte::wa_lien($waRequest);
+            if (is_wp_error($waResult)) {
+                // Le lien WhatsApp n'a pas pu être fabriqué : la demande est
+                // inutilisable (l'utilisateur ne peut pas nous joindre), donc on
+                // la retire ET on rend le crédit.
+                return $echouer($waResult, $attachmentId, $applicationId);
+            }
+            $waData = $waResult instanceof WP_REST_Response ? $waResult->get_data() : [];
+            update_post_meta($applicationId, 'tuc_onboarding_wa_code', (string) ($waData['code'] ?? ''));
         } finally {
             // Le JPEG issu de la conversion n'a plus d'utilité une fois la pièce
             // jointe créée : le fichier de WordPress est une copie. On ne laisse
@@ -715,27 +932,9 @@ final class TUC_Onboarding_Restaurant
                 @unlink($temporaireCree);
             }
         }
-        update_post_meta((int) $applicationId, 'tuc_onboarding_menu_photo', (int) $attachmentId);
-        update_post_meta((int) $applicationId, 'tuc_onboarding_state', 'pending');
-        update_post_meta((int) $applicationId, 'tuc_onboarding_reference', strtoupper(wp_generate_password(10, false, false)));
-        update_post_meta((int) $applicationId, 'tuc_onboarding_created_at', current_time('mysql', true));
-        $waProof = wp_generate_password(40, false, false);
-        update_post_meta((int) $applicationId, 'tuc_onboarding_wa_proof_hash', hash('sha256', $waProof));
 
-        $waRequest = new WP_REST_Request('POST', '/tuc/v1/wa-lien');
-        $waRequest->set_param('but', 'restaurant_onboarding');
-        $waRequest->set_param('application_id', (int) $applicationId);
-        $waRequest->set_param('wa_proof', $waProof);
-        $waResult = TUC_Compte::wa_lien($waRequest);
-        if (is_wp_error($waResult)) {
-            wp_delete_attachment((int) $attachmentId, true);
-            wp_delete_post((int) $applicationId, true);
-            return $waResult;
-        }
-        $waData = $waResult instanceof WP_REST_Response ? $waResult->get_data() : [];
-        update_post_meta((int) $applicationId, 'tuc_onboarding_wa_code', (string) ($waData['code'] ?? ''));
         $response = new WP_REST_Response([
-            'reference' => (string) get_post_meta((int) $applicationId, 'tuc_onboarding_reference', true),
+            'reference' => (string) get_post_meta($applicationId, 'tuc_onboarding_reference', true),
             'wa_url' => (string) ($waData['url'] ?? ''),
             'code' => (string) ($waData['code'] ?? ''),
             'poll' => (string) ($waData['poll'] ?? ''),
