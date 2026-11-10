@@ -209,6 +209,35 @@ jobs:
               -type f -name "*.php" -print0 | xargs -0 -n1 php -l
           '
 
+      # DEUX identités écrivent dans les uploads, et elles diffèrent :
+      #   - le conteneur wordpress (Apache) tourne en www-data ;
+      #   - wp-content appartient à l'uid 33, donc wp-cli (`docker compose run`,
+      #     sans --user) écrit avec un AUTRE uid.
+      # Sans uploads inscriptible par les DEUX, media_handle_sideload() échoue :
+      # soumission avec photo -> 500 « tuc_onboarding_photo_save » (le contrat
+      # parcours s'arrêtait au cas 60, 0 cas sur 121 exécuté) et le parcours E2E
+      # mobile ne retrouve pas le plat publié. Mesuré en CI :
+      # « Unable to create directory wp-content/uploads/2026/11 ».
+      - name: Rendre wp-content/uploads inscriptible à Apache et à wp-cli
+        shell: bash
+        run: |
+          # 33 = le conteneur wordpress (Apache) ; 82 = www-data dans wp-cli.
+          # Les deux écrivent : 1777 (comme /tmp) sinon l'un des deux échoue.
+          docker compose run --rm --user root --entrypoint sh wpcli -lc '
+            mkdir -p /var/www/html/wp-content/uploads &&
+            chown -R 33:33 /var/www/html/wp-content/uploads &&
+            chmod 1777 /var/www/html/wp-content/uploads &&
+            stat -c "%a %U:%G %n" /var/www/html/wp-content/uploads
+          '
+
+      - name: Vérifier que les deux identités peuvent écrire dans uploads
+        shell: bash
+        run: |
+          for u in "" "--user 33" "--user 82"; do
+            echo "== docker compose run $u =="
+            docker compose run --rm $u --entrypoint sh wpcli -lc 'id -u; touch /var/www/html/wp-content/uploads/.essai-$(id -u) && echo ECRITURE-OK && rm -f /var/www/html/wp-content/uploads/.essai-$(id -u)'
+          done
+
       - name: Exécuter les régressions WordPress/TUC
         shell: bash
         run: |
