@@ -10,6 +10,23 @@ final class TUC_Onboarding_Restaurant
 {
     public const CPT = 'tuc_demande_resto';
     private const MAX_PHOTO_BYTES = 5_242_880;
+
+    /**
+     * PHOTOS iPhone : HEIC/HEIF.
+     *
+     * Mesuré sur l'hébergement AVANT d'écrire ce code, pas déduit de
+     * `queryFormats()` : un vrai fichier HEIC de 718 Ko (« ISO Media, HEIF
+     * Image ») décodé par Imagick 7.1.2-34 en 1280x854, converti en JPEG.
+     * GD ne sait pas lire le HEIC ; Imagick si. Si Imagick disparaît de
+     * l'hébergement, le code retombe sur un refus explicite, jamais sur un
+     * fatal.
+     *
+     * Bornes : 40 MP (au-delà, c'est une bombe de décompression, pas une photo),
+     * 128 Mo de mémoire et de map pour le décodeur, 20 s de calcul.
+     */
+    private const MAX_PIXELS = 40_000_000;
+    private const MAX_COTE_JPEG = 1600;
+    private const QUALITE_JPEG = 85;
     private const PAGE_SLUG = 'devenir-restaurateur';
 
     public static function init(): void
@@ -116,25 +133,246 @@ final class TUC_Onboarding_Restaurant
         <?php return (string) ob_get_clean();
     }
 
-    private static function rate_limit(): bool
+    /**
+     * Convertit un HEIC/HEIF en JPEG, ou rend le chemin d'origine inchangé.
+     *
+     * Rend ['chemin' => …, 'nom' => …, 'temporaire' => …] ou un WP_Error.
+     * `temporaire` vaut '' quand aucun fichier n'a été créé : l'appelant ne doit
+     * supprimer que ce qu'il a créé, jamais le fichier téléversé par PHP.
+     *
+     * Détection par le CONTENU (ftyp…heic/heif/mif1), pas par l'extension : un
+     * fichier renommé .heic qui n'en est pas un repart vers la validation
+     * normale et sera refusé là-bas, comme avant.
+     */
+    private static function convertir_en_jpeg(string $chemin, string $nom): array|WP_Error
+    {
+        $entete = (string) @file_get_contents($chemin, false, null, 0, 32);
+        $estHeif = strpos($entete, 'ftyp') !== false
+            && preg_match('/ftyp(heic|heix|hevc|heim|heis|hevm|hevs|mif1|msf1)/', $entete) === 1;
+
+        if (!$estHeif) {
+            return ['chemin' => $chemin, 'nom' => $nom, 'temporaire' => ''];
+        }
+
+        if (!class_exists('Imagick')) {
+            return new WP_Error(
+                'tuc_onboarding_photo_heic',
+                __('Cette photo est au format HEIC (iPhone), que ce site ne sait pas encore convertir. Sur iPhone : Réglages → Appareil photo → Formats → « Le plus compatible », ou partagez la photo en JPEG.', 'tuc-core'),
+                ['status' => 415]
+            );
+        }
+
+        try {
+            $im = new Imagick();
+            $im->setResourceLimit(Imagick::RESOURCETYPE_MEMORY, 128 * 1024 * 1024);
+            $im->setResourceLimit(Imagick::RESOURCETYPE_MAP, 128 * 1024 * 1024);
+            $im->setResourceLimit(Imagick::RESOURCETYPE_AREA, self::MAX_PIXELS);
+            $im->setResourceLimit(Imagick::RESOURCETYPE_TIME, 20);
+
+            $im->readImage($chemin . '[0]'); // première image seulement
+
+            $geo = $im->getImageGeometry();
+            if ((int) $geo['width'] * (int) $geo['height'] > self::MAX_PIXELS) {
+                $im->clear();
+                return new WP_Error(
+                    'tuc_onboarding_photo_dimensions',
+                    __('Cette photo est trop grande. Envoyez une photo de moins de 40 mégapixels.', 'tuc-core'),
+                    ['status' => 413]
+                );
+            }
+
+            // EXIF traité dans l'ordre : orientation d'abord (sinon une photo prise
+            // en portrait ressort couchée), puis strip — qui efface AUSSI la
+            // position GPS. Une carte de menu n'a aucune raison de porter les
+            // coordonnées du restaurant.
+            $im->setImageColorspace(Imagick::COLORSPACE_SRGB);
+            $im->autoOrient();
+            $im->stripImage();
+            $im->setImageFormat('jpeg');
+            $im->setImageCompressionQuality(self::QUALITE_JPEG);
+            // `thumbnailImage()` AGRANDIT quand la source est plus petite que la
+            // boîte (mesuré : 1200x900 ressortait en 1600x1200 puis 1600x1600
+            // avec `fill`). On ne l'appelle donc QUE pour réduire : une carte de
+            // menu ne doit jamais être agrandie, c'est de la taille de fichier
+            // pour rien et de la qualité perdue.
+            if ((int) $geo['width'] > self::MAX_COTE_JPEG || (int) $geo['height'] > self::MAX_COTE_JPEG) {
+                $im->thumbnailImage(self::MAX_COTE_JPEG, self::MAX_COTE_JPEG, true, false);
+            }
+
+            $temporaire = wp_tempnam('tuc-heic-');
+            if (!is_string($temporaire) || $temporaire === '') {
+                $im->clear();
+                return new WP_Error('tuc_onboarding_photo_heic', __('La conversion de la photo a échoué.', 'tuc-core'), ['status' => 500]);
+            }
+            // PIÈGE MESURÉ : `wp_tempnam()` CRÉE un fichier vide, et `writeImage()`
+            // sur un fichier vide préexistant écrit 0 octet sans lever d'erreur
+            // (vérifié : « writeImage sur fichier vide existant -> OK (0 o) »).
+            // On supprime donc le placeholder avant d'écrire, sinon la conversion
+            // « réussit » en produisant un fichier vide.
+            if (is_file($temporaire)) {
+                @unlink($temporaire);
+            }
+            $im->writeImage($temporaire);
+            $im->clear();
+            $im->destroy();
+
+            if (!is_file($temporaire) || filesize($temporaire) === 0) {
+                @unlink($temporaire);
+                return new WP_Error('tuc_onboarding_photo_heic', __('La conversion de la photo a échoué.', 'tuc-core'), ['status' => 500]);
+            }
+
+            $nomJpeg = (string) preg_replace('/\.[a-z0-9]+$/i', '', $nom) . '.jpg';
+            return ['chemin' => $temporaire, 'nom' => $nomJpeg, 'temporaire' => $temporaire];
+        } catch (Throwable $e) {
+            error_log('TUC onboarding : conversion HEIC échouée — ' . $e->getMessage());
+            return new WP_Error(
+                'tuc_onboarding_photo_heic',
+                __('Cette photo HEIC n’a pas pu être convertie. Essayez une autre photo, ou partagez-la en JPEG depuis votre iPhone.', 'tuc-core'),
+                ['status' => 415]
+            );
+        }
+    }
+
+    /**
+     * DEUX compteurs, pas un.
+     *
+     * POURQUOI. L'ancienne version n'avait qu'un compteur, incrémenté AVANT toute
+     * validation : une photo refusée ou un nom trop court consommait un des trois
+     * crédits horaires, et un restaurateur qui se trompait deux fois était bloqué
+     * une heure avec le message d'un spammeur.
+     *
+     * Ce qui est séparé ici :
+     *   - TENTATIVES : toute requête qui atteint la route, valide ou non. Large,
+     *     anti-abus. Ne donne aucun droit, ne bloque que l'acharnement.
+     *   - DEMANDES   : seulement les soumissions qui ont passé TOUTES les
+     *     validations et créé une demande. Strict.
+     *
+     * CONSÉQUENCE : trois erreurs de saisie ne mangent plus les places des vraies
+     * demandes ; et une erreur ne peut pas non plus servir d'arme (le compteur de
+     * tentatives la borne).
+     *
+     * CE QUI RESTE NON RÉSOLU, ET IL FAUT LE DIRE. La clé est `REMOTE_ADDR`, qui
+     * derrière le CDN Hostinger est l'adresse de sortie du client (mesuré : deux
+     * sources réseau distinctes ont été vues avec deux adresses distinctes). Ce
+     * n'est donc PAS « tout Internet partage une adresse ». Mais des clients
+     * derrière un même NAT partagent la leur, et `REMOTE_ADDR` peut être celle du
+     * proxy si la configuration du CDN change. `X-Forwarded-For` n'est JAMAIS lu
+     * ici : il est falsifiable par le client (mesuré) et aucune liste de proxys de
+     * confiance n'est déclarée sur ce site.
+     */
+
+    /** Tentatives par heure et par adresse. Large : c'est l'anti-abus. */
+    private const MAX_TENTATIVES_PAR_HEURE = 20;
+
+    /** Demandes créées par heure et par adresse. Strict : c'est l'anti-spam. */
+    private const MAX_DEMANDES_PAR_HEURE = 3;
+
+    /**
+     * Lit un compteur à fenêtre fixe. Rend [compte, secondes_restantes].
+     *
+     * @return array{0:int,1:int}
+     */
+    private static function lire_compteur(string $cle): array
+    {
+        $valeur = get_transient($cle);
+        if (!is_array($valeur) || !isset($valeur['n'], $valeur['fin'])) {
+            return [0, 0];
+        }
+        $restant = (int) $valeur['fin'] - time();
+        if ($restant <= 0) {
+            delete_transient($cle);
+            return [0, 0];
+        }
+        return [(int) $valeur['n'], $restant];
+    }
+
+    /** Incrémente un compteur à fenêtre fixe (la fenêtre ne glisse pas). */
+    private static function incrementer_compteur(string $cle): void
+    {
+        [$n, $restant] = self::lire_compteur($cle);
+        if ($restant <= 0) {
+            $restant = HOUR_IN_SECONDS;
+        }
+        set_transient($cle, ['n' => $n + 1, 'fin' => time() + $restant], $restant);
+    }
+
+    /** Clé de limitation : l'adresse vue par le serveur, jamais un en-tête client. */
+    private static function cle_limitation(string $prefixe): ?string
     {
         $ip = filter_var((string) ($_SERVER['REMOTE_ADDR'] ?? ''), FILTER_VALIDATE_IP);
         if ($ip === false) {
-            return true;
+            return null;
         }
-        $key = 'tuc_restaurant_application_' . md5($ip);
-        $count = (int) get_transient($key);
-        if ($count >= 3) {
-            return false;
+        return 'tuc_' . $prefixe . '_' . md5((string) $ip);
+    }
+
+    /**
+     * Barrière d'entrée : compte TOUTE tentative. Rend un WP_Error avec le délai
+     * restant quand la limite est atteinte, null sinon.
+     */
+    private static function limiter_tentative(): ?WP_Error
+    {
+        $cle = self::cle_limitation('tentatives');
+        if ($cle === null) {
+            return null; // pas d'adresse exploitable : on ne bloque pas au hasard
         }
-        set_transient($key, $count + 1, HOUR_IN_SECONDS);
-        return true;
+        [$n, $restant] = self::lire_compteur($cle);
+        if ($n >= self::MAX_TENTATIVES_PAR_HEURE) {
+            return new WP_Error(
+                'tuc_onboarding_rate',
+                self::message_limite($restant),
+                ['status' => 429, 'retry_after' => $restant]
+            );
+        }
+        self::incrementer_compteur($cle);
+        return null;
+    }
+
+    /**
+     * Barrière des demandes créées. À appeler UNIQUEMENT quand tout le reste a
+     * validé : une erreur de saisie ne doit jamais consommer ce quota.
+     */
+    private static function reserver_demande(): ?WP_Error
+    {
+        $cle = self::cle_limitation('demandes');
+        if ($cle === null) {
+            return null;
+        }
+        [$n, $restant] = self::lire_compteur($cle);
+        if ($n >= self::MAX_DEMANDES_PAR_HEURE) {
+            return new WP_Error(
+                'tuc_onboarding_quota',
+                self::message_limite($restant),
+                ['status' => 429, 'retry_after' => $restant]
+            );
+        }
+        self::incrementer_compteur($cle);
+        return null;
+    }
+
+    /** Message avec un délai lisible : « dans 42 minutes », pas « plus tard ». */
+    private static function message_limite(int $secondes): string
+    {
+        if ($secondes <= 0) {
+            return __('Trop de demandes depuis cet appareil. Réessayez dans un instant.', 'tuc-core');
+        }
+        if ($secondes < 120) {
+            return sprintf(
+                __('Trop de demandes depuis cet appareil. Réessayez dans %d seconde(s).', 'tuc-core'),
+                $secondes
+            );
+        }
+        return sprintf(
+            __('Trop de demandes depuis cet appareil. Réessayez dans %d minutes.', 'tuc-core'),
+            (int) ceil($secondes / 60)
+        );
     }
 
     public static function soumettre(WP_REST_Request $request): WP_REST_Response|WP_Error
     {
-        if (!self::rate_limit()) {
-            return new WP_Error('tuc_onboarding_rate', 'Trop de demandes depuis cet appareil. Réessayez plus tard.', ['status' => 429]);
+        $limite = self::limiter_tentative();
+        if ($limite instanceof WP_Error) {
+            return $limite;
         }
         $waNumber = preg_replace('/[^0-9]/', '', (string) get_option('tuc_wa_numero', ''));
         if ($waNumber === '') {
@@ -157,12 +395,47 @@ final class TUC_Onboarding_Restaurant
         if ((int) ($photo['size'] ?? 0) <= 0 || (int) $photo['size'] > self::MAX_PHOTO_BYTES) {
             return new WP_Error('tuc_onboarding_photo_size', 'La photo doit faire 5 Mo maximum.', ['status' => 413]);
         }
-        $allowed = ['jpg|jpeg|jpe' => 'image/jpeg', 'png' => 'image/png', 'webp' => 'image/webp'];
-        $fileType = wp_check_filetype_and_ext((string) $photo['tmp_name'], (string) ($photo['name'] ?? ''), $allowed);
-        $imageInfo = @getimagesize((string) $photo['tmp_name']);
-        if (empty($fileType['type']) || !in_array($fileType['type'], array_values($allowed), true)
-            || !is_array($imageInfo) || !in_array((string) ($imageInfo['mime'] ?? ''), array_values($allowed), true)) {
-            return new WP_Error('tuc_onboarding_photo_type', 'Formats acceptés : JPEG, PNG ou WebP.', ['status' => 415]);
+        // ① Conversion éventuelle d'un HEIC/HEIF en JPEG, AVANT toute autre
+        //    vérification de type : après elle, il n'existe plus qu'un JPEG.
+        $converti = self::convertir_en_jpeg((string) $photo['tmp_name'], (string) ($photo['name'] ?? ''));
+        if (is_wp_error($converti)) {
+            return $converti;
+        }
+        $cheminPhoto = $converti['chemin'];
+        $photo['name'] = $converti['nom'];
+        $photo['size'] = (int) filesize($cheminPhoto);
+        $photo['type'] = 'image/jpeg';
+        $temporaireCree = (string) $converti['temporaire'];
+
+        // INDISPENSABLE, et je l'avais oublié : `media_handle_sideload()` lit
+        // `tmp_name`, pas `$cheminPhoto`. Sans cette ligne, le fichier stocké
+        // reste l'original — un .heic atterrissait dans les uploads alors que
+        // toute la validation avait porté sur le JPEG converti. Constaté dans un
+        // bac à sable : `iphone.heic` présent à côté de `iphone.jpg`.
+        $photo['tmp_name'] = $cheminPhoto;
+
+        try {
+            $allowed = ['jpg|jpeg|jpe' => 'image/jpeg', 'png' => 'image/png', 'webp' => 'image/webp'];
+            $fileType = wp_check_filetype_and_ext($cheminPhoto, (string) $photo['name'], $allowed);
+            $imageInfo = @getimagesize($cheminPhoto);
+            if (empty($fileType['type']) || !in_array($fileType['type'], array_values($allowed), true)
+                || !is_array($imageInfo) || !in_array((string) ($imageInfo['mime'] ?? ''), array_values($allowed), true)) {
+                return new WP_Error(
+                    'tuc_onboarding_photo_type',
+                    __('Cette photo n’est pas reconnue comme une image. Envoyez une photo JPEG, PNG, WebP, ou une photo d’iPhone (HEIC).', 'tuc-core'),
+                    ['status' => 415]
+                );
+            }
+            if ((int) $photo['size'] > self::MAX_PHOTO_BYTES) {
+                return new WP_Error('tuc_onboarding_photo_size', 'La photo doit faire 5 Mo maximum.', ['status' => 413]);
+            }
+
+
+        // Dernière barrière, et seulement ici : tout ce qui précède a validé,
+        // donc une erreur de saisie n'a jamais consommé ce quota.
+        $quota = self::reserver_demande();
+        if ($quota instanceof WP_Error) {
+            return $quota;
         }
 
         $applicationId = wp_insert_post([
@@ -181,7 +454,19 @@ final class TUC_Onboarding_Restaurant
         $attachmentId = media_handle_sideload($photo, (int) $applicationId, 'Photo du menu — ' . $name);
         if (is_wp_error($attachmentId)) {
             wp_delete_post((int) $applicationId, true);
-            return new WP_Error('tuc_onboarding_photo_save', 'La photo n’a pas pu être enregistrée. Réessayez avec une image JPEG, PNG ou WebP.', ['status' => 500]);
+            return new WP_Error(
+                'tuc_onboarding_photo_save',
+                __('La photo n’a pas pu être enregistrée. Réessayez avec une photo JPEG, PNG ou WebP.', 'tuc-core'),
+                ['status' => 500]
+            );
+        }
+        } finally {
+            // Le JPEG issu de la conversion n'a plus d'utilité une fois la pièce
+            // jointe créée : le fichier de WordPress est une copie. On ne laisse
+            // donc aucun temporaire derrière nous, même en cas d'erreur.
+            if ($temporaireCree !== '' && is_file($temporaireCree)) {
+                @unlink($temporaireCree);
+            }
         }
         update_post_meta((int) $applicationId, 'tuc_onboarding_menu_photo', (int) $attachmentId);
         update_post_meta((int) $applicationId, 'tuc_onboarding_state', 'pending');
