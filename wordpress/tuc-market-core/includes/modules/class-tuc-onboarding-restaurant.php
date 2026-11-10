@@ -517,10 +517,20 @@ final class TUC_Onboarding_Restaurant
         $etat = self::tenter_ecrire_compteur($cle, $compte, $fin, $attendu, $generation, $annuler);
         if ($etat === 'conflit') {
             // Contrat (cas 44) : une écriture refusée par la base rend false,
-            // et l'appelant décide. La panne reste mémorisée pour que la
-            // réservation, plus haut, sache qu'il s'agit d'une vraie panne.
-            self::$refusParPanne = true;
-            self::$causeRefus = 'sql';
+            // et l'appelant rejoue la section critique.
+            //
+            // DÉFAUT MESURÉ le 2026-11-10 (CI, run sur 660aa2c) : cette branche
+            // posait `$refusParPanne = true`, donc un DEADLOCK — conflit
+            // transitoire par excellence, que la base invite elle-même à
+            // rejouer — remontait en 503 `tuc_onboarding_storage`. 23 refus
+            // 503 sur 96 réservations d'IP distinctes, 27 sur 144 en rafale,
+            // alors qu'AUCUNE unité de quota n'était consommée à tort.
+            // Un conflit transitoire n'est pas une panne : il doit inviter à
+            // réessayer (`tuc_onboarding_occupe`), jamais annoncer une
+            // indisponibilité. Invariant rappelé par le donneur d'ordre depuis
+            // la revue n°5, et violé ici.
+            self::$refusParPanne = false;
+            self::$causeRefus = 'conflits';
             return false;
         }
         if ($etat === null) {
@@ -1074,7 +1084,35 @@ final class TUC_Onboarding_Restaurant
                     self::$causeRefus = 'conflits';
                 }
                 if ($etat === null) {
-                    self::$refusParPanne = self::$causeRefus !== 'conflits';
+                    // Deux lectures du même `null`, et une seule juste :
+                    //   - « conflits » : les reprises sur le compteur sont
+                    //     épuisées -> file d'attente, l'appelant rejoue ;
+                    //   - « generation » : le numéro d'identité n'a pas pu être
+                    //     alloué. Mesuré en bac le 2026-11-10 (2 passes de 96 IP
+                    //     distinctes) : 205 échecs de génération, TOUS sur le
+                    //     motif « transaction morte » (deadlock sur la ligne du
+                    //     compteur global), 0 sur un motif de droits, de table ou
+                    //     de disque. C'est donc un conflit de concurrence
+                    //     transitoire, pas une panne du stockage — `sous_verrou`
+                    //     rejoue déjà la section entière grâce à
+                    //     `$transactionPerdue`. Le rendre en 503
+                    //     `tuc_onboarding_storage` violait l'invariant « pas de
+                    //     503 pour un conflit transitoire » et faisait perdre la
+                    //     réservation (95/96 mesuré, CI et bac).
+                    // Le refus reste un REFUS : rien n'est écrit, aucune unité
+                    // de quota consommée, aucun identitaire inventé (revue n°7 :
+                    // pas de repli horodaté). Seule la CLASSIFICATION change —
+                    // réessayable, et non « service indisponible ».
+                    // Le déclassement en « réessayable » est BORNE à la cause
+                    // réellement mesurée : la transaction était MORTE au moment de
+                    // l'allocation (`$transactionPerdue`, remis à false à chaque
+                    // section par `sous_verrou`, donc jamais hérité d'une passe
+                    // précédente). Un échec d'allocation sur une panne SQL vraie
+                    // (table absente, droits — le cas 118 du contrat figé) reste
+                    // un 503 `tuc_onboarding_storage` : on ne déguise pas une
+                    // panne en file d'attente.
+                    self::$refusParPanne = self::$causeRefus !== 'conflits'
+                        && !(self::$causeRefus === 'generation' && self::$transactionPerdue);
                 }
                 return $etat;
             }
