@@ -45,6 +45,16 @@ echo "  install apt      : $APT_INSTALL"
 
 if [ "$APT_INSTALL" = "1" ]; then
     echo "=== Installation du décodeur (image nue) ==="
+    # Mesuré sur le run 43060893203 : exécuté dans `wpcli` (Alpine), le script
+    # ne trouvait ni `apt-get` ni un `mktemp` GNU, et la cascade de notes
+    # masquait la vraie cause. Ce script exige donc un conteneur Debian ; s'il
+    # tombe ailleurs, il ROUGIT en le disant, sans SIMULER une absence de
+    # décodeur. Le poste de travail visé (et l'étape CI) fournit donc
+    # `wordpress:php8.2-apache`, qui est Debian.
+    if ! command -v apt-get >/dev/null 2>&1; then
+        echec "apt-get absent : ce conteneur n'est pas Debian (image attendue : wordpress:php8.2-apache, pas wordpress:cli)"
+        exit 1
+    fi
     export DEBIAN_FRONTEND=noninteractive
     apt-get update -qq || echec "apt-get update a échoué"
     apt-get install -y -qq --no-install-recommends libheif1 libde265-0 libaom3 \
@@ -94,6 +104,11 @@ if [ "$APT_INSTALL" = "1" ]; then
     fi
 fi
 
+# mktemp de BusyBox rejette un suffixe apres le gabarit (« mktemp: : Invalid argument »,
+# mesure sur le run 43060893203) : on cree un repertoire, et les fichiers prennent
+# leur extension par rename.
+TUC_TMP="$(mktemp -d)"; trap 'rm -rf "$TUC_TMP"' EXIT
+
 echo "=== 1/3  conversion réelle exigée (décodeur absent = rouge, échec de conversion = rouge) ==="
 if "$PHP_BIN" "$TEST" "$WP_ROOT" "$FIXTURE"; then
     ok "un vrai HEIC est converti en JPEG par le module"
@@ -102,24 +117,22 @@ else
 fi
 
 echo "=== 2/3  contrôle négatif : un HEIC tronqué ne doit PAS passer pour converti ==="
-TRONQUE="$(mktemp /tmp/heic-tronque-XXXXXX.heic)"
+TRONQUE="$TUC_TMP/heic-tronque.heic"
 head -c 1200 "$FIXTURE" > "$TRONQUE"
 if "$PHP_BIN" "$TEST" "$WP_ROOT" "$TRONQUE"; then
     echec "un HEIC tronqué a été accepté comme converti : le test ne distingue plus succès et déchets"
 else
     ok "HEIC tronqué refusé (rouge obtenu, et c'est voulu)"
 fi
-rm -f "$TRONQUE"
 
 echo "=== 3/3  contrôle négatif : un fichier illisible portant le nom .heic ==="
-FAUX="$(mktemp /tmp/pas-un-heic-XXXXXX.heic)"
+FAUX="$TUC_TMP/pas-un-heic.heic"
 printf 'ceci ne contient aucune image\n' > "$FAUX"
 if "$PHP_BIN" "$TEST" "$WP_ROOT" "$FAUX"; then
     echec "un fichier sans image a été accepté comme converti"
 else
     ok "fichier illisible refusé (rouge obtenu, et c'est voulu)"
 fi
-rm -f "$FAUX"
 
 echo
 if [ "$KO" -eq 0 ]; then
