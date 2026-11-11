@@ -135,10 +135,17 @@ jobs:
           DB_PASSWORD="$(openssl rand -hex 24)"
           DB_ROOT_PASSWORD="$(openssl rand -hex 24)"
           TUC_WA_SECRET="$(openssl rand -hex 32)"
+          # Le test de rejeu (tests/n8n/rejeu-livraison-retardee.php) exige DEUX
+          # secrets de 32 caracteres et plus : TUC_WA_SECRET (signature du hook) et
+          # TUC_WA_REJEU_POLL_SECRET (son propre droit de polling). Mesure du run
+          # 43063990237 : le second n'etait pas dans .env, donc vide, et le test
+          # refusait de conclure (« Les secrets éphémères doivent faire au moins 32
+          # caractères. ») — il avait raison de refuser, pas de deviner.
+          TUC_WA_REJEU_POLL_SECRET="$(openssl rand -hex 32)"
           TUC_N8N_INBOUND_SECRET="$(openssl rand -hex 32)"
           TUC_N8N_POLL_SECRET="$(openssl rand -hex 32)"
           N8N_ENCRYPTION_KEY="$(openssl rand -hex 32)"
-          for secret in "$DB_PASSWORD" "$DB_ROOT_PASSWORD" "$TUC_WA_SECRET" "$TUC_N8N_INBOUND_SECRET" "$TUC_N8N_POLL_SECRET" "$N8N_ENCRYPTION_KEY"; do
+          for secret in "$DB_PASSWORD" "$DB_ROOT_PASSWORD" "$TUC_WA_SECRET" "$TUC_N8N_INBOUND_SECRET" "$TUC_N8N_POLL_SECRET" "$TUC_WA_REJEU_POLL_SECRET" "$N8N_ENCRYPTION_KEY"; do
             echo "::add-mask::$secret"
           done
           {
@@ -153,6 +160,7 @@ jobs:
             printf 'TUC_DB_PASSWORD=%s\n' "$DB_PASSWORD"
             printf 'TUC_DB_ROOT_PASSWORD=%s\n' "$DB_ROOT_PASSWORD"
             printf 'TUC_WA_SECRET=%s\n' "$TUC_WA_SECRET"
+            printf 'TUC_WA_REJEU_POLL_SECRET=%s\n' "$TUC_WA_REJEU_POLL_SECRET"
             printf 'TUC_N8N_INBOUND_SECRET=%s\n' "$TUC_N8N_INBOUND_SECRET"
             printf 'TUC_N8N_POLL_SECRET=%s\n' "$TUC_N8N_POLL_SECRET"
             printf 'N8N_ENCRYPTION_KEY=%s\n' "$N8N_ENCRYPTION_KEY"
