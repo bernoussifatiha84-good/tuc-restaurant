@@ -24,7 +24,13 @@ jobs:
   wordpress-docker:
     name: Installer et vérifier WordPress/TUC
     runs-on: ubuntu-24.04
-    timeout-minutes: 15
+    # 15 minutes ne suffisaient plus des que Chromium doit etre re-telecharge :
+    # au run 43060893203 (69f7dc1 -> 350abea) le job a ete ANNULE a 16:57,
+    # 15 min apres son depart, l'etape 24 (Installation Chromium) en ayant
+    # consomme 13,5 — les etapes 27 a 41 n'ont donc pas pu s'executer. Le budget
+    # est porte a 30 min, et l'etape Chromium est bornee ci-dessous pour ne plus
+    # dependre de ce budget.
+    timeout-minutes: 30
     steps:
       - name: Récupérer le dépôt
         uses: actions/checkout@v5
@@ -297,8 +303,14 @@ jobs:
           # l'installation sans `--with-deps` — acceptée seulement si les deux preuves passent.
           # La liste de paquets demandée à Playwright n'est jamais éditée à la main.
           PW_BIN="$RUNNER_TEMP/tuc-playwright/node_modules/.bin/playwright"
+          # Le log du run 355 mesure 13 min 28 s pour cette seule etape : apt
+          # rejoue longuement contre un miroir qui ne repond pas. On lui impose
+          # une tentative courte — c'est le repli qui doit decider, pas le
+          # temporisateur du job. Ces options ne changent AUCUNE liste de
+          # paquets, seulement le nombre d'essais et leur delai.
+          printf 'Acquire::Retries "1";\nAcquire::http::Timeout "10";\n' | sudo tee /etc/apt/apt.conf.d/99tuc-ci-rapide >/dev/null
           status=1; output=""
-          if output="$("$PW_BIN" install --with-deps chromium 2>&1)"; then status=0; fi
+          if output="$(timeout 420 "$PW_BIN" install --with-deps chromium 2>&1)"; then status=0; fi
           if [ "$status" -ne 0 ]; then
             echo "::notice title=Chromium deps::miroir du runner en défaut — correction de la liste apt puis réessai"
             if [ -f /etc/apt/apt-mirrors.txt ]; then
@@ -310,16 +322,16 @@ jobs:
                             -e 's#https\?://azure\.archive\.ubuntu\.com/ubuntu#http://archive.ubuntu.com/ubuntu#g' "$f"
               fi
             done
-            sudo apt-get -o Acquire::Retries=5 -o Acquire::http::Timeout=30 update || true
+            timeout 240 sudo apt-get -o Acquire::Retries=1 -o Acquire::http::Timeout=10 update || true
             # polices : meilleur effort seul (elles ne portent aucune assertion)
-            if ! sudo apt-get install -y --fix-missing fonts-unifont fonts-freefont-ttf xfonts-scalable xfonts-encodings xfonts-utils xfonts-cyrillic >/dev/null 2>&1; then
+            if ! timeout 300 sudo apt-get install -y --fix-missing fonts-unifont fonts-freefont-ttf xfonts-scalable xfonts-encodings xfonts-utils xfonts-cyrillic >/dev/null 2>&1; then
               echo "polices optionnelles non récupérées — sans effet sur les assertions, la preuve ci-dessous tranche"
             fi
-            if output="$("$PW_BIN" install --with-deps chromium 2>&1)"; then status=0; fi
+            if output="$(timeout 420 "$PW_BIN" install --with-deps chromium 2>&1)"; then status=0; fi
           fi
           if [ "$status" -ne 0 ]; then
             echo "::notice title=Chromium deps::apt toujours indisponible — installation sans --with-deps, la preuve décidera"
-            if output="$("$PW_BIN" install chromium 2>&1)"; then
+            if output="$(timeout 600 "$PW_BIN" install chromium 2>&1)"; then
               status=0; SANS_DEPS=1
             else
               printf '%s\n' "$output" | tail -n 20
@@ -805,8 +817,19 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          docker compose run --rm --user root --entrypoint sh wpcli -lc \
-            'TUC_APT_INSTALL=1 bash /opt/tuc-tests/ci-heic-decodeur.sh'
+          # Mesure du run 43060893203 : lance dans `wpcli`, le script echouait
+          # sur « /opt/tuc-tests/ci-heic-decodeur.sh: line 49: apt-get: command
+          # not found » — l'image `wordpress:cli-php8.2` est Alpine. Le binaire
+          # PHP de cette image ne peut pas charger le paquet distribue Debian,
+          # et le `mktemp` de BusyBox refuse un gabarit a suffixe. Le controle
+          # est donc deplace dans `wordpress` (`wordpress:php8.2-apache`,
+          # Debian : apt + coreutils + le PHP qui sert vraiment le site), qui
+          # monte le meme volume que wpcli. Le montage /opt/tuc-tests n'existant
+          # que dans wpcli, les tests sont copies dans le conteneur qui les
+          # execute.
+          docker compose cp tests wordpress:/opt/tuc-tests
+          docker compose exec --no-TTY --user root wordpress bash -c \
+            'TUC_APT_INSTALL=1 TUC_TESTS_DIR=/opt/tuc-tests bash /opt/tuc-tests/ci-heic-decodeur.sh'
 
       - name: Publier le debug.log WordPress (utile seulement en cas de rouge)
         if: failure()
