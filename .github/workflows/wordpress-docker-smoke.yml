@@ -277,14 +277,97 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          if output="$("$RUNNER_TEMP/tuc-playwright/node_modules/.bin/playwright" install --with-deps chromium 2>&1)"; then
-            printf '%s\n' "$output"
+          # Ce que le log du run 43038764354 (4 tentatives, 14:40:08Z → 16:05:41Z) montre
+          # vraiment, et qui change le remède :
+          #  • le runner passe par « Get:1 file:/etc/apt/apt-mirrors.txt Mirrorlist »,
+          #    c.-à-d. `mirror+file:` — tant que cette liste pointe `azure.archive.ubuntu.com`,
+          #    chaque hôte échoue en cascade et apt attribue la panne au premier nom
+          #    (« Temporary failure resolving 'azure.archive.ubuntu.com' » même sur les URL
+          #    `security.ubuntu.com`) ;
+          #  • `https://packages.microsoft.com/...` a été téléchargé sans peine (764 kB) :
+          #    le résolveur n'est pas mort, c'est la liste de miroirs ;
+          #  • TOUTES les bibliothèques d'exécution de Chromium sont déjà installées
+          #    (`libnss3`, `libgbm1`, `libasound2t64`, `libatk-bridge2.0-0t64`, `xvfb`,
+          #    `fonts-liberation`, `fonts-noto-color-emoji`… « is already the newest
+          #    version »). Seuls 9 paquets de POLICES restaient à télécharger (fonts-unifont,
+          #    xfonts-*, polices CJK/thaï) — et aucun test de ce dépôt ne compare des pixels
+          #    (`grep -rl` sur les motifs de capture à comparer dans tests/ = 0 fichier) :
+          #    une capture d'écran n'y est qu'un artefact publié, jamais une assertion.
+          # D'où, dans l'ordre : une tentative normale, un VRAI correctif de miroir, puis
+          # l'installation sans `--with-deps` — acceptée seulement si les deux preuves passent.
+          # La liste de paquets demandée à Playwright n'est jamais éditée à la main.
+          PW_BIN="$RUNNER_TEMP/tuc-playwright/node_modules/.bin/playwright"
+          status=1; output=""
+          if output="$("$PW_BIN" install --with-deps chromium 2>&1)"; then status=0; fi
+          if [ "$status" -ne 0 ]; then
+            echo "::notice title=Chromium deps::miroir du runner en défaut — correction de la liste apt puis réessai"
+            if [ -f /etc/apt/apt-mirrors.txt ]; then
+              printf 'http://archive.ubuntu.com/ubuntu/\nhttp://security.ubuntu.com/ubuntu/\n' | sudo tee /etc/apt/apt-mirrors.txt >/dev/null
+            fi
+            for f in /etc/apt/sources.list.d/ubuntu.sources /etc/apt/sources.list; do
+              if [ -f "$f" ]; then
+                sudo sed -i -e 's#mirror+file:/etc/apt/apt-mirrors\.txt#http://archive.ubuntu.com/ubuntu#g' \
+                            -e 's#https\?://azure\.archive\.ubuntu\.com/ubuntu#http://archive.ubuntu.com/ubuntu#g' "$f"
+              fi
+            done
+            sudo apt-get -o Acquire::Retries=5 -o Acquire::http::Timeout=30 update || true
+            # polices : meilleur effort seul (elles ne portent aucune assertion)
+            if ! sudo apt-get install -y --fix-missing fonts-unifont fonts-freefont-ttf xfonts-scalable xfonts-encodings xfonts-utils xfonts-cyrillic >/dev/null 2>&1; then
+              echo "polices optionnelles non récupérées — sans effet sur les assertions, la preuve ci-dessous tranche"
+            fi
+            if output="$("$PW_BIN" install --with-deps chromium 2>&1)"; then status=0; fi
+          fi
+          if [ "$status" -ne 0 ]; then
+            echo "::notice title=Chromium deps::apt toujours indisponible — installation sans --with-deps, la preuve décidera"
+            if output="$("$PW_BIN" install chromium 2>&1)"; then
+              status=0; SANS_DEPS=1
+            else
+              printf '%s\n' "$output" | tail -n 20
+            fi
+          fi
+          # PREUVE 1 — les dépendances système sont réellement présentes : `ldd` sur le
+          # binaire, aucune bibliothèque non résolue, quel que soit le chemin suivi.
+          CHROME="$(find "$HOME/.cache/ms-playwright" -maxdepth 4 -type f \( -name chrome -o -name headless_shell \) 2>/dev/null | head -1)"
+          deps_ok=1
+          if [ -n "$CHROME" ]; then
+            if ldd_out="$(ldd "$CHROME" 2>&1)"; then
+              manquantes="$(printf '%s\n' "$ldd_out" | awk '/not found/ {print $1}' | sort -u | tr '\n' ' ')"
+              n_res="$(printf '%s\n' "$ldd_out" | grep -c '=> /')"
+              if [ -n "$manquantes" ]; then
+                echo "DEPENDANCES_MANQUANTES : $manquantes"; deps_ok=0
+              elif [ "$n_res" -lt 10 ]; then
+                echo "DEPENDANCES_SUSPECTES : $n_res bibliothèque(s) résolue(s) sur $(basename "$CHROME")"; deps_ok=0
+              else
+                echo "binaire navigateur : $(basename "$CHROME") — ldd sans bibliothèque manquante ($n_res résolues)${SANS_DEPS:+, installé sans --with-deps}"
+              fi
+            else
+              echo "ldd refusé sur $(basename "$CHROME") : $(printf '%s\n' "$ldd_out" | head -n 1)"; deps_ok=0
+            fi
           else
-            status=$?
-            printf '%s\n' "$output"
+            echo "DEPENDANCES_MANQUANTES : aucun binaire Chromium sous ~/.cache/ms-playwright"; deps_ok=0
+          fi
+          # PREUVE 2 — le navigateur s'exécute pour de vrai, tout de suite : un doute sur
+          # les dépendances rougit ICI, pas huit étapes plus bas.
+          if [ "$status" -eq 0 ] && [ "$deps_ok" -eq 1 ]; then
+            if ! sortie_navig="$(PW_ROOT="$RUNNER_TEMP/tuc-playwright" node -e '
+              const { chromium } = require(process.env.PW_ROOT + "/node_modules/playwright");
+              (async () => {
+                const b = await chromium.launch({ args: ["--no-sandbox"] });
+                const p = await b.newPage();
+                await p.setContent("<title>tuc</title><h1>navigateur pret</h1>");
+                console.log("titre=" + (await p.title()) + " h1=" + (await p.textContent("h1")));
+                await b.close();
+              })().catch((e) => { console.error("ECHEC_NAVIGATEUR : " + e.message); process.exit(1); });
+            ' 2>&1)"; then
+              printf '%s\n' "$sortie_navig"; status=1
+            else
+              printf 'navigateur : %s\n' "$sortie_navig"
+            fi
+          fi
+          if [ "$status" -ne 0 ] || [ "$deps_ok" -ne 1 ]; then
             excerpt="$(printf '%s\n' "$output" | tail -c 1200 | tr '\n' ' ' | sed 's/%/%25/g; s/\r/%0D/g')"
             echo "::error title=Chromium install failed::$excerpt"
-            exit "$status"
+            exit 1
           fi
 
       - name: Vérifier le contrat sonore et les notifications push
@@ -456,6 +539,28 @@ jobs:
             exit "$status"
           fi
 
+      - name: Tester le rejeu d'une livraison WhatsApp retardée (n8n, sans envoi réel)
+        shell: bash
+        run: |
+          set -euo pipefail
+          set -a
+          source .env
+          set +a
+          # setup puis verify dans le MÊME conteneur : le contrat passe par le
+          # cache d'objets, deux `run --rm` séparés perdraient le transient posé
+          # au setup (mesuré en bac local : le drop-in de cache rend un transient
+          # invisible au processus CLI suivant). En CI, mysql est le backend.
+          if ! output="$(docker compose run --rm \
+              -e TUC_WA_REJEU_PAS=setup -e TUC_WA_REJEU_MONO_PASSE=1 \
+              -e TUC_WA_SECRET -e TUC_WA_REJEU_POLL_SECRET \
+              --entrypoint wp wpcli eval-file /opt/tuc-tests/n8n/rejeu-livraison-retardee.php 2>&1)"; then
+            printf '%s\n' "$output"
+            excerpt="$(printf '%s\n' "$output" | tail -c 1400 | tr '\n' ' ' | sed 's/%/%25/g; s/\r/%0D/g')"
+            echo "::error title=WhatsApp delayed-delivery replay test failed::$excerpt"
+            exit 1
+          fi
+          printf '%s\n' "$output"
+
       - name: Vérifier les dix scénarios de commande client et restaurant
         shell: bash
         env:
@@ -616,6 +721,100 @@ jobs:
         run: |
           docker compose down --volumes --remove-orphans || true
           rm -f .env
+
+  # ===========================================================================
+  # HEIC — conversion RÉELLE avec un décodeur réellement présent (revue n°18,
+  # point 4). Job SÉPARÉ parce que `wordpress:cli-php8.2` n'embarque pas de
+  # décodeur HEIC : mesuré dans le run 42926883487, `Imagick::queryFormats
+  # ('HEIC')` y est vide (« décodeur HEIC : non », trois fois dans le log).
+  # Le job principal continue donc de prouver l'AUTRE moitié de l'exigence :
+  # sans décodeur, la conversion est refusée proprement et le log le dit.
+  # Règles de ce job : décodeur absent => ROUGE ; décodeur présent et conversion
+  # en échec => ROUGE ; conversion réussie => VERT. Aucun continue-on-error,
+  # aucun skip, aucun repli. La logique est dans tests/ci-heic-decodeur.sh
+  # (monté en /opt/tuc-tests) : rien à lire ici, rien à revalider à chaque
+  # retouche, et la partie « contrôles négatifs » est rejouable hors CI.
+  # ===========================================================================
+  heic-decodeur:
+    name: HEIC — conversion réelle (décodeur présent, obligatoire)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - name: Récupérer le dépôt
+        uses: actions/checkout@v5
+
+      # Mêmes variables que le job principal : compose.yaml exige TUC_N8N_* et
+      # N8N_ENCRYPTION_KEY même sans démarrer n8n (l'évaluation porte sur tous
+      # les services du fichier).
+      - name: Créer des identifiants éphémères pour la base locale au runner
+        shell: bash
+        run: |
+          set -euo pipefail
+          DB_PASSWORD="$(openssl rand -hex 24)"
+          DB_ROOT_PASSWORD="$(openssl rand -hex 24)"
+          TUC_WA_SECRET="$(openssl rand -hex 32)"
+          TUC_N8N_INBOUND_SECRET="$(openssl rand -hex 32)"
+          TUC_N8N_POLL_SECRET="$(openssl rand -hex 32)"
+          N8N_ENCRYPTION_KEY="$(openssl rand -hex 32)"
+          for secret in "$DB_PASSWORD" "$DB_ROOT_PASSWORD" "$TUC_WA_SECRET" "$TUC_N8N_INBOUND_SECRET" "$TUC_N8N_POLL_SECRET" "$N8N_ENCRYPTION_KEY"; do
+            echo "::add-mask::$secret"
+          done
+          {
+            printf 'TUC_WP_IMAGE=wordpress:php8.2-apache\n'
+            printf 'TUC_WP_CLI_IMAGE=wordpress:cli-php8.2\n'
+            printf 'TUC_DB_IMAGE=mariadb:10.11\n'
+            printf 'TUC_N8N_IMAGE=n8nio/n8n:2.46.6\n'
+            printf 'TUC_WP_PORT=8080\n'
+            printf 'TUC_N8N_PORT=5678\n'
+            printf 'TUC_DB_NAME=tuc_heic\n'
+            printf 'TUC_DB_USER=tuc_heic\n'
+            printf 'TUC_DB_PASSWORD=%s\n' "$DB_PASSWORD"
+            printf 'TUC_DB_ROOT_PASSWORD=%s\n' "$DB_ROOT_PASSWORD"
+            printf 'TUC_WA_SECRET=%s\n' "$TUC_WA_SECRET"
+            printf 'TUC_N8N_INBOUND_SECRET=%s\n' "$TUC_N8N_INBOUND_SECRET"
+            printf 'TUC_N8N_POLL_SECRET=%s\n' "$TUC_N8N_POLL_SECRET"
+            printf 'N8N_ENCRYPTION_KEY=%s\n' "$N8N_ENCRYPTION_KEY"
+          } > .env
+
+      - name: Valider la configuration Compose
+        run: docker compose config --quiet
+
+      - name: Démarrer WordPress et MariaDB
+        run: docker compose up --detach --wait --wait-timeout 180 wordpress
+
+      - name: Installer WordPress et activer le plugin TUC
+        shell: bash
+        run: |
+          set -euo pipefail
+          WP_ADMIN_PASSWORD="$(openssl rand -hex 24)"
+          echo "::add-mask::$WP_ADMIN_PASSWORD"
+          docker compose run --rm --entrypoint wp wpcli core install \
+            --url='http://127.0.0.1:8080' \
+            --title='TUC HEIC - job a decodeur' \
+            --admin_user='tuc-heic-admin' \
+            --admin_password="$WP_ADMIN_PASSWORD" \
+            --admin_email='tuc-heic@example.invalid' \
+            --skip-email
+          docker compose run --rm --entrypoint wp wpcli plugin activate tuc-market-core
+          docker compose run --rm --entrypoint wp wpcli plugin is-active tuc-market-core
+
+      # UNE seule invocation `docker compose run` : `--rm` détruit le conteneur,
+      # donc installer dans une étape et tester dans la suivante testerait une
+      # image qui n'a rien reçu.
+      - name: Installer un VRAI décodeur HEIC et exiger la conversion
+        shell: bash
+        run: |
+          set -euo pipefail
+          docker compose run --rm --user root --entrypoint sh wpcli -lc \
+            'TUC_APT_INSTALL=1 bash /opt/tuc-tests/ci-heic-decodeur.sh'
+
+      - name: Publier le debug.log WordPress (utile seulement en cas de rouge)
+        if: failure()
+        shell: bash
+        run: |
+          set -uo pipefail
+          docker compose run --rm --user root --entrypoint sh wpcli -lc \
+            'tail -n 200 /var/www/html/wp-content/debug.log 2>/dev/null || echo "(pas de debug.log)"'
 
   nvda-windows:
     name: NVDA réel, eSpeak intégré, sortie WAV sans pilote
