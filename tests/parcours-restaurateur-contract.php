@@ -1151,6 +1151,191 @@ function tuc_parcours_restaurateur_contrat(?callable $assertExterne = null): int
             strpos($htmlForm, '5 Mo') !== false,
             '48. la limite de 5 Mo reste affichée sous le champ'
         );
+
+        // =====================================================================
+        // 11 bis. Les TROIS MONDES de prochaine_generation() (revue n°20).
+        //
+        // `wpdb::get_var()` rend null pour « 0 ligne » COMME pour « erreur » :
+        // la valeur de retour ne peut donc pas servir de critère. Le module lit
+        // `trim($wpdb->last_error)` sur-le-champ et classe. Ces cas exigent que
+        // les trois issues soient DISTINCTES et démontrées sur la vraie base :
+        //   A 0 ligne, aucun message .................. conflit, à rejouer ;
+        //   B message « try restarting »/1205/1213 ..... conflit, à rejouer ;
+        //   C tout autre refus (1146, droits) .......... PANNE, 503 sans retry.
+        // Le point 2 de la revue est couvert par le comptage des lectures : une
+        // panne ne doit PAS consommer le budget de reprises.
+        // =====================================================================
+        $cleGen = (string) $constante('OPTION_GENERATION');
+        $lireProp = static function (string $nom) use ($classe) {
+            if (!$classe->hasProperty($nom)) { return null; }
+            $p = $classe->getProperty($nom);
+            $p->setAccessible(true);
+            return $p->getValue();
+        };
+
+        // Le sabotage est un filtre `query` (même mécanisme que $saboter) : deux
+        // modes sur la SEULE lecture du compteur global. 'ligne' redirige vers une
+        // clé absente — la requête réussit vraiment et rend 0 ligne, sans message ;
+        // 'panne' redirige vers une table inexistante — c'est le SERVEUR qui refuse
+        // et qui signe le message. Le test n'écrit jamais un message d'erreur.
+        $GLOBALS['tuc_gen_mode'] = '';
+        $GLOBALS['tuc_gen_lues'] = 0;
+        $tucGenFiltre = static function (string $q) use ($cleGen): string {
+            $mode = (string) $GLOBALS['tuc_gen_mode'];
+            if ($mode === '') { return $q; }
+            global $wpdb;
+            $s = preg_replace('/\s+/', ' ', $q);
+            $estLecture = stripos($s, 'SELECT option_value') !== false
+                && strpos($s, "'" . $cleGen . "'") !== false
+                && stripos($s, 'FOR UPDATE') === false;
+            $estCreation = stripos($s, 'INSERT IGNORE') !== false
+                && strpos($s, "'" . $cleGen . "'") !== false;
+            if ($mode === 'creation' && $estCreation) {
+                $GLOBALS['tuc_gen_lues']++;
+                return "SELECT * FROM {$wpdb->prefix}table_absente_du_test";
+            }
+            if (!$estLecture) { return $q; }
+            $GLOBALS['tuc_gen_lues']++;
+            if ($mode === 'ligne') {
+                return "SELECT option_value FROM {$wpdb->options} WHERE option_name = 'tuc_cle_absente_du_contrat'";
+            }
+            return "SELECT * FROM {$wpdb->prefix}table_absente_du_test";
+        };
+        // Lire l'état du compteur SANS se saboter soi-même : le mode est coupé.
+        $etatGen = static function () use ($wpdb, $cleGen): ?string {
+            $mode = (string) $GLOBALS['tuc_gen_mode'];
+            $GLOBALS['tuc_gen_mode'] = '';
+            $v = $wpdb->get_var($wpdb->prepare(
+                "SELECT COALESCE(option_value, '\\0') FROM {$wpdb->options} WHERE option_name = %s", $cleGen));
+            $GLOBALS['tuc_gen_mode'] = $mode;
+            return $v === null ? null : (string) $v;
+        };
+        add_filter('query', $tucGenFiltre);
+        $ipGen = '192.0.2.120';
+        $etatGenAvant = $etatGen();
+        try {
+            // ---- a) prédicat de classification : la liste est fermée --------
+            $recuperables = [
+                'Deadlock found when trying to get lock; try restarting transaction',
+                'Lock wait timeout exceeded; try restarting transaction',
+                'Record has changed since last read in table \'wp_options\'',
+            ];
+            $tousVrais = true;
+            foreach ($recuperables as $message) {
+                if ($appeler('erreur_recuperable', [$message]) !== true) { $tousVrais = false; }
+            }
+            $compter($tousVrais, '132. erreur_recuperable() reconnaît exactement les trois motifs qui invitent à rejouer');
+            $pannes = [
+                "Table 'x.y' doesn't exist",
+                "Access denied for user 'u'@'h'",
+                'MySQL server has gone away',
+                'Disk is full writing log',
+                '',
+            ];
+            $tousFaux = true;
+            foreach ($pannes as $message) {
+                if ($appeler('erreur_recuperable', [$message]) !== false) { $tousFaux = false; }
+            }
+            $compter($tousFaux, '133. erreur_recuperable() rend false pour toute panne réelle ET pour un message vide (aucune liste ouverte)');
+
+            // ---- b) monde A : 0 ligne, AUCUN message -> conflit passager ----
+            $_SERVER['REMOTE_ADDR'] = $ipGen;
+            $nettoyer($ipGen);
+            $GLOBALS['tuc_gen_lues'] = 0;
+            $GLOBALS['tuc_gen_mode'] = 'ligne';
+            $genAbsente = $appeler('prochaine_generation');
+            $GLOBALS['tuc_gen_mode'] = '';
+            $compter($genAbsente === null, '134. monde « ligne introuvable » : aucune valeur de génération n\'est fabriquée (' . var_export($genAbsente, true) . ')');
+            $compter(
+                $lireProp('generationConflit') === true && $lireProp('generationPanneReelle') === false,
+                '135. monde « ligne introuvable » : classé CONFLIT réessayable, jamais panne (' . var_export((bool) $lireProp('generationConflit'), true) . '/' . var_export((bool) $lireProp('generationPanneReelle'), true) . ')'
+            );
+            $compter((string) $lireProp('generationErreur') === '', '136. le serveur n\'a rien signalé dans ce monde : c\'est bien la branche « last_error vide », pas une erreur avalée');
+            $compter($etatGen() === $etatGenAvant, '137. monde « ligne introuvable » : AUCUNE écriture partielle sur le compteur global pendant la décision');
+
+            // ---- c) verdict rendu au CLIENT sur ce même monde ---------------
+            $GLOBALS['tuc_gen_lues'] = 0;
+            $GLOBALS['tuc_gen_mode'] = 'ligne';
+            $refusAttente = $appeler('reserver_demande');
+            $luesAttente = (int) $GLOBALS['tuc_gen_lues'];
+            $GLOBALS['tuc_gen_mode'] = '';
+            $donneesAttente = $refusAttente instanceof WP_Error ? (array) $refusAttente->get_error_data() : [];
+            $compter(
+                $refusAttente instanceof WP_Error
+                    && $refusAttente->get_error_code() === 'tuc_onboarding_occupe'
+                    && (($donneesAttente['status'] ?? 0) === 503)
+                    && (bool) ($donneesAttente['retry'] ?? false),
+                '138. une file d\'attente rend « momentanément occupé » + retry, et JAMAIS « service indisponible » ('
+                    . ($refusAttente instanceof WP_Error ? $refusAttente->get_error_code() : 'aucune erreur') . ')'
+            );
+            $plafond = (int) $constante('COMPTEUR_TENTATIVES') * (int) $constante('CRITIQUE_TENTATIVES');
+            $compter(
+                $luesAttente > 0 && $luesAttente <= $plafond * (int) $constante('GENERATION_TENTATIVES'),
+                '139. l\'attente est bien rejouée, et reste bornée (' . $luesAttente . ' lecture(s) pour un plafond de ' . ($plafond * (int) $constante('GENERATION_TENTATIVES')) . ')'
+            );
+
+            // ---- d) monde C : refus du serveur -> PANNE, court-circuit -------
+            $nettoyer($ipGen);
+            $GLOBALS['tuc_gen_lues'] = 0;
+            $GLOBALS['tuc_gen_mode'] = 'panne';
+            $genRefusee = $appeler('prochaine_generation');
+            $messageRefuse = (string) $lireProp('generationErreur');
+            $GLOBALS['tuc_gen_mode'] = '';
+            $compter($genRefusee === null, '140. monde « SELECT refusé » : le refus reste un refus (' . var_export($genRefusee, true) . ')');
+            $compter(
+                stripos($messageRefuse, "doesn't exist") !== false || stripos($messageRefuse, 'n\'existe pas') !== false,
+                '141. le message de refus vient du SERVEUR, pas du test (' . substr($messageRefuse, 0, 60) . ')'
+            );
+            $compter(
+                $lireProp('generationConflit') === false && $lireProp('generationPanneReelle') === true,
+                '142. monde « SELECT refusé » : classé PANNE RÉELLE, non conflictuelle — le défaut exact reproché ('
+                    . var_export((bool) $lireProp('generationConflit'), true) . '/' . var_export((bool) $lireProp('generationPanneReelle'), true) . ')'
+            );
+            $nettoyer($ipGen);
+            $GLOBALS['tuc_gen_lues'] = 0;
+            $GLOBALS['tuc_gen_mode'] = 'panne';
+            $refusPanne = $appeler('reserver_demande');
+            $luesPanne = (int) $GLOBALS['tuc_gen_lues'];
+            $GLOBALS['tuc_gen_mode'] = '';
+            $donneesPanne = $refusPanne instanceof WP_Error ? (array) $refusPanne->get_error_data() : [];
+            $compter(
+                $refusPanne instanceof WP_Error
+                    && $refusPanne->get_error_code() === 'tuc_onboarding_storage'
+                    && (($donneesPanne['status'] ?? 0) === 503)
+                    && !array_key_exists('retry', $donneesPanne),
+                '143. une panne du compteur rend « service indisponible », sans invitation à réessayer ('
+                    . ($refusPanne instanceof WP_Error ? $refusPanne->get_error_code() : 'aucune erreur') . ')'
+            );
+            $compter(
+                $luesPanne === 1,
+                '144. les reprises bornées ne masquent pas la panne : 1 seule lecture du compteur sur la requête ('
+                    . $luesPanne . '), pas ' . ((int) $constante('GENERATION_TENTATIVES')) . ' × ' . $plafond
+            );
+
+            // ---- e) le même refus sur la CRÉATION (branche $creation === false)
+            $nettoyer($ipGen);
+            $GLOBALS['tuc_gen_lues'] = 0;
+            $GLOBALS['tuc_gen_mode'] = 'creation';
+            $genCreation = $appeler('prochaine_generation');
+            $messageCreation = (string) $lireProp('generationErreur');
+            $GLOBALS['tuc_gen_mode'] = '';
+            $compter(
+                $genCreation === null && $lireProp('generationPanneReelle') === true && $lireProp('generationConflit') === false,
+                '145. INSERT IGNORE refusé par le serveur : PANNE aussi sur la branche de création ('
+                    . var_export($genCreation, true) . ', message ' . substr($messageCreation, 0, 40) . ')'
+            );
+            // La ligne du compteur doit être retrouvée intacte dans tous les cas :
+            // aucun des trois mondes n'a le droit d'écrire une valeur de secours.
+            $compter($etatGen() === $etatGenAvant, '146. après les trois mondes, le compteur global est toujours à sa valeur d\'origine (aucune valeur de secours écrite)');
+            $nettoyer($ipGen);
+            $apresIncidentGen = $appeler('reserver_demande');
+            $compter($apresIncidentGen === null, '147. après ces incidents simulés, une réservation normale repasse (le service n\'est pas resté verrouillé)');
+            $appeler('rendre_demande');
+            $nettoyer($ipGen);
+        } finally {
+            $GLOBALS['tuc_gen_mode'] = '';
+            remove_filter('query', $tucGenFiltre);
+        }
     } finally {
         // Première instruction : on rend au serveur son état d'origine, quoi qu'il
         // arrive au-dessus (leçon du chantier import : un finally qui commence par
@@ -1166,7 +1351,7 @@ function tuc_parcours_restaurateur_contrat(?callable $assertExterne = null): int
             $_SERVER['HTTP_X_FORWARDED_FOR'] = $xffInitial;
         }
         unset($_SERVER['HTTP_X_REAL_IP']);
-        $nettoyer('192.0.2.10', '192.0.2.20', '192.0.2.30', '192.0.2.40', '192.0.2.50', '192.0.2.60', '192.0.2.70', '192.0.2.80', '192.0.2.90', '192.0.2.100', '192.0.2.110', '192.0.2.200');
+        $nettoyer('192.0.2.10', '192.0.2.20', '192.0.2.30', '192.0.2.40', '192.0.2.50', '192.0.2.60', '192.0.2.70', '192.0.2.80', '192.0.2.90', '192.0.2.100', '192.0.2.110', '192.0.2.120', '192.0.2.200');
     }
 
     return $casExecutees;

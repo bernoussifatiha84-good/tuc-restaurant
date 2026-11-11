@@ -380,6 +380,8 @@ final class TUC_Onboarding_Restaurant
         global $wpdb;
         $tentatives = $tentatives ?? self::GENERATION_TENTATIVES;
         self::$generationConflit = false;
+        self::$generationPanneReelle = false;
+        self::$generationErreur = '';
 
         // Création de la ligne du compteur global (une fois). Son échec faute de
         // place ou de droits doit être VU, pas transformé en identité de secours.
@@ -392,7 +394,12 @@ final class TUC_Onboarding_Restaurant
             // SQL refusé : on refuse l'opération, on n'invente rien. Reste à
             // savoir SI la base invite à rejouer : « Deadlock found … try
             // restarting » ou « Record has changed » ne sont pas une panne.
-            self::$generationConflit = self::erreur_recuperable((string) $wpdb->last_error);
+            // Le message est LU ICI : `wpdb::flush()` est appelé en tête de
+            // chaque requête suivante et remettrait `last_error` à ''.
+            $erreurLue              = trim((string) $wpdb->last_error);
+            self::$generationErreur = $erreurLue;
+            self::$generationConflit = self::erreur_recuperable($erreurLue);
+            self::$generationPanneReelle = !self::$generationConflit;
             return null;
         }
 
@@ -402,11 +409,35 @@ final class TUC_Onboarding_Restaurant
                 self::OPTION_GENERATION
             ));
             if ($brut === null) {
-                // Ligne disparue entre-temps (ou SELECT refusé) : on ne fabrique
-                // pas de valeur, on échoue. Mais « disparue entre-temps » est une
-                // fenêtre de concurrence avec la purge, pas une panne : la
-                // passe suivante relignera le compteur.
-                self::$generationConflit = true;
+                // -----------------------------------------------------------------
+                // `get_var()` rend null pour TROIS mondes différents, et un seul
+                // est une panne. Les confondre, c'est soit crier à l'incendie
+                // devant une file d'attente, soit déguiser un incendie en file
+                // d'attente — les deux sont des défauts (revue n°19, point SQL).
+                // On lit donc le message de la base, ICI, avant tout autre appel :
+                // `wpdb::query()` appelle `flush()` en tête de chaque requête et
+                // remet `last_error` à '' (mesuré dans class-wpdb.php), donc
+                // différer cette lecture la rend fausse.
+                //
+                //   1. `last_error === ''`  → la ligne a été SUPPRIMÉE entre
+                //      l'INSERT IGNORE et ce SELECT (fenêtre de concurrence avec
+                //      la purge). Rien n'est cassé : conflit, à rejouer.
+                //   2. message récupérable ('Deadlock found', 'Lock wait timeout
+                //      exceeded', 'Record has changed') → le moteur dit
+                //      lui-même « try restarting » : conflit, à rejouer.
+                //   3. TOUT AUTRE message (droits refusés, table absente,
+                //      serveur joignable mais requête refusée) → PANNE. Elle est
+                //      rendue telle quelle : 503 `tuc_onboarding_storage`, et
+                //      aucune reprise ne la masquera (le bornage en atteste : on
+                //      sort de la boucle au lieu de la consommer).
+                //
+                // Dans les trois cas : AUCUNE valeur n'est fabriquée, AUCUNE
+                // écriture n'est tentée (revue n°7 : pas de repli horodaté).
+                // -----------------------------------------------------------------
+                $erreurLue               = trim((string) $wpdb->last_error);
+                self::$generationErreur  = $erreurLue;
+                self::$generationConflit = ($erreurLue === '' || self::erreur_recuperable($erreurLue));
+                self::$generationPanneReelle = !self::$generationConflit;
                 return null;
             }
             $actuel = (int) $brut;
@@ -467,6 +498,11 @@ final class TUC_Onboarding_Restaurant
         // compteur global, par une rafale de processus qui veulent tous un
         // numéro. C'est de l'affluence, pas une panne — à rejouer.
         self::$generationConflit = true;
+        // Pas de panne réelle : ici, chaque passe a été PERDUE par une
+        // collision optimiste (ou un conflit signalé comme récupérable), jamais
+        // refusée par le moteur. C'est cette distinction que lit le lieu
+        // d'appel pour décider « à rejouer » plutôt que « indisponible ».
+        self::$generationPanneReelle = false;
         return null;
     }
 
@@ -773,6 +809,19 @@ final class TUC_Onboarding_Restaurant
 
     /** Cause du dernier refus : 'generation' (identité non allouable), 'sql' (panne), 'conflits' (reprises épuisées). */
     private static string $causeRefus = '';
+
+    /**
+     * Le dernier échec d'allocation de génération était-il une PANNE refusée par
+     * le moteur (droits, table absente, requête rejetée), et non une course ?
+     * C'est le garde-fou qui empêche les reprises bornées de déguiser une vraie
+     * panne en file d'attente : sans lui, `transactionPerdue` (posé par un
+     * deadlock survenu AILLEURS dans la même section) suffirait à classer en
+     * « réessayable » un SELECT que MariaDB a refusé pour une autre raison.
+     */
+    private static bool $generationPanneReelle = false;
+
+    /** Dernier message SQL vu à l'allocation de génération (diagnostic des tests). */
+    private static string $generationErreur = '';
 
     /**
      * Exécute `$action` en section critique. Rend null si le verrou n'a pas pu
@@ -1149,8 +1198,17 @@ final class TUC_Onboarding_Restaurant
                     // (table absente, droits — le cas 118 du contrat figé) reste
                     // un 503 `tuc_onboarding_storage` : on ne déguise pas une
                     // panne en file d'attente.
+                    // Le déclassement en « réessayable » exige TROIS preuves, pas
+                    // une seule : l'allocation est bien la cause du refus, la
+                    // transaction était morte AU MOMENT de cette allocation, et
+                    // le moteur ne l'a pas REFUSÉE pour une autre raison.
+                    // Un `transactionPerdue` posé ailleurs dans la
+                    // section ne doit pas absoudre un « SELECT refusé » (revue
+                    // n°19 : les reprises bornées ne masquent pas une vraie panne).
                     self::$refusParPanne = self::$causeRefus !== 'conflits'
-                        && !(self::$causeRefus === 'generation' && self::$transactionPerdue);
+                        && !(self::$causeRefus === 'generation'
+                            && self::$transactionPerdue
+                            && !self::$generationPanneReelle);
                 }
                 return $etat;
             }
