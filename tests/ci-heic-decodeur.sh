@@ -23,6 +23,14 @@ PHP_BIN="${TUC_PHP_BIN:-php}"
 TEST="$TESTS_DIR/heic-decodeur-requis.php"
 KO=0
 
+# Le seul critère qui vaille : CE binaire PHP, dans CE conteneur, sait-il décoder
+# du HEIC ? On ne se fie ni au code de retour d'apt-get, ni à la présence d'un
+# paquet — un paquet peut être installé pour un autre interpréteur.
+a_decodeur() {
+    "$PHP_BIN" -r 'if (!class_exists("Imagick")) { exit(1); } $i = new Imagick(); exit(count($i->queryFormats("HEIC")) > 0 ? 0 : 1);' \
+        >/dev/null 2>&1
+}
+
 echec() { echo "ECHEC — $1"; KO=$((KO + 1)); }
 ok()    { echo "OK    — $1"; }
 
@@ -48,6 +56,42 @@ if [ "$APT_INSTALL" = "1" ]; then
         || apt-get install -y -qq --no-install-recommends php-imagick \
         || echo "  note : paquet imagick non installé — la phase 1 doit être rouge"
     php -m | grep -qi imagick && ok "extension imagick chargée" || echo "  note : imagick absent de php -m"
+
+    if a_decodeur; then
+        ok "décodeur HEIC disponible pour $PHP_BIN (voie paquet distribué)"
+    else
+        # Mesuré et attendu : les images Docker officielles « wordpress:cli-php8.2 »
+        # compilent PHP depuis les sources ; le paquet distribué php(-|8.2-)imagick
+        # dépose son .so dans l'extension_dir du PHP du DISTRIBUTEUR, que ce binaire
+        # ne charge pas. D' où le repli PECL, qui installe dans CE PHP-là.
+        echo "  note : paquet installé mais $PHP_BIN ne déclare pas HEIC -> repli PECL (image à PHP compilé)"
+        export DEBIAN_FRONTEND=noninteractive
+        apt-get install -y -qq --no-install-recommends libmagickwand-dev libheif-dev pkg-config             >/dev/null 2>&1 || echo "  note : dépendances de build indisponibles"
+        if command -v pecl >/dev/null 2>&1; then
+            if pecl install imagick >/tmp/pecl-imagick.log 2>&1; then
+                ok "pecl install imagick terminé"
+            else
+                echo "  note : pecl install imagick a échoué — 5 dernières lignes : $(tr '\n' ' ' < /tmp/pecl-imagick.log | tail -c 300)"
+            fi
+            # docker-php-ext-enable existe dans les images PHP officielles ; ailleurs,
+            # on écrit l'option dans le ini scanné par ce binaire.
+            if command -v docker-php-ext-enable >/dev/null 2>&1; then
+                docker-php-ext-enable imagick >/dev/null 2>&1 || echo "  note : docker-php-ext-enable a échoué"
+            else
+                INI_DIR="$("$PHP_BIN" --ini | sed -n 's/^Scan for additional .ini files in: //p')"
+                if [ -n "${INI_DIR:-}" ] && [ -d "$INI_DIR" ]; then
+                    echo "extension=imagick" > "$INI_DIR/99-imagick.ini" && ok "extension activée dans $INI_DIR/99-imagick.ini"
+                fi
+            fi
+        else
+            echo "  note : pas de binaire pecl dans cette image — rien sur quoi replier"
+        fi
+        if a_decodeur; then
+            ok "décodeur HEIC disponible pour $PHP_BIN (voie PECL)"
+        else
+            echo "  note : toujours pas de décodeur — la phase 1/3 sera ROUGE, et c'est le comportement exigé"
+        fi
+    fi
 fi
 
 echo "=== 1/3  conversion réelle exigée (décodeur absent = rouge, échec de conversion = rouge) ==="
