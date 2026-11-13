@@ -352,4 +352,54 @@ for tete in P1 P2; do
 done
 echo "  --- idem sur la racine (temoin : le cache fonctionne-t-il ailleurs ?)"
 curl -s -o /dev/null -D - "$U/" 2>/dev/null | grep -aiE '^(HTTP/|x-litespeed|cache-control|age)' | sed 's/\r$//' | sed 's/^/    /'
-echo "$S ; FIN PREFLIGHT v4"
+
+echo "$S ; 10. LE 301 DE /menu/kfc/ , LES OPTIONS LITESPEED, ET LE PRIX REELLEMENT EN BASE"
+echo "  --- options litespeed et prix (relus avec stderr, le bloc precedent n'a rien rendu)"
+if [ -f "$T/litespeed.php" ]; then
+  php "$T/litespeed.php" 2>&1 | sed 's/^/    /'
+else
+  echo "    (le fichier temporaire a ete nettoye avant cette section — inapplicable)"
+fi
+
+echo "  --- ce que la CLI voit de la base, par WordPress lui-meme"
+cat > "$T/etat-wp.php" <<'PHPEOF'
+<?php
+foreach (['wp-load.php', '../wp-load.php', '../../../wp-load.php'] as $c) {
+  if (is_file($c)) { require $c; break; }
+}
+if (!defined('ABSPATH')) { echo "    wp-load introuvable depuis le cwd\n"; exit(0); }
+global $wpdb;
+echo '    permalink_structure : ' . get_option('permalink_structure') . "\n";
+$o = get_option('litespeed-opt');
+if (!is_array($o)) { echo '    litespeed-opt : type ' . gettype($o) . "\n"; }
+else {
+  foreach (['cache', 'cache_ttl', 'guest_mode', 'purge_policy', 'cache_login', 'guest_vary', 'cdn_key', 'cdn_email', 'do_cdn', 'cache_mobile', 'desktop_size'] as $k) {
+    if (!array_key_exists($k, $o)) { continue; }
+    $v = $o[$k];
+    if (preg_match('/key|email/i', $k)) { $v = '<masque ' . strlen((string) $v) . ' o>'; }
+    printf("      litespeed-opt[%-12s] = %s\n", $k, is_scalar($v) ? (string) $v : json_encode($v));
+  }
+}
+$l = get_option('litespeed.conf.cache-ttl');
+echo '    litespeed.conf.cache-ttl : ' . (is_scalar($l) ? (string) $l : gettype($l)) . "\n";
+echo "    --- les slugs de restaurant et leur prix\n";
+$ids = $wpdb->get_col("SELECT ID FROM $wpdb->posts WHERE post_type='tuc_resto' AND post_status='publish' ORDER BY ID LIMIT 4");
+foreach ($ids as $id) {
+  $slug = get_post_field('post_name', $id);
+  printf("      resto %-4s slug %-16s uri %s\n", $id, $slug, get_post_field('guid', $id));
+}
+$it = $wpdb->get_results("SELECT post_id, meta_value FROM $wpdb->postmeta WHERE meta_key='tuc_prix' ORDER BY post_id LIMIT 5", ARRAY_A);
+foreach ($it as $r) printf("      plat %-6s tuc_prix = %s\n", $r['post_id'], $r['meta_value']);
+echo '      total lignes tuc_prix : ' . (int) $wpdb->get_var("SELECT count(*) FROM $wpdb->postmeta WHERE meta_key='tuc_prix'") . "\n";
+echo '      page menu (slug kfc) : ' . ($wpdb->get_var("SELECT ID FROM $wpdb->posts WHERE post_name='kfc' LIMIT 1") ?: 'aucune') . "\n";
+echo '      home_url : ' . home_url('/') . " | is_ssl : " . (is_ssl() ? 'oui' : 'non') . "\n";
+PHPEOF
+wp eval-file "$T/etat-wp.php" --allow-root 2>&1 | sed 's/^/    /' | head -34
+
+U=$(wp option get siteurl --allow-root 2>/dev/null | tr -d '\r\n'); [ -z "$U" ] && U="https://chocolate-gazelle-457691.hostingersite.com/uat"
+echo "  --- le 301 suivi pas a pas (location + cache a chaque saut)"
+curl -s -o /dev/null -D - "$U/menu/kfc/" 2>/dev/null | grep -aiE '^(HTTP/|location|x-litespeed|cache-control)' | sed 's/\r$//' | sed 's/^/    saut1 /'
+curl -s -o /dev/null -L -D - "$U/menu/kfc/" 2>/dev/null | grep -aiE '^(HTTP/|location|x-litespeed|cache-control|content-length)' | sed 's/\r$//' | sed 's/^/    suivi /' | head -12
+echo "  --- et la route JSON du menu (celle ou nos en-tetes 0.8.21 s'appliquent)"
+curl -s -o /dev/null -D - "$U/wp-json/tuc/v1/menu/kfc" 2>/dev/null | grep -aiE '^(HTTP/|x-litespeed|cache-control|content-type)' | sed 's/\r$//' | sed 's/^/    json  /'
+echo "$S ; FIN PREFLIGHT v5"
