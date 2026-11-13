@@ -103,7 +103,7 @@ final class TUC_Onboarding_Restaurant
     public static function render_form(): string
     {
         ob_start(); ?>
-        <div class="tuc-onboarding" lang="<?php echo esc_attr( get_locale() ); ?>" dir="<?php echo is_rtl() ? 'rtl' : 'ltr'; ?>">
+        <div class="tuc-onboarding" lang="<?php echo esc_attr( get_bloginfo( 'language' ) ); ?>" dir="<?php echo is_rtl() ? 'rtl' : 'ltr'; ?>">
           <section class="tuc-onboarding-card" aria-labelledby="tuc-onboarding-title">
             <p class="tuc-onboarding-kicker">TUC · Casablanca</p>
             <h1 id="tuc-onboarding-title">Votre restaurant, accompagné par notre équipe</h1>
@@ -111,7 +111,7 @@ final class TUC_Onboarding_Restaurant
             <form id="tuc-restaurant-onboarding-form" enctype="multipart/form-data" data-rest="<?php echo esc_url(rest_url('tuc/v1/')); ?>">
               <div class="tuc-onboarding-field">
                 <label for="tuc-onboarding-name">Nom du restaurant</label>
-                <input id="tuc-onboarding-name" name="restaurant_name" type="text" maxlength="120" minlength="2" autocomplete="organization" dir="auto" required aria-describedby="tuc-onboarding-name-help">
+                <input id="tuc-onboarding-name" name="restaurant_name" type="text" maxlength="120" minlength="2" autocomplete="organization" dir="auto" lang="fr" required aria-describedby="tuc-onboarding-name-help">
                 <small id="tuc-onboarding-name-help">En français ou en arabe.</small>
               </div>
               <div class="tuc-onboarding-field">
