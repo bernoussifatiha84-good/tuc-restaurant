@@ -1210,6 +1210,61 @@ try {
     $sixth['cle'] = 'rate-' . $suffix . '-6';
     $assert($rest('/tuc/v1/commande', $sixth)->get_status() === 429, 'la sixième commande en dix minutes est limitée');
 
+    // ── Montants saisis par un humain : la virgule ne doit plus multiplier un prix par 100.
+    // Régression du 2026-11-12. Le champ prix était un input[type=number] : taper « 45,50 » y
+    // laissait « 4550 », le contrôle natif répondait badInput=false et checkValidity()=true, et
+    // le plat partait publié à 4 550 MAD sans un seul avertissement. Les bornes 0..100000 ne
+    // pouvaient rien détecter — 4550 est dans les bornes. Ce qui protège désormais :
+    // TUC_Espace_Pro::normaliser_montant(), qui lit ce que l’humain a écrit et refuse, en le
+    // disant, ce qu’il ne peut pas lire. Le test est là parce qu’un correctif sans garde écrite
+    // revient au commit suivant.
+    $casLus = [
+        ['45,50', 45.5], ['45.50', 45.5], ['45.5', 45.5], ['45', 45.0], ['0', 0.0],
+        ['1 234', 1234.0], ["1\u{00A0}234", 1234.0], ["1\u{2019}234", 1234.0],
+        ['1.234,56', 1234.56], [',50', 0.5], ['45,', 45.0], ['0,00', 0.0],
+        ['99999,99', 99999.99], [' 45,50 ', 45.5], ['1 234,5', 1234.5],
+    ];
+    foreach ($casLus as [$saisie, $attendu]) {
+        $lu = TUC_Espace_Pro::normaliser_montant($saisie);
+        $assert($lu !== null && abs($lu - $attendu) < 0.001, sprintf('montant « %s » lu comme %.2f', $saisie, $attendu));
+    }
+    // Rétrocompatibilité : un nombre reçu en JSON (imports, API tierces) traverse sans être relu.
+    $assert(TUC_Espace_Pro::normaliser_montant(4550) === 4550.0, 'un nombre JSON garde sa valeur, il n’est pas relu comme du texte');
+    // Ce qui est ambigu est refusé et expliqué, jamais deviné : « 1,234 » vaut 1234 pour un
+    // francophone et 1,234 pour un anglophone, aucun contexte ne tranche.
+    foreach (['1,234', '45,500', '45,5,5', '1.2.3', '-5', 'abc', '', '45€', '1e3', '12345678'] as $refus) {
+        $assert(TUC_Espace_Pro::normaliser_montant($refus) === null, sprintf('« %s » est refusé au lieu d’être deviné', $refus));
+    }
+    $assert(str_contains(TUC_Espace_Pro::message_montant('45,5,5', 'prix'), '45,50'), 'le message de refus dit comment réécrire');
+
+    // Et de bout en bout, par le corps JSON que le navigateur du restaurateur envoie vraiment.
+    wp_set_current_user((int) $ownerUserId);
+    $soclePlat = ['description' => '', 'promo_pct' => 0, 'available' => true, 'status' => 'publish', 'options' => ['version' => 2, 'groups' => []]];
+    $requeteVirgule = new WP_REST_Request('POST', '/tuc/v1/pro/menu');
+    $requeteVirgule->set_body((string) wp_json_encode(array_merge($soclePlat, [
+        'title' => 'Plat à la virgule ' . $suffix, 'price' => '45,50', 'promo_pct' => '10',
+    ])));
+    $requeteVirgule->set_header('Content-Type', 'application/json');
+    $cree = TUC_Espace_Pro::creer_plat($requeteVirgule);
+    $assert($cree instanceof WP_REST_Response, 'un plat saisi « 45,50 » est accepté par la route pro');
+    if ($cree instanceof WP_REST_Response) {
+        $idPlatVirgule = (int) ($cree->get_data()['id'] ?? 0);
+        $created['items'][] = $idPlatVirgule;
+        $assert($cree->get_status() === 201, 'création d’un plat à la virgule : HTTP 201');
+        $assert(abs((float) get_post_meta($idPlatVirgule, 'tuc_prix', true) - 45.5) < 0.001, 'tuc_prix enregistré à 45,5 — et non 4550');
+        $assert((int) get_post_meta($idPlatVirgule, 'tuc_promo_pct', true) === 10, 'une promotion écrite « 10 » suit la même lecture');
+    }
+    $requeteIllisible = new WP_REST_Request('POST', '/tuc/v1/pro/menu');
+    $requeteIllisible->set_body((string) wp_json_encode(array_merge($soclePlat, [
+        'title' => 'Plat illisible ' . $suffix, 'price' => '45,5,5',
+    ])));
+    $requeteIllisible->set_header('Content-Type', 'application/json');
+    $refuse = TUC_Espace_Pro::creer_plat($requeteIllisible);
+    $assert($refuse instanceof WP_Error && (int) ($refuse->get_error_data()['status'] ?? 0) === 422,
+        'une écriture illisible est refusée en 422, elle n’est pas publiée');
+    $assert($refuse instanceof WP_Error && str_contains($refuse->get_error_message(), '45,50'),
+        'le refus explique comment réécrire le montant');
+
     WP_CLI::success('Tous les tests de régression WordPress/TUC sont passés.');
 } finally {
     wp_set_current_user(0);
