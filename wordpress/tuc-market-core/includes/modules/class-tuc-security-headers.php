@@ -20,6 +20,15 @@ final class TUC_Security_Headers
         // system.multicall. On le ferme pour tous les environnements.
         add_filter('xmlrpc_enabled', '__return_false');
 
+        // Mesure du 13/11/2026, controle comparatif entre /uat (corrige) et le site
+        // pilote (non corrige) : `xmlrpc_enabled` __return_false ne supprime PAS
+        // l'introspection — system.listMethods repond le catalogue complet, 4 224 o,
+        // sur les deux. Seule une methode sans contexte de blog est refusee. Le
+        // catalogue lui-meme est le renseignement que cherche un attaquant (liste des
+        // methodes, versions, vecteurs), donc on vide la table des methodes : plus
+        // rien ne se sert, y compris la liste.
+        add_filter('xmlrpc_methods', static fn(): array => array());
+
         // Le menu public est lu par des visiteurs qui veulent le prix du jour, et
         // LiteSpeed le servait depuis une copie aged de 117 s avec max-age=604800
         // (mesure du 13/11/2026 sur /uat) : une semaine de prix faux apres une

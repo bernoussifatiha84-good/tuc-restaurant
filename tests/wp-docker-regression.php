@@ -130,6 +130,10 @@ try {
     $trace[] = 'purge_menu_on_price_change a leve : ' . $e->getMessage();
 }
 $assert($sans_fatal, 'purge_menu_on_price_change suit la signature reelle de updated_post_meta (cle en 3e, valeur en 4e)');
+$assert(has_filter('xmlrpc_methods', [TUC_Security_Headers::class, 'send']) === false, 'aucun enforceur');
+assert(function_exists('apply_filters'));
+$assert(count((array) apply_filters('xmlrpc_methods', ['system.listMethods' => 'x'])) === 0,
+    'la table des methodes XML-RPC est videe : plus d'introspection possible');
 $assert(TUC_Security_Headers::menu_cache_headers(false)['Cache-Control'] === 'public, max-age=60',
     'le menu public est re-cadre a 60 s de cache');
 $assert(TUC_Security_Headers::menu_cache_headers(true) === ['Cache-Control' => 'no-store'],
