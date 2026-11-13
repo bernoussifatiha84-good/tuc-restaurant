@@ -119,7 +119,18 @@ $assert(has_action('updated_post_meta', [TUC_Security_Headers::class, 'purge_men
             && ($emitted['Permissions-Policy'] ?? '') === 'geolocation=(self), camera=(), microphone=()',
             'les en-têtes invariants sont émis quel que soit l’environnement (' . ($headerEnvironment ?: 'inconnu') . ')');
     }
-    $assert(TUC_Security_Headers::menu_cache_headers(false)['Cache-Control'] === 'public, max-age=60',
+    $sans_fatal = true;
+try {
+    // Position reelle des arguments du hook : cle en 3e, valeur en 4e (et une valeur
+    // qui peut etre un tableau, comme pour tuc_options).
+    TUC_Security_Headers::purge_menu_on_price_change(0, 0, 'tuc_prix', ['un tableau']);
+    TUC_Security_Headers::purge_menu_on_price_change(0, 0, 'tuc_options', 'x');
+} catch (\Throwable $e) {
+    $sans_fatal = false;
+    $trace[] = 'purge_menu_on_price_change a leve : ' . $e->getMessage();
+}
+$assert($sans_fatal, 'purge_menu_on_price_change suit la signature reelle de updated_post_meta (cle en 3e, valeur en 4e)');
+$assert(TUC_Security_Headers::menu_cache_headers(false)['Cache-Control'] === 'public, max-age=60',
     'le menu public est re-cadre a 60 s de cache');
 $assert(TUC_Security_Headers::menu_cache_headers(true) === ['Cache-Control' => 'no-store'],
     'une erreur de menu ne se met jamais en cache');

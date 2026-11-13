@@ -108,13 +108,19 @@ final class TUC_Security_Headers
     }
 
     /**
-     * @param int|string   $meta_id    unused
-     * @param int|string   $post_id
-     * @param mixed        $meta_value
+     * Signature imposed by core, in this order: `updated_post_meta`, `added_post_meta`
+     * fire as (meta_id, object_id, meta_key, meta_value). A typed declaration in the
+     * wrong slot is a fatal error on every price write — the CI smoke test caught it
+     * on 2026-11-13, which is the only reason anyone can trust this hook today.
+     *
+     * @param int|string $meta_id   unused
+     * @param int|string $post_id
+     * @param string     $meta_key
+     * @param mixed      $meta_value
      */
-    public static function purge_menu_on_price_change($meta_id, $post_id, $meta_value, string $meta_key): void
+    public static function purge_menu_on_price_change($meta_id, $post_id, $meta_key = '', $meta_value = null): void
     {
-        if ('tuc_prix' !== $meta_key || !function_exists('get_post_field')) {
+        if ('tuc_prix' !== (string) $meta_key || !function_exists('get_post_field')) {
             return;
         }
 
