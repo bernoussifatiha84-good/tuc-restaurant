@@ -403,3 +403,31 @@ curl -s -o /dev/null -L -D - "$U/menu/kfc/" 2>/dev/null | grep -aiE '^(HTTP/|loc
 echo "  --- et la route JSON du menu (celle ou nos en-tetes 0.8.21 s'appliquent)"
 curl -s -o /dev/null -D - "$U/wp-json/tuc/v1/menu/kfc" 2>/dev/null | grep -aiE '^(HTTP/|x-litespeed|cache-control|content-type)' | sed 's/\r$//' | sed 's/^/    json  /'
 echo "$S ; FIN PREFLIGHT v5"
+
+echo "$S ; 11. POURQUOI 'wp post meta get' REND DU VIDE ALORS QUE wpdb VOIT 79"
+echo "  --- les quatre formes, stderr visible (lecture seule)"
+for cmd in "wp post meta get 13 tuc_prix --raw" \
+           "wp post meta get 13 tuc_prix" \
+           "wp post meta list 13 --format=json" \
+           "wp post get 13 --field=post_type" \
+           "wp post get 13 --field=post_status"; do
+  printf "    %-46s -> " "$cmd"
+  outp=$(eval "$cmd --allow-root" 2>&1 | tr '\n' '|' | cut -c1-120)
+  echo "${outp:-(vide)}"
+done
+cat > "$T/meta.php" <<'PHPEOF'
+<?php
+$id = 13;
+echo "    get_post_meta(13,'tuc_prix',true) : [" . var_export(get_post_meta($id, 'tuc_prix', true), true) . "]\n";
+$all = get_post_meta($id);
+echo "    keys non-soulignees du poste 13 : " . implode(', ', array_slice(array_keys($all), 0, 12)) . "\n";
+global $wpdb;
+$direct = $wpdb->get_results("SELECT meta_key, meta_value FROM $wpdb->postmeta WHERE post_id=$id ORDER BY meta_key", ARRAY_A);
+echo "    lignes wp_postmeta pour 13 (vus par wpdb) :\n";
+foreach ((array) $direct as $r) printf("      %-24s = %s\n", $r['meta_key'], substr((string) $r['meta_value'], 0, 40));
+$m = $wpdb->get_var("SELECT meta_key FROM $wpdb->postmeta WHERE post_id=$id AND meta_key LIKE '%prix%' LIMIT 1");
+echo "    premiere cle contenant prix : " . var_export($m, true) . "\n";
+echo "    wp_installing() : " . (wp_installing() ? 'oui' : 'non') . " | objet cache : " . (wp_using_ext_object_cache() ? 'OUI (suspect : meta cachees hors base)' : 'non') . "\n";
+PHPEOF
+wp eval-file "$T/meta.php" --allow-root 2>&1 | sed 's/^/  /' | head -22
+echo "$S ; FIN PREFLIGHT v6"
