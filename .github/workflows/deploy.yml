@@ -740,7 +740,7 @@ jobs:
     if: ${{ github.event_name == 'workflow_dispatch' && inputs.operation == 'verif-litespeed-uat' }}
     needs: [cible]
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 22   # le polling du TTL dure jusqu a 8 min
     environment: ${{ needs.cible.outputs.env }}
     steps:
       - uses: actions/checkout@v5
