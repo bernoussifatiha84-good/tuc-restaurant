@@ -578,6 +578,33 @@ async function main() {
     assert.equal(await fallbackPage.locator('#tuc-order-success').isVisible(), false, 'aucune commande vide n’est créée');
     await modifierPlat(managerPage, itemId, { available: true, price: 20 });
 
+    // 9 bis. T5 : un prix enregistre depuis l'espace pro doit atteindre le client dont le
+    // navigateur a DEJA la page en cache. Garde-fou contre la serie max-age=604800 : la
+    // relecture cote client (no-store + no-cache, 0.8.21) ne sert a rien si le HTML rendu,
+    // lui, reste frais une semaine — c'est lui qui porte les prix (56 a 60 occurrences
+    // monetaires mesurees dans /uat/menu/kfc/), et c'est lui que la purge de 0.8.22 doit toucher.
+    checkpoint = 'scénario 9 bis · prix modifié par le gérant, visible au client qui a la page en cache';
+    const cacheContext = await browser.newContext();
+    const cachedPage = await cacheContext.newPage();
+    await cachedPage.goto(`${baseUrl}/tuc-mobile-e2e/`, { waitUntil: 'networkidle' });
+    const carteClient = () => cachedPage.locator('.tuc-client-card').filter({ hasText: 'Plat initial E2E' }).innerText();
+    const renduAvant = (await carteClient()).replace(/\s+/g, ' ');
+    assert(renduAvant.includes('20'), `le client part bien du prix retabli a 20 : ${renduAvant.slice(0, 90)}`);
+    await modifierPlat(managerPage, itemId, { price: 41 });
+    const recharge = await cachedPage.reload({ waitUntil: 'networkidle' });
+    const renduApres = (await carteClient()).replace(/\s+/g, ' ');
+    assert(renduApres.includes('41'), `le nouveau prix est rendu au rechargement : ${renduApres.slice(0, 90)}`);
+    assert(renduAvant !== renduApres, 'le rendu public a change, pas seulement le panier du client');
+    // Pas d'assertion sur Cache-Control ici, et c'est voulu : le plugin ne retouche que
+    // la reponse JSON de /tuc/v1/menu/ (rest_post_dispatch), pas le HTML de la page.
+    // Les en-tetes sont verifies la ou ils sont decides, dans tests/wp-docker-regression.php.
+    await modifierPlat(managerPage, itemId, { price: 20 });
+    await cachedPage.reload({ waitUntil: 'networkidle' });
+    const renduRetabli = (await carteClient()).replace(/\s+/g, ' ');
+    assert(renduRetabli.includes('20') && !renduRetabli.includes('41'),
+        `la purge joue dans les deux sens, le prix retabli revient : ${renduRetabli.slice(0, 90)}`);
+    await cacheContext.close();
+
     // 10. File restaurant : le personnel prend en charge la commande et le client suit les étapes sans données privées.
     checkpoint = 'scénario 10 · commande visible en caisse et suivi client';
     await fallbackPage.reload({ waitUntil: 'networkidle' });

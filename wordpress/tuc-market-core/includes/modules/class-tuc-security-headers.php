@@ -157,6 +157,31 @@ final class TUC_Security_Headers
         return $calls;
     }
 
+    /**
+     * The URIs one price write must drop from the edge cache, in order, deduplicated.
+     *
+     * Pure on purpose, because that is where the gap was: the JSON route alone is not
+     * enough. The rendered restaurant page prints the prices as well (60 money-looking
+     * values measured in /uat/menu/kfc/ HTML, served for 604800 s by
+     * litespeed.conf.cache-ttl_frontpage-style defaults), so a purge list that stops at
+     * `home_url('/tuc/v1/menu/<slug>')` leaves exactly the page the customer reads stale
+     * for a week — while every unit test on the JSON route stays green.
+     *
+     * @return list<string>
+     */
+    public static function purge_urls_for(string $route_url, string $item_url = '', string $restaurant_url = ''): array
+    {
+        $urls = [];
+
+        foreach ([ $route_url, $item_url, $restaurant_url ] as $url) {
+            if ('' !== $url && !in_array($url, $urls, true)) {
+                $urls[] = $url;
+            }
+        }
+
+        return $urls;
+    }
+
     public static function purge_menu_on_price_change($meta_id, $post_id, $meta_key = '', $meta_value = null): void
     {
         if ('tuc_prix' !== (string) $meta_key || !function_exists('get_post_field')) {
@@ -171,24 +196,28 @@ final class TUC_Security_Headers
             return;
         }
 
-        // Best effort by design: the header is ignored when LiteSpeed is not in
-        // front of PHP, and the short lifetime above already bounds the damage.
-        header('X-LiteSpeed-Purge: ' . $path, false);
+        // Three URIs, not one: the JSON route, the dish's own page, and — the one this
+        // function used to miss — the rendered menu page of the restaurant, which is what
+        // a customer actually reads. The header only reaches the current response, so it
+        // cannot help a write coming from WP-CLI, the CSV import or a cron run; asking the
+        // plugin directly works from any context when the plugin is there.
+        $resto_path = $resto_id ? get_permalink($resto_id) : false;
+        $urls = self::purge_urls_for(
+            (string) $path,
+            is_string(get_permalink((int) $post_id)) ? (string) get_permalink((int) $post_id) : '',
+            is_string($resto_path) ? $resto_path : ''
+        );
 
-        // The header only reaches the current response, so it cannot help a write
-        // that came from WP-CLI, the CSV import or a cron run — and it never touches
-        // the rendered page, which prints the prices too (60 money-looking values
-        // measured in /uat/menu/kfc/ HTML, served with LiteSpeed's own
-        // cache_ttl = 604800). When the LiteSpeed plugin is present, ask it directly:
-        // that path works from any context and purges the page, not only the route.
-        foreach (self::purge_requests_for($path) as $call) {
-            $call();
+        if ([] === $urls) {
+            return;
         }
 
-        // Touch the item's own permalink too: a price sits on the dish page as well.
-        $item_path = get_permalink((int) $post_id);
-        if (is_string($item_path) && $item_path !== '') {
-            foreach (self::purge_requests_for($item_path) as $call) {
+        // Best effort by design: the header is ignored when LiteSpeed is not in
+        // front of PHP, and the short lifetime above already bounds the damage.
+        header('X-LiteSpeed-Purge: ' . implode(', ', $urls), false);
+
+        foreach ($urls as $url) {
+            foreach (self::purge_requests_for($url) as $call) {
                 $call();
             }
         }
