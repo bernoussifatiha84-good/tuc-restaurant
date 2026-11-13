@@ -108,6 +108,8 @@ try {
     // en « staging » (pour laisser passer le seed de démonstration) retire HSTS :
     // cet effet de bord doit être un contrat testé, pas une découverte en prod.
     $assert(has_action('send_headers', [TUC_Security_Headers::class, 'send']) !== false, 'les en-têtes de sécurité sont branchés sur send_headers');
+$assert(has_filter('rest_post_dispatch', [TUC_Security_Headers::class, 'tune_menu_response']) !== false, 'la duree de cache du menu est branchee sur rest_post_dispatch');
+$assert(has_action('updated_post_meta', [TUC_Security_Headers::class, 'purge_menu_on_price_change']) !== false, 'la purge du menu est declenchee a chaque ecriture de prix');
     $headerEnvironments = ['production', 'staging', 'development', 'local', ''];
     foreach ($headerEnvironments as $headerEnvironment) {
         $emitted = TUC_Security_Headers::headers_for(true, $headerEnvironment);
@@ -117,7 +119,15 @@ try {
             && ($emitted['Permissions-Policy'] ?? '') === 'geolocation=(self), camera=(), microphone=()',
             'les en-têtes invariants sont émis quel que soit l’environnement (' . ($headerEnvironment ?: 'inconnu') . ')');
     }
-    $assert(TUC_Security_Headers::headers_for(true, 'production')['Strict-Transport-Security'] === 'max-age=31536000',
+    $assert(TUC_Security_Headers::menu_cache_headers(false)['Cache-Control'] === 'public, max-age=60',
+    'le menu public est re-cadre a 60 s de cache');
+$assert(TUC_Security_Headers::menu_cache_headers(true) === ['Cache-Control' => 'no-store'],
+    'une erreur de menu ne se met jamais en cache');
+$assert(TUC_Security_Headers::is_menu_route('/tuc/v1/menu/kfc') && !TUC_Security_Headers::is_menu_route('/tuc/v1/pro/menu'),
+    'seule la route publique du menu est concernee');
+$assert(null === TUC_Security_Headers::menu_purge_path('kfc', true) && null === TUC_Security_Headers::menu_purge_path("kfc'\nX"),
+    'aucune purge promise depuis un contexte sans reponse, et aucun slug douteux');
+$assert(TUC_Security_Headers::headers_for(true, 'production')['Strict-Transport-Security'] === 'max-age=31536000',
         'HSTS est émis en production sur HTTPS');
     $assert(!array_key_exists('Strict-Transport-Security', TUC_Security_Headers::headers_for(true, 'staging')),
         'HSTS est retiré en staging : l’UAT ne doit pas épingler les navigateurs en HTTPS');

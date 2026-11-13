@@ -19,6 +19,116 @@ final class TUC_Security_Headers
         // un vecteur d’amplification pour les attaques par mot de passe, via
         // system.multicall. On le ferme pour tous les environnements.
         add_filter('xmlrpc_enabled', '__return_false');
+
+        // Le menu public est lu par des visiteurs qui veulent le prix du jour, et
+        // LiteSpeed le servait depuis une copie aged de 117 s avec max-age=604800
+        // (mesure du 13/11/2026 sur /uat) : une semaine de prix faux apres une
+        // modification. Deux greffons, un par bout du probleme : la duree de vie
+        // de la reponse, et un signal de purge a chaque ecriture de prix.
+        add_filter('rest_post_dispatch', [self::class, 'tune_menu_response'], 10, 3);
+        add_action('updated_post_meta', [self::class, 'purge_menu_on_price_change'], 10, 4);
+        add_action('added_post_meta', [self::class, 'purge_menu_on_price_change'], 10, 4);
+    }
+
+    /** Lifetime we are willing to serve a stale public menu, in seconds. */
+    public const MENU_TTL = 60;
+
+    /** Route prefix of the public menu JSON — the one entry point this file re-times. */
+    public const MENU_ROUTE = '/tuc/v1/menu/';
+
+    public static function is_menu_route(string $route): bool
+    {
+        return str_starts_with($route, self::MENU_ROUTE);
+    }
+
+    /**
+     * Pure decision table for the menu JSON cache headers, same shape as headers_for().
+     *
+     * A failed lookup must not be cached at all: a 404 for one bad slug should not
+     * shadow a real menu for a minute.
+     *
+     * @return array<string, string>
+     */
+    public static function menu_cache_headers(bool $is_error = false): array
+    {
+        if ($is_error) {
+            return ['Cache-Control' => 'no-store'];
+        }
+
+        return [
+            // LiteSpeed reads its own override header; Cache-Control keeps every
+            // other cache (CDN, proxy, browser) to the same lifetime.
+            'X-LiteSpeed-Cache-Control' => 'max-age=' . self::MENU_TTL,
+            'Cache-Control'             => 'public, max-age=' . self::MENU_TTL,
+        ];
+    }
+
+    /**
+     * The URI LiteSpeed should drop after a price change, or null when nothing
+     * should be emitted. Pure so the guard rails are testable without a cache.
+     *
+     * A CLI or cron write has no response to attach a header to; pretending to
+     * purge from the command line would purge nothing and hide that fact.
+     */
+    public static function menu_purge_path(?string $slug, bool $skip_when_no_response = false): ?string
+    {
+        if ($skip_when_no_response || null === $slug || '' === $slug) {
+            return null;
+        }
+
+        // $slug comes from post_name; refuse anything that could break out of a header.
+        if (1 !== preg_match('/^[a-z0-9][a-z0-9._-]{0,199}$/', $slug)) {
+            return null;
+        }
+
+        return home_url(self::MENU_ROUTE . $slug);
+    }
+
+    /**
+     * @param \WP_REST_Response|\WP_Error $result
+     * @param \WP_REST_Server             $server
+     * @param \WP_REST_Request             $request
+     * @return \WP_REST_Response|\WP_Error
+     */
+    public static function tune_menu_response($result, $server, $request)
+    {
+        $route = (is_object($request) && method_exists($request, 'get_route'))
+            ? (string) $request->get_route()
+            : '';
+
+        if ('' === $route || !self::is_menu_route($route) || headers_sent() || (defined('WP_CLI') && WP_CLI)) {
+            return $result;
+        }
+
+        foreach (self::menu_cache_headers(is_wp_error($result)) as $name => $value) {
+            header($name . ': ' . $value, true);
+        }
+
+        return $result;
+    }
+
+    /**
+     * @param int|string   $meta_id    unused
+     * @param int|string   $post_id
+     * @param mixed        $meta_value
+     */
+    public static function purge_menu_on_price_change($meta_id, $post_id, $meta_value, string $meta_key): void
+    {
+        if ('tuc_prix' !== $meta_key || !function_exists('get_post_field')) {
+            return;
+        }
+
+        $skip = (defined('WP_CLI') && WP_CLI) || (defined('DOING_CRON') && DOING_CRON);
+        $resto_id = (int) get_post_meta((int) $post_id, 'tuc_resto_id', true);
+        $path = self::menu_purge_path($resto_id ? (string) get_post_field('post_name', $resto_id) : null, $skip);
+
+        if (null === $path || headers_sent()) {
+            return;
+        }
+
+        // Best effort by design: the header is ignored when LiteSpeed is not in
+        // front of PHP, and the 60 s lifetime above already bounds the damage.
+        header('X-LiteSpeed-Purge: ' . $path, false);
     }
 
     /**
