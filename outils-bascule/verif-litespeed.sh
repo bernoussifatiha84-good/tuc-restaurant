@@ -34,7 +34,7 @@ RESTAURE=0
 restore() {
   [ "$RESTAURE" = 1 ] && return 0
   [ -n "${ANCIEN:-}" ] || return 0
-  ACTUEL=$(wp post meta get "$PLAT" tuc_prix --raw --allow-root 2>/dev/null | tr -d '\r\n')
+  ACTUEL=$(lire_prix)
   if [ "$ACTUEL" != "$ANCIEN" ]; then
     wp post meta update "$PLAT" tuc_prix "$ANCIEN" --allow-root >/dev/null 2>&1
     echo "  [piege] prix remis a $ANCIEN (il etait reste a '$ACTUEL')"
@@ -44,12 +44,16 @@ restore() {
 }
 trap 'restore; rm -rf "$TMP"' EXIT INT TERM
 
+# --raw n'existe pas sur `wp post meta get` (WP-CLI 2.12.0 renvoie « unknown --raw
+# parameter ») : le get tout court rend deja la valeur brute. Un seul point de lecture,
+# pour que l'erreur ne revienne pas par trois cotes.
+lire_prix() { wp post meta get "$PLAT" tuc_prix --allow-root 2>/dev/null | tr -d '\r\n' | sed 's/^"//; s/"$//'; }
 corps() { curl -s -m 25 -o "$TMP/b" -D "$TMP/h" -L "$1"; }
 entete() { grep -ai "^$1:" "$TMP/h" 2>/dev/null | head -1 | sed 's/\r$//'; }
 prix_dans() { grep -o "$1" "$TMP/b" 2>/dev/null | wc -l | tr -d ' '; }
 
 echo "$S ; 1. AVANT"
-ANCIEN=$(wp post meta get "$PLAT" tuc_prix --raw --allow-root 2>/dev/null | tr -d '\r\n')
+ANCIEN=$(lire_prix)
 case "$ANCIEN" in
   ''|*[!0-9.]*) echo "REFUS : valeur de prix non numerique ou absente ('$ANCIEN') — aucune ecriture"; exit 3;;
 esac
@@ -68,7 +72,7 @@ echo "$S ; 2. ECRITURE : $ANCIEN -> $NOUVEAU (un poste, une cle)"
 RESTAURE=1
 wp post meta update "$PLAT" tuc_prix "$NOUVEAU" --allow-root >/dev/null 2>&1 \
   || { echo "  ecriture refusee par WordPress : rien n'est change"; RESTAURE=0; exit 4; }
-echo "  relu en base : $(wp post meta get "$PLAT" tuc_prix --raw --allow-root 2>/dev/null | tr -d '\r\n')"
+echo "  relu en base : $(lire_prix)"
 for t in D E F; do corps "$PAGE"; printf "  %s : %-28s nouveau prix vu %s fois, ancien %s fois\n" "$t" "$(entete 'x-litespeed-cache')" "$(prix_dans "$NOUVEAU")" "$(prix_dans "$ANCIEN")"; done
 SHA_APRES=$(sha256sum "$TMP/b" | cut -c1-16)
 corps "$JSON"; printf "  route JSON : %-24s nouveau prix vu %s fois\n" "$(entete 'x-litespeed-cache')" "$(prix_dans "$NOUVEAU")"
@@ -76,7 +80,7 @@ corps "$JSON"; printf "  route JSON : %-24s nouveau prix vu %s fois\n" "$(entete
 echo "$S ; 3. RESTAURATION ET PURGE"
 wp post meta update "$PLAT" tuc_prix "$ANCIEN" --allow-root >/dev/null 2>&1
 RESTAURE=0
-FIN=$(wp post meta get "$PLAT" tuc_prix --raw --allow-root 2>/dev/null | tr -d '\r\n')
+FIN=$(lire_prix)
 if [ "$FIN" = "$ANCIEN" ]; then echo "  base : $FIN = valeur d'origine, restauration ok"
 else echo "  ECHEC DE RESTAURATION : la base dit '$FIN', attendu '$ANCIEN'"; fi
 purger "$PAGE"; purger "$JSON"
