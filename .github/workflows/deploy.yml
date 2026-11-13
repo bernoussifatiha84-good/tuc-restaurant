@@ -21,6 +21,7 @@ on:
           - seed-demo
           - seed-demo-uat
           - bascule-uat-preflight
+          - verif-litespeed-uat
         default: deploy
         required: true
 
@@ -148,6 +149,9 @@ jobs:
             ENV_NAME=uat; URL="$URL_UAT"; ROOT="$ROOT_UAT"
           elif [[ "$EVENT_NAME" == workflow_dispatch && "$OPERATION" == "bascule-uat-preflight" ]]; then
             # Preflight de la bascule SQLite -> MySQL : lecture seule sur l'UAT.
+            ENV_NAME=uat; URL="$URL_UAT"; ROOT="$ROOT_UAT"
+          elif [[ "$EVENT_NAME" == workflow_dispatch && "$OPERATION" == "verif-litespeed-uat" ]]; then
+            # Verification de purge LiteSpeed : une ecriture, une Restauration, sur l'UAT seule.
             ENV_NAME=uat; URL="$URL_UAT"; ROOT="$ROOT_UAT"
           elif [[ "$REF_TYPE" == branch && "$REF_NAME" == develop ]]; then
             ENV_NAME=dev; URL="$URL_DEV"; ROOT="$ROOT_DEV"
@@ -729,6 +733,105 @@ jobs:
           set -uo pipefail
           trap 'rm -f "$2"' EXIT
           bash "$2" "$1"
+          REMOTE
+
+  verif_litespeed_uat:
+    name: Verification LiteSpeed sur UAT (prix reversible)
+    if: ${{ github.event_name == 'workflow_dispatch' && inputs.operation == 'verif-litespeed-uat' }}
+    needs: [cible]
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    environment: ${{ needs.cible.outputs.env }}
+    steps:
+      - uses: actions/checkout@v5
+
+      # Cet outil ecrit. Il ne peut done pas heriter d'une cible « par defaut » :
+      # quatre refus, et aucun d'entre eux ne peut etre contourne par une autre operation.
+      - name: Refuser toute cible qui n'est pas l'UAT
+        env:
+          ENV_NAME: ${{ needs.cible.outputs.env }}
+          SITE_URL: ${{ needs.cible.outputs.url }}
+          SSH_ROOT: ${{ needs.cible.outputs.root }}
+          URL_UAT: ${{ vars.URL_UAT }}
+          URL_PRD: ${{ vars.URL_PRD }}
+          ROOT_UAT: ${{ vars.ROOT_UAT }}
+          ROOT_PRD: ${{ vars.ROOT_PRD }}
+          ROOT_DEV: ${{ vars.ROOT_DEV }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          trim() { printf '%s' "$1" | sed 's:/*$::'; }
+          if [ "$ENV_NAME" != "uat" ]; then
+            echo "::error::verif-litespeed-uat n'accepte que la cible uat (recu : ${ENV_NAME:-vide}). Aucun acces tente."
+            exit 1
+          fi
+          root="$(trim "$SSH_ROOT")"
+          if [ "$(trim "${ROOT_UAT:-}")" != "$root" ]; then
+            echo "::error::ROOT_UAT ne correspond pas a la cible resolue ($root). Verification annulee."
+            exit 1
+          fi
+          case "$root" in
+            */uat) ;;
+            *) echo "::error::La racine resolue ne finit pas par /uat : $root. Verification annulee."; exit 1 ;;
+          esac
+          for pair in "URL_PRD:$SITE_URL" "ROOT_PRD:$root" "ROOT_DEV:$root"; do
+            key="${pair%%:*}"; val="${pair#*:}"; ref="$(trim "${!key:-}")"
+            if [ -n "$ref" ] && [ "$ref" = "$val" ]; then
+              echo "::error::La cible egale $key. Cette verification n'ecrit que sur l'UAT."
+              exit 1
+            fi
+          done
+          if [ -n "${URL_UAT:-}" ] && [ "$(trim "$URL_UAT")" != "$(trim "$SITE_URL")" ]; then
+            echo "::error::URL resolue differente de URL_UAT. Verification annulee."
+            exit 1
+          fi
+          echo "Cible acceptee pour la verification LiteSpeed : $root"
+
+      - name: Preparer la connexion SSH
+        env:
+          SSH_PRIVATE_KEY: ${{ secrets.SSH_PRIVATE_KEY }}
+          SSH_HOST: ${{ secrets.SSH_HOST }}
+          SSH_PORT: ${{ vars.SSH_PORT || '65002' }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p ~/.ssh
+          printf '%s\n' "$SSH_PRIVATE_KEY" > ~/.ssh/id_deploy
+          chmod 600 ~/.ssh/id_deploy
+          ssh-keygen -y -f ~/.ssh/id_deploy >/dev/null
+          ssh-keyscan -p "$SSH_PORT" -H "$SSH_HOST" >> ~/.ssh/known_hosts 2>/dev/null
+
+      - name: Linter l'outil avant envoi
+        shell: bash
+        run: |
+          set -euo pipefail
+          bash -n outils-bascule/verif-litespeed.sh
+
+      # Le script se restaure lui-meme (trap sur EXIT/INT/TERM) : une coupure en cours de
+      # route ne laisse pas un prix faux en base. /tmp, hors racine web, supprime a la fin.
+      - name: Executor la verification (ecriture reversible, restauration garantie)
+        env:
+          SSH_PORT: ${{ vars.SSH_PORT || '65002' }}
+          SSH_USER: ${{ secrets.SSH_USERNAME || secrets.SSH_USER }}
+          SSH_HOST: ${{ secrets.SSH_HOST }}
+          SSH_ROOT: ${{ needs.cible.outputs.root }}
+          SITE_URL: ${{ needs.cible.outputs.url }}
+          RUN_ID: ${{ github.run_id }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          distant="/tmp/tuc-verif-ls-${RUN_ID}.sh"
+          scp -q -i ~/.ssh/id_deploy -P "$SSH_PORT" -o StrictHostKeyChecking=yes \
+            outils-bascule/verif-litespeed.sh "$SSH_USER@$SSH_HOST:$distant"
+          printf -v remote_root '%q' "$SSH_ROOT"
+          printf -v remote_url '%q' "$SITE_URL"
+          printf -v remote_file '%q' "$distant"
+          echo "Verification LiteSpeed sur $SITE_URL : un prix de demo change puis remis, purge de la page"
+          ssh -i ~/.ssh/id_deploy -p "$SSH_PORT" -o StrictHostKeyChecking=yes \
+            "$SSH_USER@$SSH_HOST" "bash -s -- $remote_root $remote_url $remote_file" <<'REMOTE'
+          set -uo pipefail
+          trap 'rm -f "$3"' EXIT
+          bash "$3" "$1" "$2"
           REMOTE
 
   inventaire_woocommerce:
