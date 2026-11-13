@@ -146,6 +146,12 @@ $assert(TUC_Security_Headers::is_menu_route('/tuc/v1/menu/kfc') && !TUC_Security
     'seule la route publique du menu est concernee');
 $assert(null === TUC_Security_Headers::menu_purge_path('kfc', true) && null === TUC_Security_Headers::menu_purge_path("kfc'\nX"),
     'aucune purge promise depuis un contexte sans reponse, et aucun slug douteux');
+// L'URI purgee doit etre l'URL que le navigateur rappelle. C'est la que le test ne doit plus
+// ressembler a la logique testee : comparer deux chaines construites pareil n'aurait rien vu.
+$assert(TUC_Security_Headers::menu_purge_path('kfc') === rest_url('tuc/v1/menu/kfc'),
+    'l URI de purge est exactement l URL REST du menu public');
+$assert(TUC_Security_Headers::menu_purge_path('kfc') !== home_url(TUC_Security_Headers::MENU_ROUTE . 'kfc'),
+    'et pas la racine du site colle au prefixe de route : ce chemin la repond 404, pas menu');
 
 // La liste de purge doit couvrir la page rendue, pas seulement la route JSON : c'est
 // elle que le client lit, et c'est elle qui restait fraiche une semaine.

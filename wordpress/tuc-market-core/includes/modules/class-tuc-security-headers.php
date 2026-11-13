@@ -45,6 +45,21 @@ final class TUC_Security_Headers
     /** Route prefix of the public menu JSON — the one entry point this file re-times. */
     public const MENU_ROUTE = '/tuc/v1/menu/';
 
+    /**
+     * The same prefix, in the one form that produces a URL a client can actually fetch.
+     *
+     * The distinction is not cosmetic and it cost five versions. `rest_post_dispatch`
+     * hands us a route name (`/tuc/v1/menu/(?P<slug>…)`) and `home_url()` hands us a path
+     * under the site root — but the REST server lives behind `rest_url()`, which is the
+     * only one of the two that knows about `/wp-json/`, about `?rest_route=`, and about a
+     * site installed in a subdirectory. On /uat, measured on 2026-11-13:
+     *   home_url('/tuc/v1/menu/kfc') -> 404 (HTML, and LiteSpeed even caches that 404)
+     *   rest_url('tuc/v1/menu/kfc')  -> 200 (the JSON the browser reads)
+     * A purge list built on the first form never drops the entry the customer reads, and
+     * every unit test on the list itself stayed green.
+     */
+    public const MENU_ROUTE_PATH = 'tuc/v1/menu/';
+
     public static function is_menu_route(string $route): bool
     {
         return str_starts_with($route, self::MENU_ROUTE);
@@ -96,7 +111,7 @@ final class TUC_Security_Headers
             return null;
         }
 
-        return home_url(self::MENU_ROUTE . $slug);
+        return rest_url(self::MENU_ROUTE_PATH . $slug);
     }
 
     /**

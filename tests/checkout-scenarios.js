@@ -605,6 +605,24 @@ async function main() {
         `la purge joue dans les deux sens, le prix retabli revient : ${renduRetabli.slice(0, 90)}`);
     await cacheContext.close();
 
+    // 9 ter. L'URI que le plugin purge doit etre celle que le navigateur rappelle. Ce n'etait
+    // pas le cas, et aucun test ne pouvait le voir : la liste d'URI etait comparee a elle-meme.
+    // Mesure du 13/11 sur /uat : home_url('/tuc/v1/menu/kfc') repond 404 en HTML, le JSON vit
+    // sous /wp-json/. Une purge calculee sur la premiere ne touche aucune entree de cache.
+    checkpoint = 'scénario 9 ter · l’URI de purge désigne la route REST vivante, pas un 404';
+    const santeRep = await fetch(`${baseUrl}/wp-json/tuc/v1/sante`);
+    const sante = await santeRep.json();
+    const uriPurge = String(sante.menu_purge_uri || '');
+    assert(uriPurge.includes('/tuc/v1/menu/controle-de-purge'),
+        `le rapport de sante expose l’URI de purge du menu : ${uriPurge.slice(0, 96)}`);
+    assert(!uriPurge.startsWith(`${baseUrl}/tuc/v1/menu/`),
+        `l’URI n’est pas le chemin home_url qui repond 404 : ${uriPurge.slice(0, 96)}`);
+    const purgeRep = await fetch(uriPurge);
+    const purgeType = String(purgeRep.headers.get('content-type') || '');
+    assert(purgeType.includes('application/json'),
+        `l’URI de purge repond en JSON (${purgeRep.status} ${purgeType}) ; sur un 404 HTML elle ne purgerait rien`);
+    console.log('PASS scénario 9 ter : l’URI de purge est une URL REST vivante, pas un 404 HTML');
+
     // 10. File restaurant : le personnel prend en charge la commande et le client suit les étapes sans données privées.
     checkpoint = 'scénario 10 · commande visible en caisse et suivi client';
     await fallbackPage.reload({ waitUntil: 'networkidle' });
