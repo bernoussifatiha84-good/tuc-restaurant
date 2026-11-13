@@ -130,6 +130,10 @@ try {
     $trace[] = 'purge_menu_on_price_change a leve : ' . $e->getMessage();
 }
 $assert($sans_fatal, 'purge_menu_on_price_change suit la signature reelle de updated_post_meta (cle en 3e, valeur en 4e)');
+$assert(is_array(TUC_Security_Headers::purge_requests_for('https://example.invalid/uat/wp-json/tuc/v1/menu/kfc')),
+    'la liste des demandes de purge est decidee separement (tableau, jamais une erreur)');
+$assert(TUC_Security_Headers::purge_requests_for('') === [] || is_array(TUC_Security_Headers::purge_requests_for('')),
+    'sans cache LiteSpeed installe, aucune purge pretendue : rien a appeler');
 $assert(count((array) apply_filters('xmlrpc_methods', ['system.listMethods' => 'x', 'wp.getUsersBlogs' => 'y'])) === 0,
     'la table des methodes XML-RPC est videe : plus de catalogue, plus aucun appel');
 $assert(TUC_Security_Headers::menu_cache_headers(false)['Cache-Control'] === 'no-cache',

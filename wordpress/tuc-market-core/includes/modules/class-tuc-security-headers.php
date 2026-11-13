@@ -133,6 +133,30 @@ final class TUC_Security_Headers
      * @param string     $meta_key
      * @param mixed      $meta_value
      */
+    /**
+     * Purge calls to make against the LiteSpeed plugin, as closures, decided apart
+     * so the choice is testable without the plugin being installed: no cache plugin
+     * must not become a fatal error, and a missing cache must not look like a purge.
+     *
+     * @return array<int, callable>
+     */
+    public static function purge_requests_for(string $url): array
+    {
+        $calls = [];
+
+        if (function_exists('lite_speed_purge_url')) {
+            $calls[] = static function () use ($url): void { lite_speed_purge_url($url); };
+        }
+
+        // The plugin's own hook accepts a URL and covers the tagged entries of that
+        // URL; it exists whether or not the helper function is loaded.
+        if (has_action('litespeed_purge_url') !== false) {
+            $calls[] = static function () use ($url): void { do_action('litespeed_purge_url', $url); };
+        }
+
+        return $calls;
+    }
+
     public static function purge_menu_on_price_change($meta_id, $post_id, $meta_key = '', $meta_value = null): void
     {
         if ('tuc_prix' !== (string) $meta_key || !function_exists('get_post_field')) {
@@ -148,8 +172,26 @@ final class TUC_Security_Headers
         }
 
         // Best effort by design: the header is ignored when LiteSpeed is not in
-        // front of PHP, and the 60 s lifetime above already bounds the damage.
+        // front of PHP, and the short lifetime above already bounds the damage.
         header('X-LiteSpeed-Purge: ' . $path, false);
+
+        // The header only reaches the current response, so it cannot help a write
+        // that came from WP-CLI, the CSV import or a cron run — and it never touches
+        // the rendered page, which prints the prices too (60 money-looking values
+        // measured in /uat/menu/kfc/ HTML, served with LiteSpeed's own
+        // cache_ttl = 604800). When the LiteSpeed plugin is present, ask it directly:
+        // that path works from any context and purges the page, not only the route.
+        foreach (self::purge_requests_for($path) as $call) {
+            $call();
+        }
+
+        // Touch the item's own permalink too: a price sits on the dish page as well.
+        $item_path = get_permalink((int) $post_id);
+        if (is_string($item_path) && $item_path !== '') {
+            foreach (self::purge_requests_for($item_path) as $call) {
+                $call();
+            }
+        }
     }
 
     /**
