@@ -307,3 +307,49 @@ echo "  --- referentiel : la copie du 13/11 comparee a blanc par le convertisseu
 echo "      54 tables / 1 410 lignes / 613 options / 68 posts / 369 postmeta / 38 _tuc_prix."
 echo "      Si les chiffres au-dessus different, il faut re-exporter avant toute bascule."
 echo "$S ; FIN PREFLIGHT v3"
+
+echo "$S ; 9. LITESPEED CACHE : est-il reellement actif, et que renvoie la page de menu"
+cat > "$T/litespeed.php" <<'PHPEOF'
+<?php
+$sql = 'wp-content/database/.ht.04e43856d7780fa60a6240de78c3927a/.ht.sqlite';
+try {
+  $p = new PDO('sqlite:' . $sql . '?mode=ro');
+} catch (Throwable $e) {
+  try { $p = new PDO('sqlite:' . $sql); } catch (Throwable $e2) { echo "    base inaccessible\n"; exit(0); }
+}
+$q = $p->query("SELECT option_name, option_value FROM wp_options WHERE option_name LIKE 'litespeed%' OR option_name LIKE 'lite%' ORDER BY option_name");
+$n = 0;
+foreach ($q as $r) {
+  $n++;
+  if ($n > 40) { break; }
+  $cle = $r['option_name'];
+  $val = (string) $r['option_value'];
+  if (preg_match('/key|secret|token|pass/i', $cle)) { printf("    %-34s : <masque, %d octets>\n", $cle, strlen($val)); continue; }
+  if (strlen($val) > 240) { $val = substr($val, 0, 240) . '…'; }
+  printf("    %-34s : %s\n", $cle, str_replace("\n", ' ', $val));
+}
+echo "    (options litespeed total : " . (int) $p->query("SELECT count(*) FROM wp_options WHERE option_name LIKE 'litespeed%'")->fetchColumn() . ")\n";
+echo "    --- prix courants des plats (tuc_prix), 6 premiers\n";
+$d = $p->query("SELECT post_id, meta_value FROM wp_postmeta WHERE meta_key = 'tuc_prix' ORDER BY post_id LIMIT 6");
+foreach ($d as $r) printf("      poste %-6s prix %s\n", $r['post_id'], $r['meta_value']);
+echo "      total : " . (int) $p->query("SELECT count(*) FROM wp_postmeta WHERE meta_key = 'tuc_prix'")->fetchColumn() . " lignes, "
+   . (int) $p->query("SELECT count(DISTINCT meta_value) FROM wp_postmeta WHERE meta_key = 'tuc_prix'")->fetchColumn() . " valeurs distinctes\n";
+PHPEOF
+php "$T/litespeed.php"
+
+if command -v wp >/dev/null 2>&1; then
+  U=$(wp option get siteurl --allow-root 2>/dev/null | tr -d '\r\n')
+else
+  U=""
+fi
+[ -z "$U" ] && U="https://chocolate-gazelle-457691.hostingersite.com/uat"
+echo "  --- deux requetes sur la page du menu, en-tetes de cache seulement"
+for tete in P1 P2; do
+  echo "    $tete :"
+  curl -s -o /dev/null -D - "$U/menu/kfc/" 2>/dev/null \
+    | grep -aiE '^(HTTP/|x-litespeed|cache-control|age|x-turbo|content-type|last-modified|vary)' \
+    | sed 's/\r$//' | sed 's/^/      /'
+done
+echo "  --- idem sur la racine (temoin : le cache fonctionne-t-il ailleurs ?)"
+curl -s -o /dev/null -D - "$U/" 2>/dev/null | grep -aiE '^(HTTP/|x-litespeed|cache-control|age)' | sed 's/\r$//' | sed 's/^/    /'
+echo "$S ; FIN PREFLIGHT v4"
