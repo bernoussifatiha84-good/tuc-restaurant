@@ -642,6 +642,7 @@ async function main() {
     console.log('PASS scénarios 6–7: compte client retrouvé, GPS refusé et repli vers le retrait');
     console.log('PASS scénario 8: perte de réponse réseau, rechargement et reprise idempotente sans doublon');
     console.log('PASS scénario 9: prix actualisé avec reconfirmation et plat épuisé retiré du panier');
+    console.log('PASS scénario 9 bis : prix enregistré dans l’espace pro rendu au client qui a déjà la page en cache, puis rétabli');
     console.log('PASS espace pro: GPS et erreurs, repère Maps prioritaire, repli @, coordonnées saisies, lien court refusé et persistance REST');
     console.log('PASS scénario 10: caisse fait progresser la commande, suivi client actualisé sans données privées');
   } catch (error) {
