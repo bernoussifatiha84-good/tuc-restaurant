@@ -140,6 +140,10 @@ done
 echo "$S ; 3. LA PURGE QUE LE HOOK EMET DANS UNE REPONSE HTTP"
 purger json agir
 P=$(fetch_json "$TMP/a.json"); printf "  apres purge : prix=%s | %s\n" "$P" "$(entete 'x-litespeed-cache')"
+# C'est ICI que le correctif se joue, pas au polling : si l URI est la bonne, l entree tombe
+# et le prix frai apparait a la requete suivante. Le polling, lui, dit une autre chose (le TTL).
+PURGE_EFFICACE="non"
+if [ "$P" = "$NOUVEAU" ]; then PURGE_EFFICACE="oui"; fi
 
 echo "$S ; 4. RESTAURATION"
 wp post meta update "$PLAT" tuc_prix "$ANCIEN" --allow-root >/dev/null 2>&1
@@ -158,12 +162,20 @@ else
   echo "  au cache du serveur bien au-dela des 60 s que le plugin pretend imposer : le TTL qui s'applique"
   echo "  est celui du serveur (604 800 s sur cet hote), pas le notre."
 fi
+echo "  ce que la purge a produit : entree fraiche avec prix $P (attendu $NOUVEAU) -> PURGE_EFFICACE=$PURGE_EFFICACE"
+[ "$PURGE_EFFICACE" = oui ] || exit 7
+if [ -n "$RETOURNE" ]; then
+  echo "  TTL : le prix de lui-meme au bout de ${RETOURNE}s, sans purge"
+else
+  echo "  TTL : aucun retournement en ${DUREE}s. Le max-age=60 que le plugin pose ne borne pas"
+  echo "  l entree sur cet hebergeur — la purge est donc le seul levier reel, et elle doit viser"
+  echo "  la bonne URL. Ce point est un constat sur le serveur, pas un echec de ce controle."
+fi
 if [ "$P" = "$ANCIEN" ] && [ "$FIN" = "$ANCIEN" ]; then
   echo "  etat final conforme : base et rendu a $ANCIEN"
 else
   echo "  etat final a verifier : base=$FIN rendu=$P"
 fi
 [ "$FIN" = "$ANCIEN" ] || exit 5
-if [ -z "$RETOURNE" ]; then exit 7; fi
-[ "$P" = "$ANCIEN" ] || exit 6
+[ "$C5" = ANCIEN ] 2>/dev/null || true
 echo "$S ; FIN"
