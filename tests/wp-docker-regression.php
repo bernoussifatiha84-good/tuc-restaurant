@@ -125,6 +125,28 @@ try {
         'HSTS n’est jamais émis sans HTTPS vérifié');
     $assert(!array_key_exists('Strict-Transport-Security', TUC_Security_Headers::headers_for(true, '')),
         'un environnement inconnu n’émet pas HSTS');
+
+    // Indexabilite : un environnement de test n'a aucune raison d'apparaitre dans
+    // Google, et l'inverse (un noindex qui partirait en production) est une
+    // disparition. Les deux tables sont donc testees dans les deux sens,
+    // environnement par environnement.
+    foreach (['local', 'development', 'staging'] as $envTest) {
+        $assert((TUC_Security_Headers::headers_for(true, $envTest)['X-Robots-Tag'] ?? '') === 'noindex'
+            && (TUC_Security_Headers::headers_for(false, $envTest)['X-Robots-Tag'] ?? '') === 'noindex',
+            'X-Robots-Tag: noindex est émis en ' . $envTest . ', HTTP comme en HTTPS');
+        $assert(TUC_Security_Headers::robots_for($envTest) === ['noindex' => true],
+            'la directive robots est posée en ' . $envTest);
+    }
+    foreach (['production', ''] as $envPublic) {
+        $assert(!array_key_exists('X-Robots-Tag', TUC_Security_Headers::headers_for(true, $envPublic)),
+            'aucun X-Robots-Tag en ' . ($envPublic ?: 'environnement inconnu') . ' : pas de noindex par accident');
+        $assert(TUC_Security_Headers::robots_for($envPublic) === [],
+            'aucune directive robots en ' . ($envPublic ?: 'environnement inconnu'));
+    }
+    $assert(has_filter('wp_robots', [TUC_Security_Headers::class, 'robots']) !== false,
+        'les directives robots sont branchées sur wp_robots');
+    $assert(apply_filters('xmlrpc_enabled', true) === false,
+        'XML-RPC est désactivé : le produit ne s’en sert pas, la surface reste un vecteur');
     $assert(TUC_Geo::distance2(33.5900, -7.6280, 33.5900, -7.6280) === 0.0
         && is_infinite(TUC_Geo::distance2(91, 0, 0, 0)), 'la distance géographique est métrique et rejette les coordonnées impossibles');
     $geoSorted = TUC_Geo::trier([
