@@ -43,8 +43,8 @@ $peutGererBoutique = current_user_can(TUC_Roles::CAP_MANAGE_RESTAURANT) || curre
             <label class="tuc-field"><span><?php esc_html_e('Nom du plat', 'tuc-core'); ?> <b>*</b></span><input id="tuc-item-name" name="title" type="text" maxlength="100" required autocomplete="off" placeholder="Ex. Tajine de poulet"></label>
             <label class="tuc-field"><span><?php esc_html_e('Description', 'tuc-core'); ?></span><textarea id="tuc-item-description" name="description" rows="3" maxlength="700" placeholder="Quelques mots sur votre plat"></textarea></label>
             <div class="tuc-field-row">
-              <label class="tuc-field"><span><?php esc_html_e('Prix (MAD)', 'tuc-core'); ?> <b>*</b></span><input id="tuc-item-price" name="price" type="number" min="0" max="100000" step="0.01" inputmode="decimal" required placeholder="0.00"></label>
-              <label class="tuc-field"><span><?php esc_html_e('Promotion (%)', 'tuc-core'); ?></span><input id="tuc-item-promo" name="promo_pct" type="number" min="0" max="100" step="1" inputmode="numeric" value="0"></label>
+              <label class="tuc-field"><span><?php esc_html_e('Prix (MAD)', 'tuc-core'); ?> <b>*</b></span><input id="tuc-item-price" name="price" type="text" inputmode="decimal" maxlength="16" autocomplete="off" required placeholder="45,50" aria-describedby="tuc-item-price-aide"><small id="tuc-item-price-aide">Virgule ou point acceptés, 2 chiffres maximum après.</small></label>
+              <label class="tuc-field"><span><?php esc_html_e('Promotion (%)', 'tuc-core'); ?></span><input id="tuc-item-promo" name="promo_pct" type="text" inputmode="numeric" maxlength="3" autocomplete="off" value="0"></label>
             </div>
             <label class="tuc-toggle"><input id="tuc-item-available" type="checkbox" checked><span class="tuc-toggle-ui"></span><span><?php esc_html_e('Disponible à la commande', 'tuc-core'); ?></span></label>
             <section class="tuc-options-editor" aria-labelledby="tuc-options-title">
@@ -78,8 +78,8 @@ $peutGererBoutique = current_user_can(TUC_Roles::CAP_MANAGE_RESTAURANT) || curre
       <div class="tuc-panel-heading"><div><p class="tuc-eyebrow"><?php esc_html_e('PARAMÈTRES', 'tuc-core'); ?></p><h2><?php esc_html_e('Votre boutique', 'tuc-core'); ?></h2></div></div>
       <form id="tuc-store-settings" class="tuc-settings-card">
         <label class="tuc-toggle"><input id="tuc-store-open" type="checkbox" checked><span class="tuc-toggle-ui"></span><span><?php esc_html_e('Accepter les commandes', 'tuc-core'); ?></span></label>
-        <div class="tuc-field-row"><label class="tuc-field"><span><?php esc_html_e('Minimum de commande (MAD)', 'tuc-core'); ?></span><input id="tuc-store-minimum" type="number" min="0" max="50000" step="0.01" inputmode="decimal"></label>
-          <label class="tuc-field"><span><?php esc_html_e('Frais de livraison (MAD)', 'tuc-core'); ?></span><input id="tuc-store-fee" type="number" min="0" max="10000" step="0.01" inputmode="decimal"></label></div>
+        <div class="tuc-field-row"><label class="tuc-field"><span><?php esc_html_e('Minimum de commande (MAD)', 'tuc-core'); ?></span><input id="tuc-store-minimum" type="text" inputmode="decimal" maxlength="16" autocomplete="off" placeholder="0,00"></label>
+          <label class="tuc-field"><span><?php esc_html_e('Frais de livraison (MAD)', 'tuc-core'); ?></span><input id="tuc-store-fee" type="text" inputmode="decimal" maxlength="16" autocomplete="off" placeholder="0,00"></label></div>
         <fieldset class="tuc-mode-settings"><legend><?php esc_html_e('Modes de service', 'tuc-core'); ?></legend>
           <label><input type="checkbox" name="mode" value="livraison"> <?php esc_html_e('Livraison', 'tuc-core'); ?></label>
           <label><input type="checkbox" name="mode" value="emporter"> <?php esc_html_e('À emporter', 'tuc-core'); ?></label>

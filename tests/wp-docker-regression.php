@@ -108,6 +108,8 @@ try {
     // en « staging » (pour laisser passer le seed de démonstration) retire HSTS :
     // cet effet de bord doit être un contrat testé, pas une découverte en prod.
     $assert(has_action('send_headers', [TUC_Security_Headers::class, 'send']) !== false, 'les en-têtes de sécurité sont branchés sur send_headers');
+$assert(has_filter('rest_post_dispatch', [TUC_Security_Headers::class, 'tune_menu_response']) !== false, 'la duree de cache du menu est branchee sur rest_post_dispatch');
+$assert(has_action('updated_post_meta', [TUC_Security_Headers::class, 'purge_menu_on_price_change']) !== false, 'la purge du menu est declenchee a chaque ecriture de prix');
     $headerEnvironments = ['production', 'staging', 'development', 'local', ''];
     foreach ($headerEnvironments as $headerEnvironment) {
         $emitted = TUC_Security_Headers::headers_for(true, $headerEnvironment);
@@ -117,7 +119,55 @@ try {
             && ($emitted['Permissions-Policy'] ?? '') === 'geolocation=(self), camera=(), microphone=()',
             'les en-têtes invariants sont émis quel que soit l’environnement (' . ($headerEnvironment ?: 'inconnu') . ')');
     }
-    $assert(TUC_Security_Headers::headers_for(true, 'production')['Strict-Transport-Security'] === 'max-age=31536000',
+    $sans_fatal = true;
+try {
+    // Position reelle des arguments du hook : cle en 3e, valeur en 4e (et une valeur
+    // qui peut etre un tableau, comme pour tuc_options).
+    TUC_Security_Headers::purge_menu_on_price_change(0, 0, 'tuc_prix', ['un tableau']);
+    TUC_Security_Headers::purge_menu_on_price_change(0, 0, 'tuc_options', 'x');
+} catch (\Throwable $e) {
+    $sans_fatal = false;
+    $trace[] = 'purge_menu_on_price_change a leve : ' . $e->getMessage();
+}
+$assert($sans_fatal, 'purge_menu_on_price_change suit la signature reelle de updated_post_meta (cle en 3e, valeur en 4e)');
+$assert(is_array(TUC_Security_Headers::purge_requests_for('https://example.invalid/uat/wp-json/tuc/v1/menu/kfc')),
+    'la liste des demandes de purge est decidee separement (tableau, jamais une erreur)');
+$assert(TUC_Security_Headers::purge_requests_for('') === [] || is_array(TUC_Security_Headers::purge_requests_for('')),
+    'sans cache LiteSpeed installe, aucune purge pretendue : rien a appeler');
+$assert(count((array) apply_filters('xmlrpc_methods', ['system.listMethods' => 'x', 'wp.getUsersBlogs' => 'y'])) === 0,
+    'la table des methodes XML-RPC est videe : plus de catalogue, plus aucun appel');
+$assert(TUC_Security_Headers::menu_cache_headers(false)['Cache-Control'] === 'no-cache',
+    'le menu public ne se stocke plus cote navigateur : le panier relit a la source');
+$assert(TUC_Security_Headers::menu_cache_headers(false)['X-LiteSpeed-Cache-Control'] === 'max-age=60',
+    'LiteSpeed, lui, garde une copie de 60 s au lieu de 7 jours');
+$assert(TUC_Security_Headers::menu_cache_headers(true) === ['Cache-Control' => 'no-store'],
+    'une erreur de menu ne se met jamais en cache');
+$assert(TUC_Security_Headers::is_menu_route('/tuc/v1/menu/kfc') && !TUC_Security_Headers::is_menu_route('/tuc/v1/pro/menu'),
+    'seule la route publique du menu est concernee');
+$assert(null === TUC_Security_Headers::menu_purge_path('kfc', true) && null === TUC_Security_Headers::menu_purge_path("kfc'\nX"),
+    'aucune purge promise depuis un contexte sans reponse, et aucun slug douteux');
+// L'URI purgee doit etre l'URL que le navigateur rappelle. C'est la que le test ne doit plus
+// ressembler a la logique testee : comparer deux chaines construites pareil n'aurait rien vu.
+$assert(TUC_Security_Headers::menu_purge_path('kfc') === rest_url('tuc/v1/menu/kfc'),
+    'l URI de purge est exactement l URL REST du menu public');
+$assert(TUC_Security_Headers::menu_purge_path('kfc') !== home_url(TUC_Security_Headers::MENU_ROUTE . 'kfc'),
+    'et pas la racine du site colle au prefixe de route : ce chemin la repond 404, pas menu');
+
+// La liste de purge doit couvrir la page rendue, pas seulement la route JSON : c'est
+// elle que le client lit, et c'est elle qui restait fraiche une semaine.
+$assert(
+    ['/a', '/b', '/c'] === TUC_Security_Headers::purge_urls_for('/a', '/b', '/c'),
+    'prix modifie -> purge de la route JSON, de la fiche du plat ET de la page du restaurant'
+);
+$assert(
+    ['/a'] === TUC_Security_Headers::purge_urls_for('/a', '', '/a'),
+    'une URI deja listee ne doit pas etre purgee deux fois (deux appels = deux risques de course)'
+);
+$assert(
+    [] === TUC_Security_Headers::purge_urls_for('', '', ''),
+    'aucune URI exploitable -> aucun appel de purge, et surtout pas un appel sur une chaine vide'
+);
+$assert(TUC_Security_Headers::headers_for(true, 'production')['Strict-Transport-Security'] === 'max-age=31536000',
         'HSTS est émis en production sur HTTPS');
     $assert(!array_key_exists('Strict-Transport-Security', TUC_Security_Headers::headers_for(true, 'staging')),
         'HSTS est retiré en staging : l’UAT ne doit pas épingler les navigateurs en HTTPS');
@@ -125,6 +175,28 @@ try {
         'HSTS n’est jamais émis sans HTTPS vérifié');
     $assert(!array_key_exists('Strict-Transport-Security', TUC_Security_Headers::headers_for(true, '')),
         'un environnement inconnu n’émet pas HSTS');
+
+    // Indexabilite : un environnement de test n'a aucune raison d'apparaitre dans
+    // Google, et l'inverse (un noindex qui partirait en production) est une
+    // disparition. Les deux tables sont donc testees dans les deux sens,
+    // environnement par environnement.
+    foreach (['local', 'development', 'staging'] as $envTest) {
+        $assert((TUC_Security_Headers::headers_for(true, $envTest)['X-Robots-Tag'] ?? '') === 'noindex'
+            && (TUC_Security_Headers::headers_for(false, $envTest)['X-Robots-Tag'] ?? '') === 'noindex',
+            'X-Robots-Tag: noindex est émis en ' . $envTest . ', HTTP comme en HTTPS');
+        $assert(TUC_Security_Headers::robots_for($envTest) === ['noindex' => true],
+            'la directive robots est posée en ' . $envTest);
+    }
+    foreach (['production', ''] as $envPublic) {
+        $assert(!array_key_exists('X-Robots-Tag', TUC_Security_Headers::headers_for(true, $envPublic)),
+            'aucun X-Robots-Tag en ' . ($envPublic ?: 'environnement inconnu') . ' : pas de noindex par accident');
+        $assert(TUC_Security_Headers::robots_for($envPublic) === [],
+            'aucune directive robots en ' . ($envPublic ?: 'environnement inconnu'));
+    }
+    $assert(has_filter('wp_robots', [TUC_Security_Headers::class, 'robots']) !== false,
+        'les directives robots sont branchées sur wp_robots');
+    $assert(apply_filters('xmlrpc_enabled', true) === false,
+        'XML-RPC est désactivé : le produit ne s’en sert pas, la surface reste un vecteur');
     $assert(TUC_Geo::distance2(33.5900, -7.6280, 33.5900, -7.6280) === 0.0
         && is_infinite(TUC_Geo::distance2(91, 0, 0, 0)), 'la distance géographique est métrique et rejette les coordonnées impossibles');
     $geoSorted = TUC_Geo::trier([
@@ -1209,6 +1281,61 @@ try {
     $sixth['tel'] = $ratePhone;
     $sixth['cle'] = 'rate-' . $suffix . '-6';
     $assert($rest('/tuc/v1/commande', $sixth)->get_status() === 429, 'la sixième commande en dix minutes est limitée');
+
+    // ── Montants saisis par un humain : la virgule ne doit plus multiplier un prix par 100.
+    // Régression du 2026-11-12. Le champ prix était un input[type=number] : taper « 45,50 » y
+    // laissait « 4550 », le contrôle natif répondait badInput=false et checkValidity()=true, et
+    // le plat partait publié à 4 550 MAD sans un seul avertissement. Les bornes 0..100000 ne
+    // pouvaient rien détecter — 4550 est dans les bornes. Ce qui protège désormais :
+    // TUC_Espace_Pro::normaliser_montant(), qui lit ce que l’humain a écrit et refuse, en le
+    // disant, ce qu’il ne peut pas lire. Le test est là parce qu’un correctif sans garde écrite
+    // revient au commit suivant.
+    $casLus = [
+        ['45,50', 45.5], ['45.50', 45.5], ['45.5', 45.5], ['45', 45.0], ['0', 0.0],
+        ['1 234', 1234.0], ["1\u{00A0}234", 1234.0], ["1\u{2019}234", 1234.0],
+        ['1.234,56', 1234.56], [',50', 0.5], ['45,', 45.0], ['0,00', 0.0],
+        ['99999,99', 99999.99], [' 45,50 ', 45.5], ['1 234,5', 1234.5],
+    ];
+    foreach ($casLus as [$saisie, $attendu]) {
+        $lu = TUC_Espace_Pro::normaliser_montant($saisie);
+        $assert($lu !== null && abs($lu - $attendu) < 0.001, sprintf('montant « %s » lu comme %.2f', $saisie, $attendu));
+    }
+    // Rétrocompatibilité : un nombre reçu en JSON (imports, API tierces) traverse sans être relu.
+    $assert(TUC_Espace_Pro::normaliser_montant(4550) === 4550.0, 'un nombre JSON garde sa valeur, il n’est pas relu comme du texte');
+    // Ce qui est ambigu est refusé et expliqué, jamais deviné : « 1,234 » vaut 1234 pour un
+    // francophone et 1,234 pour un anglophone, aucun contexte ne tranche.
+    foreach (['1,234', '45,500', '45,5,5', '1.2.3', '-5', 'abc', '', '45€', '1e3', '12345678'] as $refus) {
+        $assert(TUC_Espace_Pro::normaliser_montant($refus) === null, sprintf('« %s » est refusé au lieu d’être deviné', $refus));
+    }
+    $assert(str_contains(TUC_Espace_Pro::message_montant('45,5,5', 'prix'), '45,50'), 'le message de refus dit comment réécrire');
+
+    // Et de bout en bout, par le corps JSON que le navigateur du restaurateur envoie vraiment.
+    wp_set_current_user((int) $ownerUserId);
+    $soclePlat = ['description' => '', 'promo_pct' => 0, 'available' => true, 'status' => 'publish', 'options' => ['version' => 2, 'groups' => []]];
+    $requeteVirgule = new WP_REST_Request('POST', '/tuc/v1/pro/menu');
+    $requeteVirgule->set_body((string) wp_json_encode(array_merge($soclePlat, [
+        'title' => 'Plat à la virgule ' . $suffix, 'price' => '45,50', 'promo_pct' => '10',
+    ])));
+    $requeteVirgule->set_header('Content-Type', 'application/json');
+    $cree = TUC_Espace_Pro::creer_plat($requeteVirgule);
+    $assert($cree instanceof WP_REST_Response, 'un plat saisi « 45,50 » est accepté par la route pro');
+    if ($cree instanceof WP_REST_Response) {
+        $idPlatVirgule = (int) ($cree->get_data()['id'] ?? 0);
+        $created['items'][] = $idPlatVirgule;
+        $assert($cree->get_status() === 201, 'création d’un plat à la virgule : HTTP 201');
+        $assert(abs((float) get_post_meta($idPlatVirgule, 'tuc_prix', true) - 45.5) < 0.001, 'tuc_prix enregistré à 45,5 — et non 4550');
+        $assert((int) get_post_meta($idPlatVirgule, 'tuc_promo_pct', true) === 10, 'une promotion écrite « 10 » suit la même lecture');
+    }
+    $requeteIllisible = new WP_REST_Request('POST', '/tuc/v1/pro/menu');
+    $requeteIllisible->set_body((string) wp_json_encode(array_merge($soclePlat, [
+        'title' => 'Plat illisible ' . $suffix, 'price' => '45,5,5',
+    ])));
+    $requeteIllisible->set_header('Content-Type', 'application/json');
+    $refuse = TUC_Espace_Pro::creer_plat($requeteIllisible);
+    $assert($refuse instanceof WP_Error && (int) ($refuse->get_error_data()['status'] ?? 0) === 422,
+        'une écriture illisible est refusée en 422, elle n’est pas publiée');
+    $assert($refuse instanceof WP_Error && str_contains($refuse->get_error_message(), '45,50'),
+        'le refus explique comment réécrire le montant');
 
     WP_CLI::success('Tous les tests de régression WordPress/TUC sont passés.');
 } finally {

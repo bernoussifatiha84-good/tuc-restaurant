@@ -578,6 +578,51 @@ async function main() {
     assert.equal(await fallbackPage.locator('#tuc-order-success').isVisible(), false, 'aucune commande vide n’est créée');
     await modifierPlat(managerPage, itemId, { available: true, price: 20 });
 
+    // 9 bis. T5 : un prix enregistre depuis l'espace pro doit atteindre le client dont le
+    // navigateur a DEJA la page en cache. Garde-fou contre la serie max-age=604800 : la
+    // relecture cote client (no-store + no-cache, 0.8.21) ne sert a rien si le HTML rendu,
+    // lui, reste frais une semaine — c'est lui qui porte les prix (56 a 60 occurrences
+    // monetaires mesurees dans /uat/menu/kfc/), et c'est lui que la purge de 0.8.22 doit toucher.
+    checkpoint = 'scénario 9 bis · prix modifié par le gérant, visible au client qui a la page en cache';
+    const cacheContext = await browser.newContext();
+    const cachedPage = await cacheContext.newPage();
+    await cachedPage.goto(`${baseUrl}/tuc-mobile-e2e/`, { waitUntil: 'networkidle' });
+    const carteClient = () => cachedPage.locator('.tuc-client-card').filter({ hasText: 'Plat initial E2E' }).innerText();
+    const renduAvant = (await carteClient()).replace(/\s+/g, ' ');
+    assert(renduAvant.includes('20'), `le client part bien du prix retabli a 20 : ${renduAvant.slice(0, 90)}`);
+    await modifierPlat(managerPage, itemId, { price: 41 });
+    const recharge = await cachedPage.reload({ waitUntil: 'networkidle' });
+    const renduApres = (await carteClient()).replace(/\s+/g, ' ');
+    assert(renduApres.includes('41'), `le nouveau prix est rendu au rechargement : ${renduApres.slice(0, 90)}`);
+    assert(renduAvant !== renduApres, 'le rendu public a change, pas seulement le panier du client');
+    // Pas d'assertion sur Cache-Control ici, et c'est voulu : le plugin ne retouche que
+    // la reponse JSON de /tuc/v1/menu/ (rest_post_dispatch), pas le HTML de la page.
+    // Les en-tetes sont verifies la ou ils sont decides, dans tests/wp-docker-regression.php.
+    await modifierPlat(managerPage, itemId, { price: 20 });
+    await cachedPage.reload({ waitUntil: 'networkidle' });
+    const renduRetabli = (await carteClient()).replace(/\s+/g, ' ');
+    assert(renduRetabli.includes('20') && !renduRetabli.includes('41'),
+        `la purge joue dans les deux sens, le prix retabli revient : ${renduRetabli.slice(0, 90)}`);
+    await cacheContext.close();
+
+    // 9 ter. L'URI que le plugin purge doit etre celle que le navigateur rappelle. Ce n'etait
+    // pas le cas, et aucun test ne pouvait le voir : la liste d'URI etait comparee a elle-meme.
+    // Mesure du 13/11 sur /uat : home_url('/tuc/v1/menu/kfc') repond 404 en HTML, le JSON vit
+    // sous /wp-json/. Une purge calculee sur la premiere ne touche aucune entree de cache.
+    checkpoint = 'scénario 9 ter · l’URI de purge désigne la route REST vivante, pas un 404';
+    const santeRep = await fetch(`${baseUrl}/wp-json/tuc/v1/sante`);
+    const sante = await santeRep.json();
+    const uriPurge = String(sante.menu_purge_uri || '');
+    assert(uriPurge.includes('/tuc/v1/menu/controle-de-purge'),
+        `le rapport de sante expose l’URI de purge du menu : ${uriPurge.slice(0, 96)}`);
+    assert(!uriPurge.startsWith(`${baseUrl}/tuc/v1/menu/`),
+        `l’URI n’est pas le chemin home_url qui repond 404 : ${uriPurge.slice(0, 96)}`);
+    const purgeRep = await fetch(uriPurge);
+    const purgeType = String(purgeRep.headers.get('content-type') || '');
+    assert(purgeType.includes('application/json'),
+        `l’URI de purge repond en JSON (${purgeRep.status} ${purgeType}) ; sur un 404 HTML elle ne purgerait rien`);
+    console.log('PASS scénario 9 ter : l’URI de purge est une URL REST vivante, pas un 404 HTML');
+
     // 10. File restaurant : le personnel prend en charge la commande et le client suit les étapes sans données privées.
     checkpoint = 'scénario 10 · commande visible en caisse et suivi client';
     await fallbackPage.reload({ waitUntil: 'networkidle' });
@@ -615,6 +660,7 @@ async function main() {
     console.log('PASS scénarios 6–7: compte client retrouvé, GPS refusé et repli vers le retrait');
     console.log('PASS scénario 8: perte de réponse réseau, rechargement et reprise idempotente sans doublon');
     console.log('PASS scénario 9: prix actualisé avec reconfirmation et plat épuisé retiré du panier');
+    console.log('PASS scénario 9 bis : prix enregistré dans l’espace pro rendu au client qui a déjà la page en cache, puis rétabli');
     console.log('PASS espace pro: GPS et erreurs, repère Maps prioritaire, repli @, coordonnées saisies, lien court refusé et persistance REST');
     console.log('PASS scénario 10: caisse fait progresser la commande, suivi client actualisé sans données privées');
   } catch (error) {

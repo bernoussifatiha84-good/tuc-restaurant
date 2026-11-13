@@ -490,6 +490,24 @@ jobs:
             exit 1
           }
 
+          # Le controle qui aurait manque le bug pendant cinq versions. L'URI que le module met
+          # dans sa liste de purge doit repondre en JSON : si elle designe un 404, la purge est
+          # un no-op invisible, et les tests portes sur la liste d'URI restaient verts.
+          # JSON de WordPress : les / sont echappes en \/. Sans ce decodage, le curl
+          # suivant demande une URL jalonnee d antislashs et ne repondpas en JSON —
+          # ce qui est arrive au run 43489551016, sur un deploiement pourtant bon.
+          PURGE_URI=$(printf '%s' "$BODY" | sed -n 's/.*"menu_purge_uri":"\([^"]*\)".*/\1/p' | tr -d '\\')
+          if [ -z "$PURGE_URI" ]; then
+            echo "::warning::menu_purge_uri absent du rapport de santé : l'URI de purge n'a pas pu être vérifiée sur cette version."
+          else
+            HDRS=$(curl -sS -o /dev/null -D - --max-time 20 "$PURGE_URI" 2>/dev/null | tr -d '\r' || true)
+            if ! printf '%s\n' "$HDRS" | grep -qi 'content-type: *application/json'; then
+              echo "::error::L'URI de purge $PURGE_URI ne repond pas en JSON. En-tetes recus : $(printf '%s' "$HDRS" | tr '\n' ' ' | cut -c1-150)"
+              exit 1
+            fi
+            echo "URI de purge verifiee sur $ENV_NAME : $PURGE_URI repond en JSON."
+          fi
+
           {
             echo "### ✅ $ENV_NAME déployé"
             echo ""
