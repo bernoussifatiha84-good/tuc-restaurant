@@ -2,7 +2,7 @@
 /**
  * Plugin Name: TUC Market Core
  * Description: Cœur métier TUC : fiches restaurant, quartiers, commandes, QR de table, santé du site. Comme partikulier-core, il porte le module de santé que le déploiement interroge.
- * Version: 0.8.15
+ * Version: 0.8.16
  * Requires at least: 6.4
  * Requires PHP: 8.1
  * Author: TUC
@@ -15,7 +15,7 @@ if (!defined('ABSPATH')) {
     exit;
 }
 
-const TUC_CORE_VERSION = '0.8.15';
+const TUC_CORE_VERSION = '0.8.16';
 const TUC_CORE_FILE    = __FILE__;
 define('TUC_CORE_DIR', plugin_dir_path(__FILE__));
 define('TUC_CORE_URL', plugin_dir_url(__FILE__));
