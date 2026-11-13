@@ -174,3 +174,52 @@ echo "  mode maintenance : $(wp maintenance-mode status --allow-root 2>&1 | tail
 echo "  plugin de cache present : $(ls wp-content/plugins 2>/dev/null | grep -ic litespeed) (litespeed)"
 echo "  drop-in presents : $(ls wp-content/ 2>/dev/null | grep -E '^(db\.php|object-cache\.php|advanced-cache\.php)$' | tr '\n' ' ')"
 echo "$S ; FIN DU PREFLIGHT (rien n'a ete modifie)"
+
+echo "$S ; 7. CE QUI BLOQUE, MESURE"
+echo "  --- wp-content/db-path.php : le pointeur pose par le drop-in"
+if [ -f wp-content/db-path.php ]; then
+  sed -n '1,24p' wp-content/db-path.php | sed -e 's/^/    /' -e 's/[A-Za-z0-9_]*\.sqlite/<fichier>/g'
+fi
+
+echo "  --- ou sont reellement les bases SQLite"
+find . -maxdepth 4 -name '*.sqlite*' -printf '%s o  %p\n' 2>/dev/null | sort -rn | head -6 | sed 's/^/    /'
+echo "    (total fichiers : $(find . -maxdepth 4 -name '*.sqlite*' 2>/dev/null | wc -l))"
+
+echo "  --- wp-config : les constantes DB, longueur seulement, jamais la valeur"
+if command -v wp >/dev/null 2>&1; then
+  wp config list --format=json --allow-root 2>/dev/null | php -r '
+    $j = json_decode(stream_get_contents(STDIN), true);
+    if (!is_array($j)) { echo "    (wp config list na rien rendu)\n"; exit(0); }
+    foreach (["DB_NAME","DB_USER","DB_PASSWORD","DB_HOST","DB_CHARSET"] as $k) {
+      if (!array_key_exists($k, $j)) { printf("    %-12s : absente\n", $k); continue; }
+      $v = $j[$k]["value"] ?? "";
+      $est_expr = is_string($v) && (stripos($v, "getenv") !== false || stripos($v, "$_ENV") !== false || $v === "x");
+      printf("    %-12s : %s\n", $k, $est_expr
+        ? "expression (getenv/placeholder) — value = " . substr((string) $v, 0, 46)
+        : strlen((string) $v) . " caractere(s)");
+    }'
+fi
+echo "  --- le PHP de CLI voit-il les variables d'environnement de l'hebergeur ?"
+php -r '
+$n = 0;
+foreach ($_ENV as $k => $v) { if (preg_match("/DB|MYSQL|WORDPRESS/i", (string) $k)) { $n++; echo "    $_ENV key : " . preg_replace("/[A-Za-z0-9]+/", "<v>", (string) $k) . "\n"; } }
+printf("    cles ENV candidates en CLI : %d | getenv(\"DB_USER\") : %s | getenv(\"MYSQL_USER\") : %s\n",
+  $n, getenv("DB_USER") === false ? "absente" : "PRESENTE", getenv("MYSQL_USER") === false ? "absente" : "PRESENTE");
+printf("    count(printenv) = %d\n", (int) trim((string) shell_exec("printenv | wc -l")));'
+echo "  --- ce que wp-cli lui-meme obtient comme identifiants (test decisif)"
+wp db check --allow-root 2>&1 | head -3 | sed 's/^/    /'
+wp db size --allow-root 2>&1 | head -2 | sed 's/^/    /'
+
+echo "  --- le sql_mode que le core retire (la reponse sur les dates nulles)"
+grep -n "incompatible_modes" -A 12 wp-includes/class-wpdb.php | sed -n '1,22p' | sed 's/^/    /'
+
+echo "  --- ce qui a sonne chez UpdraftPlus (seule extension tierce signalee)"
+grep -rnE "INSERT OR (IGNORE|REPLACE|ABORT)|[Pp]RAGMA |AUTOINCREMENT|strftime\(" wp-content/plugins/updraftplus --include='*.php' 2>/dev/null \
+  | head -3 | cut -c1-150 | sed 's/^/    /'
+
+echo "  --- themes et extensions desinstalles (le menage qui reduit la surface de bascule)"
+wp theme list --status=inactive --fields=name,version --allow-root 2>&1 | head -6 | sed 's/^/    /'
+echo "    tables orphanes candidate : $(php -r '
+$cfg = @file_get_contents("wp-config.php");
+echo "a compter apres bascule, la cible etant vide aujourd\x27hui";')"
+echo "$S ; FIN DU COMPLEMENT (toujours lecture seule)"
