@@ -54,7 +54,8 @@ final class TUC_Security_Headers
      * Pure decision table for the menu JSON cache headers, same shape as headers_for().
      *
      * A failed lookup must not be cached at all: a 404 for one bad slug should not
-     * shadow a real menu for a minute.
+     * shadow a real menu. The success case is `no-cache` for whoever reads the cart
+     * back, while LiteSpeed keeps serving from its own 60 s copy.
      *
      * @return array<string, string>
      */
@@ -65,10 +66,15 @@ final class TUC_Security_Headers
         }
 
         return [
-            // LiteSpeed reads its own override header; Cache-Control keeps every
-            // other cache (CDN, proxy, browser) to the same lifetime.
+            // LiteSpeed owns the lifetime, through its own override header. The
+            // browser is told `no-cache`, not `max-age`: the PWA re-reads this
+            // endpoint to refresh a cart after a 409 price conflict, and any
+            // browser-side freshness window — 60 s included — shows a wrong total
+            // at the only moment where one must not be wrong (CI run
+            // 43408480964, tests/checkout-scenarios.js:568). Revalidation is cheap:
+            // LiteSpeed still answers from its cache.
             'X-LiteSpeed-Cache-Control' => 'max-age=' . self::MENU_TTL,
-            'Cache-Control'             => 'public, max-age=' . self::MENU_TTL,
+            'Cache-Control'             => 'no-cache',
         ];
     }
 

@@ -379,7 +379,11 @@
 
   async function load() {
     try {
-      const response = await fetch(`${TUCClient.rest}menu/${encodeURIComponent(slug)}`, { credentials: 'same-origin' });
+      // no-store : ce fetch est aussi le moyen par lequel le panier se remet a jour
+      // apres un 409 « le prix a change ». Une reponse cachee par le navigateur
+      // afficherait un panier faux juste avant la confirmation — mesuree en CI par
+      // tests/checkout-scenarios.js (run 43408480964), apres l'en-tete max-age=60.
+      const response = await fetch(`${TUCClient.rest}menu/${encodeURIComponent(slug)}`, { credentials: 'same-origin', cache: 'no-store' });
       const data = await response.json().catch(() => ({}));
       if (!response.ok) throw new Error(data.message || 'Menu indisponible.');
       restaurant = data.restaurant;

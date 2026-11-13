@@ -132,8 +132,10 @@ try {
 $assert($sans_fatal, 'purge_menu_on_price_change suit la signature reelle de updated_post_meta (cle en 3e, valeur en 4e)');
 $assert(count((array) apply_filters('xmlrpc_methods', ['system.listMethods' => 'x', 'wp.getUsersBlogs' => 'y'])) === 0,
     'la table des methodes XML-RPC est videe : plus de catalogue, plus aucun appel');
-$assert(TUC_Security_Headers::menu_cache_headers(false)['Cache-Control'] === 'public, max-age=60',
-    'le menu public est re-cadre a 60 s de cache');
+$assert(TUC_Security_Headers::menu_cache_headers(false)['Cache-Control'] === 'no-cache',
+    'le menu public ne se stocke plus cote navigateur : le panier relit a la source');
+$assert(TUC_Security_Headers::menu_cache_headers(false)['X-LiteSpeed-Cache-Control'] === 'max-age=60',
+    'LiteSpeed, lui, garde une copie de 60 s au lieu de 7 jours');
 $assert(TUC_Security_Headers::menu_cache_headers(true) === ['Cache-Control' => 'no-store'],
     'une erreur de menu ne se met jamais en cache');
 $assert(TUC_Security_Headers::is_menu_route('/tuc/v1/menu/kfc') && !TUC_Security_Headers::is_menu_route('/tuc/v1/pro/menu'),
