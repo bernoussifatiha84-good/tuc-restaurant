@@ -58,17 +58,21 @@ cat > "$TMP/fenetre.php" <<'PHPEOF'
 $corps = @file_get_contents($argv[1]);
 if (false === $corps) { echo "corps absent\n"; exit(0); }
 $ancre = (string) $argv[2];
-$ancien = (string) $argv[3];
-$nouveau = (string) $argv[4];
 $pos = strpos($corps, $ancre);
 if (false === $pos) { echo "ANCRE ABSENTE DU CORPS : extraction non concluante\n"; exit(0); }
-$fen = substr($corps, $pos, 900);
-$nu = strip_tags($fen);
-preg_match_all('/[0-9]+(?:[.,][0-9]{1,2})?/', $nu, $m);
-$m = array_slice($m[0], 0, 10);
-$a = (false !== array_search($ancien, $m, true)) ? 'ANCIEN' : '-';
-$b = (false !== array_search($nouveau, $m, true)) ? 'NOUVEAU' : '-';
-printf("%s/%s  nombres lus : %s\n", $a, $b, implode(' ', $m));
+// Le prix peut preceder l'ancre (carte, puis lien) : la fenetre s'etend des deux cotes.
+$debut = max(0, $pos - 700);
+$fen = substr($corps, $debut, 1500);
+$brut = trim(preg_replace('/\s+/', ' ', strip_tags($fen)));
+$codes = array();
+foreach (array('ANCIEN' => (string) $argv[3], 'NOUVEAU' => (string) $argv[4]) as $nom => $v) {
+  $chiffres = preg_replace('/[^0-9]/', '', $v);
+  if ('' === $chiffres) { $codes[] = $nom . '?'; continue; }
+  // "79" doit matcher "79", "79,00" et "79.00", mais pas "1 179" ni "790".
+  $re = '/(?<![0-9])' . preg_quote($chiffres, '/') . '(?:[.,][0-9]{1,2})?(?![0-9])/';
+  $codes[] = preg_match($re, $brut) ? $nom : '-';
+}
+printf("%s  |  %s\n", implode(' ', $codes), substr($brut, 0, 120));
 PHPEOF
 
 cat > "$TMP/diff.php" <<'PHPEOF'
@@ -90,7 +94,7 @@ printf("    octets differents : %d (sur %s compares ; longueurs %d et %d)\n", $d
 PHPEOF
 
 lire_prix() { wp post meta get "$PLAT" tuc_prix --allow-root 2>/dev/null | tr -d '\r\n' | sed 's/^"//; s/"$//'; }
-corps() { curl -s -m 25 -o "$TMP/$3" -D "$TMP/h" -L "$2"; }
+corps() { curl -s -m 25 -o "$TMP/$2" -D "$TMP/h" -L "$1"; }
 entete() { grep -ai "^$1:" "$TMP/h" 2>/dev/null | head -1 | sed 's/\r$//'; }
 relver() { # $1 = libelle  $2 = fichier corps
   local f="$TMP/$2"
@@ -113,7 +117,8 @@ restore() {
 trap 'restore; rm -rf "$TMP"' EXIT INT TERM
 
 echo "$S ; 0. CE QUI TOURNE"
-wp plugin list --name=tuc-market-core --fields=version,status --format=csv --allow-root 2>&1 | tail -1 | sed 's/^/  plugin sur /uat : /'
+printf "  plugin deploye : "
+wp plugin list --name=tuc-market-core --fields=version,status --format=csv --allow-root 2>&1 | tail -1
 ANCIEN=$(lire_prix)
 case "$ANCIEN" in
   ''|*[!0-9.]*) echo "REFUS : valeur de prix non numerique ou absente ('$ANCIEN') — aucune ecriture"; exit 3;;
@@ -168,7 +173,15 @@ L3=$(php "$TMP/fenetre.php" "$TMP/03-json.html"  "$ANCRE" "$ANCIEN" "$NOUVEAU")
 L4=$(php "$TMP/fenetre.php" "$TMP/04-plein.html" "$ANCRE" "$ANCIEN" "$NOUVEAU")
 L5=$(php "$TMP/fenetre.php" "$TMP/05-fin.html"   "$ANCRE" "$ANCIEN" "$NOUVEAU")
 printf "  1 depart        %s\n  2 ecriture seule %s\n  3 purge JSON     %s\n  4 purge complete %s\n  5 restauration   %s\n" "$L1" "$L2" "$L3" "$L4" "$L5"
-cas() { case "$1" in *ANCIEN*) printf ANCIEN;; *NOUVEAU*) printf NOUVEAU;; *) printf INCONNU;; esac; }
+cas() {
+  local a=0 n=0
+  case "$1" in *ANCIEN*) a=1;; esac
+  case "$1" in *NOUVEAU*) n=1;; esac
+  if [ "$a" = 1 ] && [ "$n" = 1 ]; then printf AMBIGU
+  elif [ "$a" = 1 ]; then printf ANCIEN
+  elif [ "$n" = 1 ]; then printf NOUVEAU
+  else printf INCONNU; fi
+}
 C2=$(cas "$L2"); C3=$(cas "$L3"); C4=$(cas "$L4"); C5=$(cas "$L5")
 echo "  codes : depart=$(cas "$L1") ecriture=$C2 json=$C3 complet=$C4 resto=$C5"
 if [ "$C2" = ANCIEN ] && [ "$C3" = ANCIEN ] && [ "$C4" = NOUVEAU ] && [ "$C5" = ANCIEN ]; then
