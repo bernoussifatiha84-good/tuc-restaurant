@@ -17,7 +17,7 @@
 # utilisation : verif-litespeed.sh <racine-uat> <url-de-base> [id-plat]
 set -u
 RACINE="${1:-}"; BASE="${2:-}"; PLAT="${3:-13}"
-PAS="${TUC_PAS:-15}"; DUREE="${TUC_DUREE:-480}"
+PAS="${TUC_PAS:-15}"; DUREE="${TUC_DUREE:-150}"
 S="=============================================================="
 [ -n "$RACINE" ] && [ -d "$RACINE" ] || { echo "racine introuvable : $RACINE"; exit 2; }
 case "$RACINE" in */uat) ;; *) echo "REFUS : la racine doit finir par /uat ($RACINE)"; exit 2;; esac
@@ -79,9 +79,22 @@ PHPEOF
 
 lire_prix() { wp post meta get "$PLAT" tuc_prix --allow-root 2>/dev/null | tr -d '\r\n' | sed 's/^"//; s/"$//'; }
 JSON=""
+CODE="000"
+# Le 13/11 a 20:2x, le CDN de l'hebergeur (server: hcdn) a repondu 307 puis un 504 a une partie
+# des sondes : le releve devenait « PAS-DU-JSON » et le verdict tombait pour la mauvaise raison.
+# Trois tentatives, redirections suivies, et le code HTTP conserve pour que « inexploitable » se
+# lise comme tel au lieu de ressembler a un echec du correctif.
 fetch_json() { # $1 = fichier ou ecrire le corps ; laisse les en-tetes dans $TMP/h
-  curl -s -m 25 -o "$1" -D "$TMP/h" "$JSON"
-  printf "%s" "$(php "$TMP/prix.php" "$1" "$PLAT")";
+  local n pri
+  for n in 1 2 3; do
+    CODE=$(curl -sS -m 25 -L -o "$1" -w '%{http_code}' -D "$TMP/h" "$JSON" 2>/dev/null || echo 000)
+    pri=$(php "$TMP/prix.php" "$1" "$PLAT")
+    case "$pri" in PAS-DU-JSON|VIDE|JSON-INVALIDE|SANS-ITEMS|PLAT-ABSENT) sleep 5; continue;; esac
+    printf "%s" "$pri"
+    return 0
+  done
+  printf "INEXPLOITABLE"
+  return 1
 }
 entete() { grep -ai "^$1:" "$TMP/h" 2>/dev/null | head -1 | sed 's/\r$//'; }
 RELA_ID=""
@@ -130,7 +143,7 @@ t=0
 while [ "$t" -lt "$DUREE" ]; do
   P=$(fetch_json "$TMP/p.json")
   if [ -z "$RETOURNE" ] && [ "$P" = "$NOUVEAU" ]; then RETOURNE=$t; fi
-  printf "  t=%3ss %-8s %s | %s\n" "$t" "prix=$P" "$(entete 'x-litespeed-cache')" "$(entete 'age')"
+  printf "  t=%3ss prix=%-14s %s | HTTP %s\n" "$t" "$P" "$(entete 'x-litespeed-cache')" "$CODE"
   VU="$P"
   [ -n "$RETOURNE" ] && break
   t=$(( t + PAS )); sleep "$PAS"
@@ -146,6 +159,11 @@ P=$(fetch_json "$TMP/a.json"); printf "  apres purge : prix=%s | %s\n" "$P" "$(e
 P3="$P"
 PURGE_EFFICACE="non"
 [ "$P3" = "$NOUVEAU" ] && PURGE_EFFICACE="oui"
+if [ "$P3" = "INEXPLOITABLE" ]; then
+  echo "  releve de la phase 3 inexploitable (dernier HTTP $CODE) : la mesure ne peut rien conclure."
+  echo "  Ce n'est pas un echec du correctif, c'est l'observateur qui n'a pas eu de reponse exploitable."
+  exit 8
+fi
 
 echo "$S ; 4. RESTAURATION"
 wp post meta update "$PLAT" tuc_prix "$ANCIEN" --allow-root >/dev/null 2>&1
