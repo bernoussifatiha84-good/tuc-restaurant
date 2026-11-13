@@ -223,3 +223,87 @@ echo "    tables orphanes candidate : $(php -r '
 $cfg = @file_get_contents("wp-config.php");
 echo "a compter apres bascule, la cible etant vide aujourd\x27hui";')"
 echo "$S ; FIN DU COMPLEMENT (toujours lecture seule)"
+
+echo "$S ; 8. DERNIERES INCONNUES (pointeur, credentiels, etat courant de la base)"
+echo "  --- wp-content/db-path.php, lu en entier (200 o : un chemin, pas un secret)"
+if [ -r wp-content/db-path.php ]; then
+  cat wp-content/db-path.php | sed 's/^/    /'
+else
+  echo "    illisible : $(ls -l wp-content/db-path.php 2>&1 | tail -1)"
+fi
+
+cat > "$T/credentiels.php" <<'PHPEOF'
+<?php
+$t = @file_get_contents('wp-config.php');
+if ($t === false) { echo "    wp-config.php illisible\n"; exit(0); }
+$clés = array('DB_NAME', 'DB_USER', 'DB_PASSWORD', 'DB_HOST', 'DB_CHARSET', 'DB_COLLATE');
+foreach ($clés as $k) {
+  if (!preg_match('/define\(\s*[\'"]' . $k . '[\'"]\s*,\s*(.+?)\s*\)\s*;/s', $t, $m)) {
+    printf("    %-12s : ABSENT du fichier\n", $k);
+    continue;
+  }
+  $v = trim($m[1]);
+  if (preg_match('/^getenv\s*\(/i', $v) || strpos($v, '$_ENV') !== false || strpos($v, '$_SERVER') !== false) {
+    printf("    %-12s : expression d'environnement, %d octets — le PHP de CLI ne la resout pas\n", $k, strlen($v));
+    continue;
+  }
+  if (preg_match('/^[\'"](.*)[\'"]$/s', $v, $q)) {
+    $court = strlen($q[1]) <= 3 ? ' (valeur litterale : "' . $q[1] . '" — ce n est pas un identifiant exploitable)' : '';
+    printf("    %-12s : litteral de %d caractere(s)%s\n", $k, strlen($q[1]), $court);
+    continue;
+  }
+  printf("    %-12s : autre forme, %d octets\n", $k, strlen($v));
+}
+PHPEOF
+echo "  --- le bloc DB de wp-config.php : forme et longueur, jamais la valeur"
+php "$T/credentiels.php"
+
+cat > "$T/base-courante.php" <<'PHPEOF'
+<?php
+$pointeur = @file_get_contents('wp-content/db-path.php');
+$chemin = 'wp-content/database/.ht.04e43856d7780fa60a6240de78c3927a/.ht.sqlite';
+if ($pointeur !== false && preg_match('/[\'"]([^\'"]*\.sqlite)[\'"]/', $pointeur, $m)) {
+  $chemin = $m[1];
+}
+echo '    chemin retenu : ' . $chemin . "\n";
+if (!is_file($chemin)) { echo "    le pointeur ne designe pas un fichier existant\n"; exit(0); }
+printf("    taille : %d o | mtime : %s\n", filesize($chemin), date('Y-m-d H:i:s', filemtime($chemin)));
+try {
+  $p = new PDO('sqlite:' . $chemin);
+} catch (Throwable $e) {
+  echo '    ouverture : ' . $e->getMessage() . "\n";
+  exit(0);
+}
+$nt = (int) $p->query("SELECT count(*) FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'")->fetchColumn();
+$nl = 0; $detail = array();
+$liste = $p->query("SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%' ORDER BY name");
+foreach ($liste as $r) {
+  $nom = str_replace("'", "''", $r['name']);
+  $c = (int) $p->query('SELECT count(*) FROM "' . $nom . '"')->fetchColumn();
+  $nl += $c;
+  $detail[$r['name']] = $c;
+}
+printf("    tables : %d | lignes : %d\n", $nt, $nl);
+arsort($detail);
+$i = 0;
+foreach ($detail as $t => $c) {
+  if ($i++ >= 6) { break; }
+  printf("      %-28s %6d\n", $t, $c);
+}
+$ic = $p->query('PRAGMA integrity_check')->fetchAll(PDO::FETCH_COLUMN);
+echo '    integrity_check : ' . (implode(',', (array) $ic) ?: '(aucun resultat)') . "\n";
+echo '    journal_mode : ' . $p->query('PRAGMA journal_mode')->fetchColumn();
+echo ' | -wal : ' . (file_exists($chemin . '-wal') ? filesize($chemin . '-wal') . ' o' : 'absent') . "\n";
+$opt = $p->query("SELECT count(*) FROM wp_options")->fetchColumn();
+$po = $p->query("SELECT count(*) FROM wp_posts")->fetchColumn();
+$pm = $p->query("SELECT count(*) FROM wp_postmeta")->fetchColumn();
+printf("    wp_options : %d | wp_posts : %d | wp_postmeta : %d\n", $opt, $po, $pm);
+$px = $p->query("SELECT count(*) FROM wp_postmeta WHERE meta_key='_tuc_prix'")->fetchColumn();
+echo '    lignes _tuc_prix : ' . $px . "\n";
+PHPEOF
+echo "  --- la base SQLite courante, comptee en direct (pdo_sqlite est charge)"
+php "$T/base-courante.php"
+echo "  --- referentiel : la copie du 13/11 comparee a blanc par le convertisseur faisait"
+echo "      54 tables / 1 410 lignes / 613 options / 68 posts / 369 postmeta / 38 _tuc_prix."
+echo "      Si les chiffres au-dessus different, il faut re-exporter avant toute bascule."
+echo "$S ; FIN PREFLIGHT v3"
