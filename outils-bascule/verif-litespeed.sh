@@ -88,6 +88,7 @@ fetch_json() { # $1 = fichier ou ecrire le corps ; laisse les en-tetes dans $TMP
   local n pri
   for n in 1 2 3; do
     CODE=$(curl -sS -m 25 -L -o "$1" -w '%{http_code}' -D "$TMP/h" "$JSON" 2>/dev/null || echo 000)
+    printf '%s' "$CODE" > "$TMP/code"   # $() est une subshell : sans ce fichier, CODE meurt avec elle
     pri=$(php "$TMP/prix.php" "$1" "$PLAT")
     case "$pri" in PAS-DU-JSON|VIDE|JSON-INVALIDE|SANS-ITEMS|PLAT-ABSENT) sleep 5; continue;; esac
     printf "%s" "$pri"
@@ -143,7 +144,7 @@ t=0
 while [ "$t" -lt "$DUREE" ]; do
   P=$(fetch_json "$TMP/p.json")
   if [ -z "$RETOURNE" ] && [ "$P" = "$NOUVEAU" ]; then RETOURNE=$t; fi
-  printf "  t=%3ss prix=%-14s %s | HTTP %s\n" "$t" "$P" "$(entete 'x-litespeed-cache')" "$CODE"
+  printf "  t=%3ss prix=%-14s %s | HTTP %s\n" "$t" "$P" "$(entete 'x-litespeed-cache')" "$(cat "$TMP/code" 2>/dev/null || echo '?')"
   VU="$P"
   [ -n "$RETOURNE" ] && break
   t=$(( t + PAS )); sleep "$PAS"
@@ -160,7 +161,7 @@ P3="$P"
 PURGE_EFFICACE="non"
 [ "$P3" = "$NOUVEAU" ] && PURGE_EFFICACE="oui"
 if [ "$P3" = "INEXPLOITABLE" ]; then
-  echo "  releve de la phase 3 inexploitable (dernier HTTP $CODE) : la mesure ne peut rien conclure."
+  echo "  releve de la phase 3 inexploitable (dernier HTTP $(cat "$TMP/code" 2>/dev/null || echo '?')) : la mesure ne peut rien conclure."
   echo "  Ce n'est pas un echec du correctif, c'est l'observateur qui n'a pas eu de reponse exploitable."
   exit 8
 fi
