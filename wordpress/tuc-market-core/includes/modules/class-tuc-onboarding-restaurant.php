@@ -103,7 +103,13 @@ final class TUC_Onboarding_Restaurant
     public static function render_form(): string
     {
         ob_start(); ?>
-        <div class="tuc-onboarding" lang="fr">
+        <!-- lang="fr" est volontairement fige, et non derive de get_bloginfo('language') :
+             les libelles de ce formulaire sont des litteraux francais, donc traduits ou non le
+             texte announce reste du francais. Un essai du 13/11 (run 43421534697) a rendu le
+             formulaire dans la voix du site (anglais) : le segment capture portait
+             language=en-gb alors que la voix fr etait disponible dans le runner, et le job NVDA
+             a refuse — a juste titre. Le dir, lui, doit bien suivre is_rtl(). -->
+        <div class="tuc-onboarding" lang="fr" dir="<?php echo is_rtl() ? 'rtl' : 'ltr'; ?>">
           <section class="tuc-onboarding-card" aria-labelledby="tuc-onboarding-title">
             <p class="tuc-onboarding-kicker">TUC · Casablanca</p>
             <h1 id="tuc-onboarding-title">Votre restaurant, accompagné par notre équipe</h1>

@@ -17,6 +17,35 @@
   })[char]);
   const slug = (value) => String(value || '').normalize('NFD').replace(/[\u0300-\u036f]/g, '')
     .toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '').slice(0, 26);
+  /* Montant saisi par un humain : refuser plutot que deviner. Miroir exact de
+     TUC_Espace_Pro::normaliser_montant — sinon Number("45,50") = NaN et l'aperçu
+     afficherait 0,00 MAD en silence, ce qui est le meme degre de gravite que le bug corrige. */
+  const montant = (v) => {
+    if (typeof v === 'number') return Number.isFinite(v) ? v : NaN;
+    let s = String(v == null ? '' : v).replace(/[\u00A0\u202F\u2009\u200A\u2007\u2019\u2018\s]/g, '');
+    if (!s) return NaN;
+    const nbVirg = (s.match(/,/g) || []).length, nbPoint = (s.match(/\./g) || []).length;
+    if (nbVirg > 1 || nbPoint > 1) return NaN;
+    let dec = null;
+    if (nbVirg && nbPoint) dec = s.lastIndexOf(',') > s.lastIndexOf('.') ? ',' : '.';
+    else if (nbVirg) dec = ',';
+    else if (nbPoint) dec = '.';
+    if (!dec) return /^[0-9]{1,7}$/.test(s) ? parseFloat(s) : NaN;
+    const pos = s.lastIndexOf(dec);
+    let entier = s.slice(0, pos) || '0';
+    let fraction = s.slice(pos + 1) || '0';
+    const mil = dec === ',' ? '.' : ',';
+    if (entier.includes(mil)) {
+      const blocs = entier.split(mil);
+      const premier = blocs.shift();
+      if (!/^[0-9]{1,3}$/.test(premier)) return NaN;
+      if (!blocs.every((b) => /^[0-9]{3}$/.test(b))) return NaN;
+      entier = premier + blocs.join('');
+    }
+    if (!/^[0-9]{1,2}$/.test(fraction) || !/^[0-9]{1,7}$/.test(entier)) return NaN;
+    return parseFloat(entier + '.' + fraction);
+  };
+  const texteMontant = (v) => `Montant « ${String(v == null ? '' : v).trim()} » illisible. Écrivez par exemple 45,50 ou 1234 (2 chiffres au plus après la virgule).`;
   const money = (value) => `${Number(value || 0).toLocaleString('fr-MA', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} MAD`;
   const request = async (path, options = {}) => {
     const response = await fetch(TUCPro.rest + path, {
@@ -70,7 +99,7 @@
         return {
           id: row.dataset.choiceId || `${slug(choiceName) || 'choix'}-${choiceIndex + 1}`,
           name: choiceName,
-          price_delta: Number($('[data-choice-price]', row).value || 0),
+          price_delta: montant($('[data-choice-price]', row).value),
           available: $('[data-choice-available]', row).checked
         };
       });
@@ -115,7 +144,7 @@
     const row = document.createElement('div');
     row.className = 'tuc-choice-row';
     row.dataset.choiceId = choiceId;
-    row.innerHTML = `<input data-choice-name type="text" maxlength="60" placeholder="Nom du choix" value="${escapeHtml(choice.name || choice.nom || '')}" aria-label="Nom du choix"><input data-choice-price class="tuc-choice-price" type="number" min="0" max="10000" step="0.01" inputmode="decimal" placeholder="Supplément" value="${Number(choice.price_delta ?? choice.prix ?? 0)}" aria-label="Supplément en MAD"><label class="tuc-choice-enabled" title="Choix disponible"><input data-choice-available type="checkbox" ${choice.available === false ? '' : 'checked'}><span>Actif</span></label><button class="tuc-choice-remove" type="button" aria-label="Supprimer ce choix">×</button>`;
+    row.innerHTML = `<input data-choice-name type="text" maxlength="60" placeholder="Nom du choix" value="${escapeHtml(choice.name || choice.nom || '')}" aria-label="Nom du choix"><input data-choice-price class="tuc-choice-price" type="text" inputmode="decimal" maxlength="16" autocomplete="off" placeholder="Supplément" value="${Number(choice.price_delta ?? choice.prix ?? 0)}" aria-label="Supplément en MAD"><label class="tuc-choice-enabled" title="Choix disponible"><input data-choice-available type="checkbox" ${choice.available === false ? '' : 'checked'}><span>Actif</span></label><button class="tuc-choice-remove" type="button" aria-label="Supprimer ce choix">×</button>`;
     list.append(row);
     row.addEventListener('input', refreshConditions);
     $('.tuc-choice-remove', row).addEventListener('click', () => { row.remove(); refreshConditions(); updatePreview(); });
@@ -139,8 +168,8 @@
   function updatePreview() {
     const name = $('#tuc-item-name').value.trim() || 'Votre prochain plat';
     const description = $('#tuc-item-description').value.trim() || 'Votre description apparaîtra ici.';
-    const price = Number($('#tuc-item-price').value || 0);
-    const promo = Math.min(100, Math.max(0, Number($('#tuc-item-promo').value || 0)));
+    const price = montant($('#tuc-item-price').value);
+    const promo = Math.min(100, Math.max(0, Math.round(montant($('#tuc-item-promo').value) || 0)));
     const discounted = price * (100 - promo) / 100;
     const image = photoUrl || ($('#tuc-photo-preview').src || '');
     $('#tuc-preview-card').innerHTML = `${image && !$('#tuc-photo-preview').hidden ? `<img src="${escapeHtml(image)}" alt="">` : '<div class="tuc-preview-placeholder">🍽️</div>'}<div class="tuc-preview-copy"><h3>${escapeHtml(name)}</h3><p>${escapeHtml(description)}</p><strong>${money(discounted)}</strong>${promo ? `<del>${money(price)}</del>` : ''}</div>`;
@@ -421,8 +450,8 @@
     try {
       const restaurant = await request('restaurant', { method: 'PATCH', body: JSON.stringify({
         open: $('#tuc-store-open').checked,
-        minimum: Number($('#tuc-store-minimum').value),
-        fee: Number($('#tuc-store-fee').value),
+        minimum: montant($('#tuc-store-minimum').value),
+        fee: montant($('#tuc-store-fee').value),
         modes,
         tables: Number($('#tuc-store-tables').value)
       }) });
@@ -451,12 +480,16 @@
     hideNotice();
     let options;
     try { options = collectOptions(); } catch (error) { showNotice(error.message, true); return; }
+    const brutPrix = $('#tuc-item-price').value;
+    if (!Number.isFinite(montant(brutPrix))) { showNotice(texteMontant(brutPrix), true); return; }
+    const brutPromo = $('#tuc-item-promo').value;
+    if (String(brutPromo).trim() !== '' && !Number.isFinite(montant(brutPromo))) { showNotice(texteMontant(brutPromo), true); return; }
     const id = $('#tuc-item-id').value;
     const payload = {
       title: $('#tuc-item-name').value.trim(),
       description: $('#tuc-item-description').value.trim(),
-      price: Number($('#tuc-item-price').value),
-      promo_pct: Number($('#tuc-item-promo').value || 0),
+      price: montant($('#tuc-item-price').value),
+      promo_pct: Math.round(montant($('#tuc-item-promo').value) || 0),
       available: $('#tuc-item-available').checked,
       options,
       status

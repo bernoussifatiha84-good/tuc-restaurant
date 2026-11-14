@@ -137,8 +137,8 @@ elles violent les CGU WhatsApp et le numéro finit **banni**. On perdrait tous l
 
 | # | Manque | Pourquoi c'est bloquant |
 |---|---|---|
-| 1 | **Page `/connexion/`** qui consomme `?tuc_magie=` | le lien existe, la page n'existe pas encore |
-| 2 | **Le numéro WhatsApp réel du site** (aujourd'hui : `212600000000`, un placeholder) | évidemment |
+| 1 | ~~Page `/connexion/`~~ — **fait** | consommée le 12-11 : `?tuc_magie=` renvoie vers `/espace-pro/` (mesuré 2 236 ms, HTTP 200). La ligne « la page n'existe pas encore » etait fausse. |
+| 2 | Numéro WhatsApp du site | le formulaire public renvoie deja `wa.me/212640424412` (mesure 12-11) ; le placeholder `212600000000` cite ici est perime. |
 | 3 | **L'instance n8n** — elle exige un VPS, GitHub ne fait pas tourner n8n | décision VPS reportée |
 | 4 | Le **relais vers le WhatsApp du resto** | sinon le resto ne reçoit rien |
 | 5 | La **mémoire de commande** : le client ne peut pas écrire en 1 clic | le cœur du « zéro mot » |

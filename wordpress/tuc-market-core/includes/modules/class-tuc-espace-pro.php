@@ -361,8 +361,10 @@ final class TUC_Espace_Pro
         $minimum = $payload['minimum'] ?? (is_numeric($storedMinimum) ? $storedMinimum : 0);
         $fee = $payload['fee'] ?? (is_numeric($storedFee) ? $storedFee : 0);
         $tables = $payload['tables'] ?? (is_numeric($storedTables) ? $storedTables : 0);
-        if (!is_numeric($minimum) || (float) $minimum < 0 || (float) $minimum > 50000
-            || !is_numeric($fee) || (float) $fee < 0 || (float) $fee > 10000
+        $minimum = self::normaliser_montant($minimum);
+        $fee = self::normaliser_montant($fee);
+        if (null === $minimum || $minimum < 0 || $minimum > 50000
+            || null === $fee || $fee < 0 || $fee > 10000
             || !is_numeric($tables) || (float) $tables !== (float) (int) $tables || (int) $tables < 0 || (int) $tables > 500) {
             return new WP_Error('tuc_restaurant_fields', 'Minimum, frais ou nombre de tables invalide.', ['status' => 422]);
         }
@@ -386,8 +388,8 @@ final class TUC_Espace_Pro
             return new WP_Error('tuc_restaurant_open', 'L’état d’ouverture est invalide.', ['status' => 422]);
         }
 
-        update_post_meta($restaurant->ID, 'tuc_minimum', round((float) $minimum, 2));
-        update_post_meta($restaurant->ID, 'tuc_frais', round((float) $fee, 2));
+        update_post_meta($restaurant->ID, 'tuc_minimum', round($minimum, 2));
+        update_post_meta($restaurant->ID, 'tuc_frais', round($fee, 2));
         update_post_meta($restaurant->ID, 'tuc_tables', (int) $tables);
         if (array_key_exists('modes', $payload)) {
             update_post_meta($restaurant->ID, 'tuc_modes', $modes);
@@ -582,6 +584,94 @@ final class TUC_Espace_Pro
      * et pour l import. Dupliquer cette logique aurait fait diverger les deux
      * chemins — et c'est toujours l'import qu'on aurait oublié de corriger.
      */
+    /**
+     * Normalise un montant saisi par un humain (« 45,50 », « 45 550 », « 1.234,56 », « 1'234 »).
+     *
+     * Un <input type="number"> avalait la virgule AVANT l'envoi (le serveur recevait 4550 pour
+     * « 45,50 ») : le prix publié était multiplié par 100 sans aucun signal. Le champ est passé en
+     * texte, donc la saisie brute arrive ici et c'est ici qu'elle est interprétée. Règles, dans
+     * l'ordre :
+     *   1. un nombre (JSON, API) passe tel quel ;
+     *   2. espaces (dont insécable U+00A0 et fins U+202F/2009/200A/2007) et apostrophes
+     *      typographiques (1’234) sont des séparateurs de milliers ;
+     *   3. virgule ET point -> le séparateur final est le décimal, l'autre les milliers ;
+     *   4. virgule seule -> décimale (usage fr) ; point seul -> décimal (usage machine) ;
+     *   5. la partie décimale doit faire 1 ou 2 chiffres. Au-delà on REFUSE au lieu de deviner :
+     *      « 1,234 » vaut 1,23 ou 1 234 selon la personne, et toute déviation silencieuse est le
+     *      bug qu'on vient de corriger.
+     * Retourne null quand la saisie est refusée ; le message à montrer est dans message_montant().
+     */
+    public static function normaliser_montant($brut): ?float
+    {
+        if (\is_int($brut) || \is_float($brut)) {
+            return (float) $brut;
+        }
+        if (!\is_scalar($brut)) {
+            return null;
+        }
+        $s = \preg_replace('/[\x{00A0}\x{202F}\x{2009}\x{200A}\x{2007}\x{2019}\x{2018}\s]/u', '', \trim((string) $brut));
+        if (null === $s || '' === $s) {
+            return null;
+        }
+        if (\substr_count($s, ',') > 1 || \substr_count($s, '.') > 1) {
+            return null;
+        }
+        $dec = null;
+        if (false !== \strpos($s, ',') && false !== \strpos($s, '.')) {
+            $dec = \strrpos($s, ',') > \strrpos($s, '.') ? ',' : '.';
+        } elseif (false !== \strpos($s, ',')) {
+            $dec = ',';
+        } elseif (false !== \strpos($s, '.')) {
+            $dec = '.';
+        }
+        if (null === $dec) {
+            return \preg_match('/^[0-9]{1,7}$/', $s) ? (float) $s : null;
+        }
+        $pos = \strrpos($s, $dec);
+        $entier = \substr($s, 0, $pos);
+        $fraction = \substr($s, $pos + 1);
+        if ('' === $entier) {
+            $entier = '0';
+        }
+        if ('' === $fraction) {
+            // « 45, » ou « 45. » : separeur de fin laisse en cours de frappe, montant sans decimale.
+            $fraction = '0';
+        }
+        $mil = (',' === $dec) ? '.' : ',';
+        if (false !== \strpos($entier, $mil)) {
+            $blocs = \explode($mil, $entier);
+            $premier = \array_shift($blocs);
+            if (!\preg_match('/^[0-9]{1,3}$/', (string) $premier)) {
+                return null;
+            }
+            foreach ($blocs as $b) {
+                if (!\preg_match('/^[0-9]{3}$/', $b)) {
+                    return null;
+                }
+            }
+            $entier = $premier . \implode('', $blocs);
+        }
+        if (\preg_match('/^[\x{00A0}\x{202F}\s]?[0-9]{1,3}(?:[\x{00A0}\x{202F}\s][0-9]{3})*$/u', $fraction)) {
+            $fraction = \preg_replace('/[\x{00A0}\x{202F}\s]/u', '', $fraction);
+        }
+        if (!\preg_match('/^[0-9]{1,2}$/', (string) $fraction) || !\preg_match('/^[0-9]{1,7}$/', $entier)) {
+            return null;
+        }
+        return (float) ($entier . '.' . $fraction);
+    }
+
+    /** Message d'aide pour une saisie de montant refusée. */
+    public static function message_montant($brut, string $quoi = 'prix'): string
+    {
+        $vu = \is_scalar($brut) ? (string) $brut : '';
+        return \sprintf(
+            /* translators: 1: montant tel que saisi, 2: nom du champ */
+            \__( 'Montant %1$s illisible dans le %2$s. Écrivez par exemple 45,50 ou 1234 (jusqu’à 2 chiffres après la virgule).', 'tuc-core' ),
+            '"' . $vu . '"',
+            $quoi
+        );
+    }
+
     public static function valider_payload(array $payload, ?WP_Post $existing): array|WP_Error
     {
         $oldOptions = $existing ? get_post_meta($existing->ID, 'tuc_options', true) : [];
@@ -594,10 +684,17 @@ final class TUC_Espace_Pro
         $description = sanitize_textarea_field((string) $descriptionValue);
         $priceValue = $payload['price'] ?? ($existing ? get_post_meta($existing->ID, 'tuc_prix', true) : null);
         $promoValue = $payload['promo_pct'] ?? ($existing ? get_post_meta($existing->ID, 'tuc_promo_pct', true) : 0);
-        if ($title === '' || strlen($title) > 400 || strlen($description) > 4000 || !is_numeric($priceValue) || (float) $priceValue < 0 || (float) $priceValue > 100000) {
+        if ($title === '' || strlen($title) > 400 || strlen($description) > 4000) {
             return new WP_Error('tuc_menu_fields', 'Nom et prix valides requis.', ['status' => 422]);
         }
-        if (!is_numeric($promoValue) || (int) $promoValue < 0 || (int) $promoValue > 100) {
+        // Le prix passe par le normaliseur : la saisie humaine (virgule, espace de millier)
+        // doit etre comprise ici, pas devinee par le navigateur.
+        $prix = self::normaliser_montant($priceValue);
+        if (null === $prix || $prix < 0 || $prix > 100000) {
+            return new WP_Error('tuc_menu_fields', self::message_montant($priceValue, 'prix'), ['status' => 422]);
+        }
+        $promo = self::normaliser_montant($promoValue);
+        if (null === $promo || floor($promo) != $promo || (int) $promo < 0 || (int) $promo > 100) {
             return new WP_Error('tuc_promo', 'La promotion doit être comprise entre 0 et 100 %.', ['status' => 422]);
         }
         $options = TUC_Options::normaliser_definition($payload['options'] ?? $oldOptions);
@@ -619,8 +716,8 @@ final class TUC_Espace_Pro
         return [
             'title' => $title,
             'description' => $description,
-            'price' => round((float) $priceValue, 2),
-            'promo_pct' => (int) $promoValue,
+            'price' => round($prix, 2),
+            'promo_pct' => (int) $promo,
             'available' => rest_sanitize_boolean($availableValue),
             'status' => $status,
             'options' => $options,

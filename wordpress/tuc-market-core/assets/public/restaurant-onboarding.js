@@ -45,6 +45,19 @@
     event.preventDefault();
     if (!form.reportValidity()) return;
     status.textContent = 'Envoi de votre demande…';
+    // Le serveur met 1,5 a 4 s (mesure du 12-11, reseau non bride) : sans jauge le
+// mobile croit a un plantage et recharge, ce qui declenche le limiteur a 3/h.
+    const jauge = document.createElement('progress');
+    jauge.id = 'tuc-onboarding-progress';
+    jauge.setAttribute('aria-label', 'Envoi en cours');
+    status.appendChild(jauge);
+    const t0 = Date.now();
+    const tic = window.setInterval(() => {
+      const p = document.getElementById('tuc-onboarding-progress');
+      if (!p) { window.clearInterval(tic); return; }
+      const sec = Math.round((Date.now() - t0) / 1000);
+      if (sec >= 2 && status.firstChild) status.firstChild.textContent = `Envoi de votre demande… ${sec} s`;
+    }, 500);
     result.hidden = true;
     confirmed.hidden = true;
     form.setAttribute('aria-busy', 'true');
