@@ -58,6 +58,12 @@ final class TUC_Health
             'langues'     => [get_locale(), is_rtl() ? 'rtl' : 'ltr'],
             'woocommerce' => class_exists('WooCommerce') ? 'actif' : 'absent',
             'plugins_ko'  => $manques,
+            // L'URI que le module de cache est cense purger a chaque ecriture de prix.
+            // Exposee ici parce qu'un controle de deploiement peut la rappeler : c'est la
+            // seule facon de verifier qu'elle designe la route REST et non un 404.
+            'menu_purge_uri' => class_exists('TUC_Security_Headers')
+                ? (string) (TUC_Security_Headers::menu_purge_path('controle-de-purge') ?? 'aucune')
+                : 'module absent',
             'modules'     => [
                 'cpt_resto'    => post_type_exists('tuc_resto'),
                 'cpt_menu'     => post_type_exists('tuc_menu_item'),

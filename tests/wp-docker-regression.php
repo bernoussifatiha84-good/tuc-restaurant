@@ -146,6 +146,27 @@ $assert(TUC_Security_Headers::is_menu_route('/tuc/v1/menu/kfc') && !TUC_Security
     'seule la route publique du menu est concernee');
 $assert(null === TUC_Security_Headers::menu_purge_path('kfc', true) && null === TUC_Security_Headers::menu_purge_path("kfc'\nX"),
     'aucune purge promise depuis un contexte sans reponse, et aucun slug douteux');
+// L'URI purgee doit etre l'URL que le navigateur rappelle. C'est la que le test ne doit plus
+// ressembler a la logique testee : comparer deux chaines construites pareil n'aurait rien vu.
+$assert(TUC_Security_Headers::menu_purge_path('kfc') === rest_url('tuc/v1/menu/kfc'),
+    'l URI de purge est exactement l URL REST du menu public');
+$assert(TUC_Security_Headers::menu_purge_path('kfc') !== home_url(TUC_Security_Headers::MENU_ROUTE . 'kfc'),
+    'et pas la racine du site colle au prefixe de route : ce chemin la repond 404, pas menu');
+
+// La liste de purge doit couvrir la page rendue, pas seulement la route JSON : c'est
+// elle que le client lit, et c'est elle qui restait fraiche une semaine.
+$assert(
+    ['/a', '/b', '/c'] === TUC_Security_Headers::purge_urls_for('/a', '/b', '/c'),
+    'prix modifie -> purge de la route JSON, de la fiche du plat ET de la page du restaurant'
+);
+$assert(
+    ['/a'] === TUC_Security_Headers::purge_urls_for('/a', '', '/a'),
+    'une URI deja listee ne doit pas etre purgee deux fois (deux appels = deux risques de course)'
+);
+$assert(
+    [] === TUC_Security_Headers::purge_urls_for('', '', ''),
+    'aucune URI exploitable -> aucun appel de purge, et surtout pas un appel sur une chaine vide'
+);
 $assert(TUC_Security_Headers::headers_for(true, 'production')['Strict-Transport-Security'] === 'max-age=31536000',
         'HSTS est émis en production sur HTTPS');
     $assert(!array_key_exists('Strict-Transport-Security', TUC_Security_Headers::headers_for(true, 'staging')),
