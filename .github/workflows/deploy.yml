@@ -16,6 +16,9 @@ on:
         description: Opération à exécuter
         type: choice
         options:
+          - creneau-mysql-uat
+          - bascule-uat-mysql
+          - bascule-uat-mysql-executer
           - deploy
           - inventory-woocommerce
           - seed-demo
@@ -733,6 +736,205 @@ jobs:
           set -uo pipefail
           trap 'rm -f "$2"' EXIT
           bash "$2" "$1"
+          REMOTE
+
+  creneau_mysql_uat:
+    name: Creneau MySQL sur UAT (lecture seule)
+    if: ${{ github.event_name == 'workflow_dispatch' && inputs.operation == 'creneau-mysql-uat' }}
+    needs: [cible]
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+    environment: ${{ needs.cible.outputs.env }}
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Refuser toute cible qui n'est pas l'UAT
+        env:
+          ENV_NAME: ${{ needs.cible.outputs.env }}
+          SITE_URL: ${{ needs.cible.outputs.url }}
+          SSH_ROOT: ${{ needs.cible.outputs.root }}
+          URL_UAT: ${{ vars.URL_UAT }}
+          URL_PRD: ${{ vars.URL_PRD }}
+          ROOT_UAT: ${{ vars.ROOT_UAT }}
+          ROOT_PRD: ${{ vars.ROOT_PRD }}
+          ROOT_DEV: ${{ vars.ROOT_DEV }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          trim() { printf '%s' "$1" | sed 's:/*$::'; }
+          if [ "$ENV_NAME" != "uat" ]; then
+            echo "::error::creneau-mysql-uat n'accepte que la cible uat (recu : ${ENV_NAME:-vide}). Aucun acces tente."
+            exit 1
+          fi
+          root="$(trim "$SSH_ROOT")"
+          if [ "$(trim "${ROOT_UAT:-}")" != "$root" ]; then
+            echo "::error::ROOT_UAT ne correspond pas a la cible resolue ($root). Sondage annule."
+            exit 1
+          fi
+          case "$root" in
+            */uat) ;;
+            *) echo "::error::La racine resolue ne finit pas par /uat : $root. Sondage annule."; exit 1 ;;
+          esac
+          for pair in "URL_PRD:$SITE_URL" "ROOT_PRD:$root" "ROOT_DEV:$root"; do
+            key="${pair%%:*}"; val="${pair#*:}"; ref="$(trim "${!key:-}")"
+            if [ -n "$ref" ] && [ "$ref" = "$val" ]; then
+              echo "::error::La cible egale $key. Cet outil ne marche que sur l'UAT."
+              exit 1
+            fi
+          done
+          if [ -n "${URL_UAT:-}" ] && [ "$(trim "$URL_UAT")" != "$(trim "$SITE_URL")" ]; then
+            echo "::error::URL resolue differente de URL_UAT. Sondage annule."
+            exit 1
+          fi
+          echo "Cible acceptee pour le preflight : $root"
+
+
+      - name: Preparer la connexion SSH
+        env:
+          SSH_PRIVATE_KEY: ${{ secrets.SSH_PRIVATE_KEY }}
+          SSH_HOST: ${{ secrets.SSH_HOST }}
+          SSH_PORT: ${{ vars.SSH_PORT || '65002' }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p ~/.ssh
+          printf '%s\n' "$SSH_PRIVATE_KEY" > ~/.ssh/id_deploy
+          chmod 600 ~/.ssh/id_deploy
+          ssh-keygen -y -f ~/.ssh/id_deploy >/dev/null
+          ssh-keyscan -p "$SSH_PORT" -H "$SSH_HOST" >> ~/.ssh/known_hosts 2>/dev/null
+
+
+      - name: Linter les outils avant envoi
+        shell: bash
+        run: |
+          set -euo pipefail
+          bash -n outils-bascule/creneau-mysql.sh
+
+      - name: Sonder le creneau (aucune ecriture, aucun arret de site)
+        env:
+          SSH_PORT: ${{ vars.SSH_PORT || '65002' }}
+          SSH_USER: ${{ secrets.SSH_USERNAME || secrets.SSH_USER }}
+          SSH_HOST: ${{ secrets.SSH_HOST }}
+          SSH_ROOT: ${{ needs.cible.outputs.root }}
+          SITE_URL: ${{ needs.cible.outputs.url }}
+          RUN_ID: ${{ github.run_id }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          distant="/tmp/tuc-creneau-${RUN_ID}.sh"
+          scp -q -i ~/.ssh/id_deploy -P "$SSH_PORT" -o StrictHostKeyChecking=yes \
+            outils-bascule/creneau-mysql.sh "$SSH_USER@$SSH_HOST:$distant"
+          printf -v remote_root '%q' "$SSH_ROOT"
+          printf -v remote_file '%q' "$distant"
+          echo "Sondage du creneau MySQL sur $SITE_URL (lecture seule)"
+          ssh -i ~/.ssh/id_deploy -p "$SSH_PORT" -o StrictHostKeyChecking=yes \
+            "$SSH_USER@$SSH_HOST" "bash -s -- $remote_root $remote_file" <<'REMOTE'
+          set -uo pipefail
+          trap 'rm -f "$2"' EXIT
+          bash "$2" "$1"
+          REMOTE
+
+  bascule_mysql_uat:
+    name: Bascule MySQL sur UAT (a blanc, puis reelle)
+    if: ${{ github.event_name == 'workflow_dispatch' && (inputs.operation == 'bascule-uat-mysql' || inputs.operation == 'bascule-uat-mysql-executer') }}
+    needs: [cible]
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    environment: ${{ needs.cible.outputs.env }}
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Refuser toute cible qui n'est pas l'UAT
+        env:
+          ENV_NAME: ${{ needs.cible.outputs.env }}
+          SITE_URL: ${{ needs.cible.outputs.url }}
+          SSH_ROOT: ${{ needs.cible.outputs.root }}
+          URL_UAT: ${{ vars.URL_UAT }}
+          URL_PRD: ${{ vars.URL_PRD }}
+          ROOT_UAT: ${{ vars.ROOT_UAT }}
+          ROOT_PRD: ${{ vars.ROOT_PRD }}
+          ROOT_DEV: ${{ vars.ROOT_DEV }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          trim() { printf '%s' "$1" | sed 's:/*$::'; }
+          if [ "$ENV_NAME" != "uat" ]; then
+            echo "::error::bascule-uat-mysql (et sa variante -executer) n'accepte que la cible uat (recu : ${ENV_NAME:-vide}). Aucun acces tente."
+            exit 1
+          fi
+          root="$(trim "$SSH_ROOT")"
+          if [ "$(trim "${ROOT_UAT:-}")" != "$root" ]; then
+            echo "::error::ROOT_UAT ne correspond pas a la cible resolue ($root). Bascule annulee."
+            exit 1
+          fi
+          case "$root" in
+            */uat) ;;
+            *) echo "::error::La racine resolue ne finit pas par /uat : $root. Bascule annulee."; exit 1 ;;
+          esac
+          for pair in "URL_PRD:$SITE_URL" "ROOT_PRD:$root" "ROOT_DEV:$root"; do
+            key="${pair%%:*}"; val="${pair#*:}"; ref="$(trim "${!key:-}")"
+            if [ -n "$ref" ] && [ "$ref" = "$val" ]; then
+              echo "::error::La cible egale $key. Cet outil ne marche que sur l'UAT."
+              exit 1
+            fi
+          done
+          if [ -n "${URL_UAT:-}" ] && [ "$(trim "$URL_UAT")" != "$(trim "$SITE_URL")" ]; then
+            echo "::error::URL resolue differente de URL_UAT. Bascule annulee."
+            exit 1
+          fi
+          echo "Cible acceptee pour le preflight : $root"
+
+
+      - name: Preparer la connexion SSH
+        env:
+          SSH_PRIVATE_KEY: ${{ secrets.SSH_PRIVATE_KEY }}
+          SSH_HOST: ${{ secrets.SSH_HOST }}
+          SSH_PORT: ${{ vars.SSH_PORT || '65002' }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p ~/.ssh
+          printf '%s\n' "$SSH_PRIVATE_KEY" > ~/.ssh/id_deploy
+          chmod 600 ~/.ssh/id_deploy
+          ssh-keygen -y -f ~/.ssh/id_deploy >/dev/null
+          ssh-keyscan -p "$SSH_PORT" -H "$SSH_HOST" >> ~/.ssh/known_hosts 2>/dev/null
+
+
+      - name: Linter les outils avant envoi
+        shell: bash
+        run: |
+          set -euo pipefail
+          bash -n outils-bascule/basculer.sh
+          php -l outils-bascule/tuc-bascule.php
+
+      - name: Basculer (dry par defaut ; l'execution reelle est l'autre operation)
+        env:
+          SSH_PORT: ${{ vars.SSH_PORT || '65002' }}
+          SSH_USER: ${{ secrets.SSH_USERNAME || secrets.SSH_USER }}
+          SSH_HOST: ${{ secrets.SSH_HOST }}
+          SSH_ROOT: ${{ needs.cible.outputs.root }}
+          SITE_URL: ${{ needs.cible.outputs.url }}
+          RUN_ID: ${{ github.run_id }}
+          TUC_PHASE: ${{ inputs.operation == 'bascule-uat-mysql-executer' && 'executer' || 'dry' }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          outil="/tmp/tuc-basculer-${RUN_ID}.sh"
+          conv="/tmp/tuc-bascule-conv-${RUN_ID}.php"
+          scp -q -i ~/.ssh/id_deploy -P "$SSH_PORT" -o StrictHostKeyChecking=yes \
+            outils-bascule/basculer.sh "$SSH_USER@$SSH_HOST:$outil"
+          scp -q -i ~/.ssh/id_deploy -P "$SSH_PORT" -o StrictHostKeyChecking=yes \
+            outils-bascule/tuc-bascule.php "$SSH_USER@$SSH_HOST:$conv"
+          printf -v remote_root '%q' "$SSH_ROOT"
+          printf -v remote_outil '%q' "$outil"
+          printf -v remote_conv '%q' "$conv"
+          phase="${TUC_PHASE:-dry}"
+          echo "Bascule MySQL sur $SITE_URL — phase : $phase (le site reste sur son moteur tant que la fumee n est pas verte)"
+          ssh -i ~/.ssh/id_deploy -p "$SSH_PORT" -o StrictHostKeyChecking=yes \
+            "$SSH_USER@$SSH_HOST" "bash -s -- $remote_root $remote_outil $remote_conv $phase" <<'REMOTE'
+          set -uo pipefail
+          trap 'rm -f "$2" "$3"' EXIT
+          bash "$2" "$1" "$3" "$4"
           REMOTE
 
   verif_litespeed_uat:
