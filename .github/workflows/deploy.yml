@@ -29,6 +29,8 @@ on:
           - audit-mysql-uat
           - mesure-connexions-uat
           - degager-sqlite-uat
+          - regler-ttl-uat
+          - regler-ttl-uat-executer
         default: deploy
         required: true
 
@@ -170,10 +172,13 @@ jobs:
             ENV_NAME=uat; URL="$URL_UAT"; ROOT="$ROOT_UAT"
           elif [[ "$EVENT_NAME" == workflow_dispatch
                  && ( "$OPERATION" == "verif-litespeed-uat" || "$OPERATION" == "audit-mysql-uat"
-                      || "$OPERATION" == "mesure-connexions-uat" || "$OPERATION" == "degager-sqlite-uat" ) ]]; then
-            # Verification de purge LiteSpeed, audit post-bascule, mesure de connexions et degagement
-            # de l'ancien moteur : les quatre touchent l'hote, sur l'UAT seule. Le degagement deplace
-            # des fichiers (il n'en supprime aucun) ; la mesure ouvre des connexions et les ferme.
+                      || "$OPERATION" == "mesure-connexions-uat" || "$OPERATION" == "degager-sqlite-uat"
+                     || "$OPERATION" == "regler-ttl-uat" || "$OPERATION" == "regler-ttl-uat-executer" ) ]]; then
+            # Verification de purge LiteSpeed, audit post-bascule, mesure de connexions, degagement de
+            # l'ancien moteur et reglage de duree du cache : les six touchent l'hote, sur l'UAT seule.
+            # Le degagement deplace des fichiers (il n'en supprime aucun) ; la mesure ouvre des connexions
+            # et les ferme ; le reglage ecrit une option, et son nom d'operation porte la mention
+            # « executer » parce que la meme etape, sans ce suffixe, lit et mesure sans ecrire.
             ENV_NAME=uat; URL="$URL_UAT"; ROOT="$ROOT_UAT"
           elif [[ "$REF_TYPE" == branch && "$REF_NAME" == develop ]]; then
             ENV_NAME=dev; URL="$URL_DEV"; ROOT="$ROOT_DEV"
@@ -1130,7 +1135,7 @@ jobs:
     # Les deux operations partagent le meme contrat : cible UAT obligatoire, ecrite reversible,
     # auto-nettoyage. Elles sont donc gardees par le meme bloc de refus,  et se distinguent par un `if`
     # d'etape — pas par un second job qui dupliquerait soixante lignes de verrous.
-    if: ${{ github.event_name == 'workflow_dispatch' && (inputs.operation == 'verif-litespeed-uat' || inputs.operation == 'audit-mysql-uat' || inputs.operation == 'mesure-connexions-uat' || inputs.operation == 'degager-sqlite-uat') }}
+    if: ${{ github.event_name == 'workflow_dispatch' && (inputs.operation == 'verif-litespeed-uat' || inputs.operation == 'audit-mysql-uat' || inputs.operation == 'mesure-connexions-uat' || inputs.operation == 'degager-sqlite-uat' || inputs.operation == 'regler-ttl-uat' || inputs.operation == 'regler-ttl-uat-executer') }}
     needs: [cible]
     runs-on: ubuntu-latest
     timeout-minutes: 22   # le polling du TTL dure jusqu a 8 min
@@ -1157,7 +1162,7 @@ jobs:
           else
             RETARD=$(git rev-list --count HEAD..FETCH_HEAD)
             case "$OPERATION" in
-              audit-mysql-uat|verif-litespeed-uat|mesure-connexions-uat|degager-sqlite-uat)
+              audit-mysql-uat|verif-litespeed-uat|mesure-connexions-uat|degager-sqlite-uat|regler-ttl-uat|regler-ttl-uat-executer)
                 echo "::error title=Instrument perime::cet arbre est en retard de $RETARD commit(s) sur main : ses conclusions porteraient sur du code qui n'est plus en ligne. Mergez origin/main dans la branche d'audit, puis rejouez."
                 exit 1 ;;
               *)
@@ -1228,6 +1233,7 @@ jobs:
           bash -n outils-bascule/verif-litespeed.sh
           bash -n outils-bascule/audit-mysql.sh
           bash -n outils-bascule/degager-sqlite.sh
+          bash -n outils-bascule/regler-ttl.sh
           php -l outils-bascule/audit-fidelite.php
           php -l outils-bascule/mesure-connexions.php
           # Le degagement refuse seul toute racine hors /uat et sans --executer : le verifier ici,
@@ -1237,6 +1243,11 @@ jobs:
           # Pas de pipeline ici : sous `set -o pipefail`, le code 2 rendu par le refus ferait echouer
           # la conduite entiere meme quand grep a trouve la ligne — et le job se brouillerait lui-meme
           # pour un succes de l'outil. On capte la sortie, on la filtre a la main.
+          porte_ttl=$(bash outils-bascule/regler-ttl.sh /tmp 2>&1 || true)
+          case "$porte_ttl" in
+            *REFUS*) echo "OK : regler-ttl refuse une racine hors /uat avant meme d'etre envoye." ;;
+            *) echo "::error::regler-ttl.sh n'a pas refuse /tmp : sa porte est cassee, l'etape ne doit pas partir."; exit 1 ;;
+          esac
           porte=$(bash outils-bascule/degager-sqlite.sh /tmp 2>&1 || true)
           case "$porte" in
             *REFUS*) echo "  porte de l'outil : refuse sans --executer — ok" ;;
@@ -1375,6 +1386,44 @@ jobs:
           REMOTE
           code=$?
           echo "———— code de sortie du degagement : $code (0 = fait et verifie, 9 = refuse puis defait) ————"
+          exit "$code"
+
+      # Le reglage de duree du cache : une option du plugin LiteSpeed, ecrite dans son propre
+      # format de stockage, mesuree apres coup, et retablie si la mesure ne confirme pas. Sans le
+      # suffixe « -executer », la meme etape lit et explique sans ecrire — c'est la distinction qui
+      # empeche un dispatch distrait d'etre une ecriture sur l'hebergeur.
+      - name: Regler la duree du cache de la route du menu (lecture, puis ecriture annulable)
+        if: ${{ inputs.operation == 'regler-ttl-uat' || inputs.operation == 'regler-ttl-uat-executer' }}
+        env:
+          SSH_PORT: ${{ vars.SSH_PORT || '65002' }}
+          SSH_USER: ${{ secrets.SSH_USERNAME || secrets.SSH_USER }}
+          SSH_HOST: ${{ secrets.SSH_HOST }}
+          SSH_ROOT: ${{ needs.cible.outputs.root }}
+          SITE_URL: ${{ needs.cible.outputs.url }}
+          OPERATION: ${{ inputs.operation }}
+          RUN_ID: ${{ github.run_id }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          sh_d="/tmp/tuc-ttl-${RUN_ID}.sh"
+          scp -q -i ~/.ssh/id_deploy -P "$SSH_PORT" -o StrictHostKeyChecking=yes \
+            outils-bascule/regler-ttl.sh "$SSH_USER@$SSH_HOST:$sh_d"
+          printf -v remote_root '%q' "$SSH_ROOT"
+          printf -v remote_url '%q' "$SITE_URL"
+          printf -v remote_sh '%q' "$sh_d"
+          MODE=exclure
+          DRAPEAU=""
+          if [ "$OPERATION" = "regler-ttl-uat-executer" ]; then DRAPEAU=--executer; fi
+          echo "Reglage de la duree du cache du menu sur $SITE_URL (mode $MODE ${DRAPEAU:-lecture seule})"
+          set +e
+          ssh -i ~/.ssh/id_deploy -p "$SSH_PORT" -o StrictHostKeyChecking=yes \
+            "$SSH_USER@$SSH_HOST" "bash -s -- $remote_root $remote_url $remote_sh $DRAPEAU --mode $MODE" <<'REMOTE'
+          set -uo pipefail
+          trap 'rm -f "$3"' EXIT
+          bash "$3" $4 $5 $6 "$1" "$2"
+          REMOTE
+          code=$?
+          echo "———— code de sortie du reglage : $code (0 = fait et verifie, 9 = non conforme puis retabli, 2 = cible refusee) ————"
           exit "$code"
 
   inventaire_woocommerce:
