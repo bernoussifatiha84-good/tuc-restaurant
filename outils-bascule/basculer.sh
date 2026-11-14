@@ -114,15 +114,54 @@ bar
 
 # --- 2. le chemin du fichier SQLite, lu la ou il est ecrit -----------------------------------
 bar; echo " 2. LA SOURCE"; bar
-if [ -f "$DATADIR/db-path.php" ]; then
-  SQLITED=$("$PHPBIN" -r '$s=file_get_contents($argv[1]); if (preg_match("/([^\x27\"]+\.sqlite)/",$s,$m)) echo $m[1];' "$DATADIR/db-path.php" 2>/dev/null)
+# Run 43603858601 : "introuvable", alors que le fichier est la. Le plugin nomme la base
+# .ht.<hash>.sqlite et non .ht.sqlite, et mon motif ne reconnaissait qu'une seule forme. Un
+# convertisseur qui ne trouve pas sa source doit la chercher comme le fait le drop-in - par le
+# repertoire - et prouver ce qu'il a trouve : les 15 premiers octets. Un fichier .sqlite qui ne
+# porte pas la signature SQLite n'est pas une base, et convertir ce-la produirait un MySQL vide
+# presente comme une reussite.
+cat > "$D/sqlite.php" <<'PHPEOF'
+<?php
+// Liste les candidats dans l'ordre ou le drop-in les trouverait, et dit pour chacun s'il est la,
+// de quelle taille, et s'il porte la signature d'une base SQLite.
+$dir = (string) $argv[1];
+$cand = [];
+$pf = $dir . '/db-path.php';
+if (is_file($pf)) {
+    $s = (string) file_get_contents($pf);
+    if (preg_match_all('#([^\s"\'(),;]*\.sqlite)#i', $s, $m)) {
+        foreach (array_unique($m[1]) as $c) { $cand[] = $c; }
+    }
+}
+foreach ([$dir . '/.ht*.sqlite', $dir . '/*.sqlite', $dir . '/.ht*.db', $dir . '/*.db'] as $g) {
+    foreach ((array) glob($g) as $x) { $cand[] = $x; }
+}
+$vus = [];
+foreach ($cand as $c) {
+    foreach ([$c, $dir . '/' . basename($c), dirname($dir) . '/' . basename($c), $dir . '/' . $c] as $p) {
+        if ($p === '' || isset($vus[$p]) || !is_file($p)) { continue; }
+        $vus[$p] = 1;
+        $sig = (string) file_get_contents($p, false, null, 0, 15);
+        printf("%s\t%d\t%s\n", $p, (int) filesize($p),
+            $sig === 'SQLite format 3' ? 'SIGNATURE OK' : 'SIGNATURE ETRANGERE [' . preg_replace('/\PL/u', '?', $sig) . ']');
+    }
+}
+PHPEOF
+"$PHPBIN" "$D/sqlite.php" "$DATADIR" > "$D/candidats" 2>&1
+if [ ! -s "$D/candidats" ]; then echo "   aucun candidat dans $DATADIR"; exit 5; fi
+sed 's/^/     /' "$D/candidats" | cut -c1-124
+SQLITED=$(awk -F'\t' '$3=="SIGNATURE OK" {print $1; exit}' "$D/candidats")
+if [ -z "$SQLITED" ]; then
+  echo "   REFUS : aucun des candidats ci-dessus n'est une base SQLite (signature absente ou etrangere)."
+  echo "   Je ne convertis pas un fichier que je n'ai pas identifie comme une base."
+  exit 5
 fi
-[ -n "$SQLITED" ] && [ ! -f "$SQLITED" ] && SQLITED="$DATADIR/$(basename "$SQLITED")"
-[ -z "$SQLITED" ] && [ -f "$DATADIR/.ht.sqlite" ] && SQLITED="$DATADIR/.ht.sqlite"
-if [ -z "$SQLITED" ] || [ ! -f "$SQLITED" ]; then
-  echo "   introuvable : ni db-path.php exploitable, ni .ht.sqlite dans $DATADIR"; exit 5
+TAILLE=$(awk -F'\t' -v p="$SQLITED" '$1==p {print $2; exit}' "$D/candidats")
+if [ "${TAILLE:-0}" -lt 4096 ]; then
+  echo "   REFUS : $SQLITED ne fait que $TAILLE o — une base de 54 tables en fait 1 576 960. On s'arrete."
+  exit 5
 fi
-echo "   fichier : $SQLITED ($(stat -c %s "$SQLITED") o)"
+echo "   retenu : $SQLITED ($TAILLE o, signature verifiee)"
 for ext in -wal -shm; do [ -f "$SQLITED$ext" ] && echo "     $ext present ($(stat -c %s "$SQLITED$ext") o) : la sauvegarde doit l'inclure"; done
 echo "   drop-in : $([ -f "$DROPIN" ] && echo 'en place (c est lui qui bascule)' || echo 'ABSENT — le site ne tourne donc pas sur SQLite, bascule sans objet')"
 
