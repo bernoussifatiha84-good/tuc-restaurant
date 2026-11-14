@@ -166,6 +166,30 @@ if [ "$P3" = "INEXPLOITABLE" ]; then
   exit 8
 fi
 
+echo "$S ; 3bis. LE TTL DU PLUGIN EST-IL HONORE ? entree fraiche, puis on la regarde vieillir"
+# Le polling de la phase 2 prete a confusion : il mesure une entrée qui existait avant lui, et son
+# silence ne dit pas si max-age=60 est ignore ou simplement rattrape par le TTL du serveur. La,
+# l'entree ne peut venir que du rendu frais declenche par la purge de la phase 3 : si a t=90 elle
+# repond encore hit, le reglage du plugin n'est pas applique, et c'est une conclusion exploitable.
+T0=$(date +%s)
+for w in 20 55 90; do
+  while [ $(( $(date +%s) - T0 )) -lt "$w" ]; do sleep 1; done
+  curl -sS -m 20 -D "$TMP/h$w" -o "$TMP/x$w.json" "$JSON" >/dev/null 2>&1
+  hh=$(grep -ai "^x-litespeed-cache:" "$TMP/h$w" 2>/dev/null | tr -d '\r' | cut -d' ' -f2)
+  ag=$(grep -ai "^age:" "$TMP/h$w" 2>/dev/null | tr -d '\r' | cut -d' ' -f2)
+  printf "  t=%ss apres le rendu frais : %s | age: %s\n" "$w" "${hh:-?}" "${ag:-aucun}"
+  [ "$w" = "90" ] && H90="${hh:-?}"
+done
+if [ "$H90" = "hit" ]; then
+  echo "  le max-age de ${TTL_ATTENDU:-60}s n'est PAS honore : l'entree creee a l'instant repond encore hit a t=90."
+  echo "  Constat sur le serveur, pas sur le plugin : l en-tête part (Cache-Control: no-cache est bien"
+  echo "  revenu), le bord ne le respecte pas. Le seul levier reel reste la purge a l'ecriture."
+  TTL_HONORE="non"
+else
+  echo "  entree expiree a t=90 (${H90}) : le TTL applique est bien court, le plugin est entendu."
+  TTL_HONORE="oui"
+fi
+
 echo "$S ; 4. RESTAURATION"
 wp post meta update "$PLAT" tuc_prix "$ANCIEN" --allow-root >/dev/null 2>&1
 RESTAURE=0
@@ -183,6 +207,7 @@ else
   echo "  au cache du serveur bien au-dela des 60 s que le plugin pretend imposer : le TTL qui s'applique"
   echo "  est celui du serveur (604 800 s sur cet hote), pas le notre."
 fi
+echo "  TTL honore par le serveur : ${TTL_HONORE:?}(non mesure)"
 echo "  ce que la purge a produit : releve de la phase 3 = $P3 (attendu $NOUVEAU) -> PURGE_EFFICACE=$PURGE_EFFICACE"
 [ "$PURGE_EFFICACE" = oui ] || exit 7
 if [ -n "$RETOURNE" ]; then

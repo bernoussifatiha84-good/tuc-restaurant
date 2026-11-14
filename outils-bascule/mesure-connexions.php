@@ -177,6 +177,18 @@ $chemins = [$racine . '/wp-content/object-cache.php', $racine . '/object-cache.p
 $trouve = '';
 foreach ($chemins as $c) { if (is_file($c)) { $trouve = $c; break; } }
 printf("  drop-in de cache present : %s\n", $trouve === '' ? 'non (donc pas de desinstallation a prevoir)' : $trouve);
+// La question « le plan l'offre-t-il » a une reponse dans les options du site, pas dans la brochure :
+// si LiteSpeed a deja un reglage d'object cache, il faut le lire avant d'ecrire un drop-in a la main.
+foreach (['litespeed-opt', 'litespeed.conf.cache', 'litespeed.conf.cache-ttl', 'litespeed.conf.objcache-stores',
+          'litespeed.conf.cache-redis-host', 'litespeed.conf.cache-redis-port', 'litespeed.conf.cache-redis-socket'] as $cle) {
+    $q = $ref->query("SELECT option_value v FROM `{$T['options']}` WHERE option_name = '" . $ref->real_escape_string($cle) . "' LIMIT 1");
+    $l = $q ? $q->fetch_assoc() : null;
+    $v = $l === null ? '(absente)' : (is_string($l['v']) && $l['v'] !== '' ? (strlen($l['v']) > 90 ? substr($l['v'], 0, 90) . '…' : $l['v']) : '(vide)');
+    printf("     %-34s %s\n", $cle, str_replace("\n", ' ', (string) $v));
+}
+foreach (['/tmp/redis.sock', (getenv('HOME') ?: '/root') . '/.redis/redis.sock', '/var/run/redis/redis.sock'] as $sock) {
+    printf("     socket %s : %s\n", $sock, file_exists($sock) ? 'present' : 'absent');
+}
 foreach (['redis' => 'extension PHP Redis', 'memcached' => 'extension PHP Memcached', 'pdo_mysql' => 'pdo_mysql'] as $ext => $libelle) {
     printf("     %-22s %s\n", $libelle, extension_loaded($ext) ? 'chargee' : 'absente');
 }
@@ -201,8 +213,12 @@ echo "\n == fermeture == \n";
 foreach ($tenues as $x) { $x['m']->close(); }
 usleep(200000);
 $apres = (int) statut($ref, 'Threads_connected');
-printf("  Threads_connected apres fermeture : %d (revient a la base %s)\n", $apres,
-    ($avant > 0 && $apres > 0) ? ($apres <= $avant + 2 ? 'oui' : 'NON — des connexions sont restees ouvertes') : 'n/a');
+// Sur un hebergeur partage, Threads_connected bouge de dizaines entre deux releves pour des raisons
+// etangeres a ce script. Une tolerance de +2 accusait donc nos connexions de fuiter des qu'un autre
+// site tapait sur le meme serveur : le rouge disait n'importe quoi. La tolerance suit le bruit observe.
+$seuil = max(4, (int) ceil($avant * 0.15));
+printf("  Threads_connected apres fermeture : %d (base %d, tolerance +%d) : %s\n", $apres, $avant, $seuil,
+    ($avant > 0 && $apres > 0) ? ($apres <= $avant + $seuil ? 'retour a la base' : 'AU-DESSUS — a relire avant de conclure a une fuite : ce compteur est partage avec les autres sites du serveur') : 'n/a');
 $ref->close();
 echo "  toutes les connexions de mesure sont fermees par ce script.\n";
 exit(0);
