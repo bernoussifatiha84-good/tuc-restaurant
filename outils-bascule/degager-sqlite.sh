@@ -122,12 +122,12 @@ fi
 
 bar; echo " 3. ERROR_LOG FERME AU PUBLIC"; bar
 # Lecons de la premiere tentative sur l'hote, toutes deux mesurees : (1) LiteSpeed n'applique pas
-# `Require all denied` a l'interieur d'un <FilesMatch> — le bloc restait sans effet ; (2) il etait
-# ECrit en FIN de fichier, donc apres la regne `RewriteRule . index.php [L]` de WordPress, qui arrete
-# le traitement : un garde-fou place derriere un [L] n'existe pas. Le bloc est donc PREPOSE, en trois
+# `Require all denied` a l'interieur d'un <FilesMatch> — le bloc restait sans effet ; (2) il etait ecrit
+# EN FIN de fichier, donc apres la regne `RewriteRule . index.php [L]` de WordPress, qui arrete le
+# traitement : un garde-fou place derriere un [L] n'est jamais lu. Le bloc est donc PREPOSE, en trois
 # syntaxes (rewrite = ce que LiteSpeed honore, filesmatch = Apache sans rewrite, deny = anciens
-# serveurs), et le log quitte physiquement la racine web. Le .htaccess est reconstruit a chaque
-# passage : un bloc TUC precedant est retire puis repose, jamais duplique.
+# serveurs), et le log quitte physiquement la racine. Le .htaccess est reconstruit a chaque passage :
+# un bloc TUC precedent est retire puis repose, jamais duplique.
 ELOG=""
 for c in "$RACINE/error_log" "$RACINE/logs/error_log" "$RACINE/../error_log"; do
   [ -f "$c" ] && { ELOG="$c"; break; }
@@ -147,30 +147,28 @@ done
   echo "  </IfModule>"
   echo "</FilesMatch>"
   if [ -n "$ELOG" ]; then
-    # le log continue d'ecrire, mais la ou personne ne le telecharge
-    echo "php_value error_log $ARCH/php-error.log"
+    echo "php_value error_log $ARCH/php-error.log"   # le log continue d'ecrire, hors de portee du web
   fi
   echo "# TUC — fin"
   echo ""
 } > "$T/garde"
-echo "   bloc de garde : $(wc -l < "$T/garde") lignes, soit $(stat -c %s "$T/garde") o"
+echo "   bloc de garde : $(wc -l < "$T/garde") lignes, $(stat -c %s "$T/garde") o"
 if [ -f "$RACINE/.htaccess" ]; then
   cp "$RACINE/.htaccess" "$T/htaccess.avant"
   echo "   .htaccess avant : $(stat -c %s "$RACINE/.htaccess") o"
 else
   echo "   pas de .htaccess a cet endroit : un nouveau sera cree"
 fi
-cat "$T/garde" > "$T/htaccess.nouveau"
-  # aucun interpretteur externe dans le chemin critique : l'hebergeur ne promet pas python3, et un
-  # outil de deplacement qui en depend se termine en .htaccess a moitie ecrit, avec le registre deja
-  # rempli. awk retire l'ancien bloc TUC (bornes explicites), on repose le bloc neuf en tete.
-  { cat "$T/garde"
+# aucun interpretteur externe dans le chemin critique : l'hebergeur ne promet pas python3, et un outil
+# de deplacement qui en depend laisse un .htaccess a moitie ecrit avec le registre deja rempli.
+{ cat "$T/garde"
+  if [ -f "$RACINE/.htaccess" ]; then
     awk 'BEGIN{d=0; gob=0}
       /^# TUC .* fichiers hors sol/{d=1}
       d==0 { if (gob) { if ($0=="") { gob=0; next } gob=0 } print }
       /^# TUC .* fin$/{ if (d) { d=0; gob=1 } }' "$RACINE/.htaccess"
-  } > "$T/htaccess.nouveau"
-  mv "$T/htaccess.nouveau" "$RACINE/.htaccess"
+  fi
+} > "$T/htaccess.nouveau"
 mv "$T/htaccess.nouveau" "$RACINE/.htaccess"
 echo "   .htaccess apres : $(stat -c %s "$RACINE/.htaccess") o (bloc en tete)"
 if [ -n "$ELOG" ]; then
@@ -179,24 +177,56 @@ if [ -n "$ELOG" ]; then
 else
   echo "   aucun error_log trouve sous la racine : rien a deplacer"
 fi
+PURGE_NECESSAIRE=0
 if [ -n "$URL" ]; then
   c=$(curl -sS -m 20 -o "$T/after-log" -w '%{http_code}' "$URL/error_log" 2>/dev/null)
-  case "$c" in
-    403|401|404) ok "error_log ne repond plus au public (HTTP $c)" ;;
-    200) ko "error_log repond toujours 200 : rewrite et filesmatch non appliques tous les deux" ;;
-    500) ko ".htaccess refuse par le serveur (HTTP 500) : a annuler" ;;
-    *) echo "   --  error_log repond $c : ni 200 ni refuse, a verifier a la main" ;;
-  esac
-  for sonde in "/" "/kfc/" "/wp-json/tuc/v1/sante"; do
-    cc=$(curl -sS -m 20 -o /dev/null -w '%{http_code}' -L "$URL$sonde" 2>/dev/null)
-    [ "$cc" = "200" ] || ko "le nouveau .htaccess casse $sonde (HTTP $cc)"
-  done
-else
-  echo "   --  aucune URL : le bloc est ecrit, sa version reseau n'est pas verifiee"
+  if [ "$c" = "200" ] && [ -n "$ELOG" ] && [ ! -f "$ELOG" ]; then
+    # Le fichier n'est plus sur le disque : ce 200 ne peut venir que du cache de l'hebergeur
+    # (max-age 604800 — sept jours pendant lesquels la fuite se ressert toute seule). Accuser le
+    # .htaccess serait un faux diagnostic : on casse la cle de cache, et seulement apres on juge.
+    echo "   200 rendu alors que le fichier est parti : corps servi par le cache, pas par le disque"
+    c2=$(curl -sS -m 20 -o "$T/after-log2" -w '%{http_code}' "$URL/error_log?nocache=$TS" 2>/dev/null)
+    if command -v wp >/dev/null 2>&1; then
+      if wp litespeed-purge url "$URL/error_log" >/dev/null 2>&1; then
+        echo "   purge de cette URL demandee a LiteSpeed"
+      else
+        echo "   (wp-cli n'a pas pu purger : la cle de cache reste jusqu'a expiration)"
+      fi
+      c2=$(curl -sS -m 20 -o "$T/after-log3" -w '%{http_code}' "$URL/error_log?nocache=${TS}b" 2>/dev/null)
+    fi
+    case "$c2" in
+      403|401|404)
+        ok "hors cache, la meme URL repond $c2 : le garde-fou tient, c'est la copie cachee qui fuyait"
+        PURGE_NECESSAIRE=1 ;;
+      200) ko "error_log repond 200 hors cache avec le fichier absent : le serveur sert autre chose" ;;
+      *) echo "   --  error_log repond $c2 hors cache : a verifier a la main" ;;
+    esac
+  else
+    case "$c" in
+      403|401|404) ok "error_log ne repond plus au public (HTTP $c)" ;;
+      200) ko "error_log repond toujours 200 (fichier present) : rewrite et filesmatch non appliques" ;;
+      500) ko ".htaccess refuse par le serveur (HTTP 500) : a annuler" ;;
+      *) echo "   --  error_log repond $c : ni 200 ni refuse, a verifier a la main" ;;
+    esac
+  fi
 fi
 
 bar; echo " 4. FUMEE : LE SITE DOIT ETRE VERT APRES"; bar
 FUMEE_OK=1
+# Le fichier d'aide est ecrit AVANT son premier appel — la rechute etait deja arrivee sur ce projet,
+# et le symptome etait un "Could not open input file" lu comme un resultat.
+cat > "$T/apres.php" <<'PHPEOF'
+<?php
+declare(strict_types=1);
+define('WP_USE_THEMES', false);
+ob_start(); require $argv[1]; ob_end_clean();
+global $wpdb;
+printf("   moteur vu par WordPress : %s\n", (string) $wpdb->get_var('SELECT VERSION()'));
+printf("   drop-in db.php pose ? %s\n", is_file(WP_CONTENT_DIR . '/db.php') ? 'OUI — le site peut redevenir SQLite' : 'non');
+printf("   dossier de l'extension ? %s\n", is_dir(WP_PLUGIN_DIR . '/sqlite-database-integration') ? 'OUI' : 'non');
+printf("   extension listee active ? %s\n", in_array('sqlite-database-integration/db.php', (array) get_option('active_plugins', []), true) ? 'OUI' : 'non');
+printf("   taille du menu en base : %s lignes\n", (string) $wpdb->get_var('SELECT COUNT(*) FROM ' . $wpdb->posts . " WHERE post_status = 'publish'"));
+PHPEOF
 if [ -n "$URL" ]; then
   for p in "/" "/kfc/" "/wp-json/tuc/v1/menu/kfc" "/wp-json/tuc/v1/sante"; do
     code=$(curl -sS -m 30 -o "$T/a$(cle "$p")" -w '%{http_code}' -L "$URL$p" 2>/dev/null)
@@ -208,30 +238,23 @@ if [ -n "$URL" ]; then
       ko "$p a change de taille : $avant -> $taille"
     fi
   done
-  # le moteur doit toujours etre MySQL, et plus personne ne doit pouvoir le faire basculer
-  cat > "$T/apres.php" <<'PHPEOF'
-<?php
-declare(strict_types=1);
-define('WP_USE_THEMES', false);
-ob_start(); require $argv[1]; ob_end_clean();
-global $wpdb;
-printf("   moteur vu par WordPress : %s\n", (string) $wpdb->get_var('SELECT VERSION()'));
-printf("   drop-in db.php pose ? %s\n", is_file(WP_CONTENT_DIR . '/db.php') ? 'OUI — le site peut redevenir SQLite' : 'non');
-printf("   dossier de l'extension ? %s\n", is_dir(WP_PLUGIN_DIR . '/sqlite-database-integration') ? 'OUI' : 'non');
-printf("   extension listee active ? %s\n", in_array('sqlite-database-integration/db.php', (array) get_option('active_plugins', []), true) ? 'OUI' : 'non');
-PHPEOF
-  "$PHP" "$T/apres.php" "$RACINE/wp-load.php" 2>&1 | grep -av 'already defined\|Cannot modify header' | sed 's/^/ /' | head -6
-  MOTEUR=$("$PHP" "$T/apres.php" "$RACINE/wp-load.php" 2>&1 | grep -a 'moteur vu par' | head -1)
+  # et le moteur doit toujours etre MySQL, sans plus aucune facon de revenir a SQLite
+  "$PHP" "$T/apres.php" "$RACINE/wp-load.php" > "$T/apres.txt" 2>&1
+  grep -av 'already defined\|Cannot modify header\|Stack trace\|^  #0\|^    thrown\|Fatal error' "$T/apres.txt" | sed 's/^/ /' | head -6
+  MOTEUR=$(grep -a 'moteur vu par' "$T/apres.txt" | head -1)
   case "$MOTEUR" in
     *sqlite*|*SQLite*) ko "le moteur rapporte une version emulee : l'extension a ete rechargee"; FUMEE_OK=0 ;;
     *MariaDB*|*MySQL*) ok "moteur toujours MySQL/MariaDB" ;;
-    *) echo "   --  version non relue hors WordPress : controle a faire dans le log ci-dessus" ;;
+    *) echo "   --  version non relue (pas de wp-load ici) : controle a faire dans le log ci-dessus" ;;
   esac
+  for sonde in "/" "/kfc/" "/wp-json/tuc/v1/sante"; do
+    cc=$(curl -sS -m 20 -o /dev/null -w '%{http_code}' -L "$URL$sonde" 2>/dev/null)
+    [ "$cc" = "200" ] || ko "le nouveau .htaccess casse $sonde (HTTP $cc)"
+  done
 else
   echo "   --  aucune URL : la fumee n'a pas pu etre jouee"
   FUMEE_OK=0
 fi
-
 bar; echo " 5. VERIFICATION FINALE"; bar
 RESTE=$(find "$RACINE/wp-content" -maxdepth 3 \( -name '*.sqlite' -o -name 'db.php' -o -name 'db-path.php' \) 2>/dev/null | wc -l | tr -d ' ')
 [ "$RESTE" = "0" ] && ok "plus aucun fichier de l'ancien moteur sous wp-content" || { ko "$RESTE fichier(s) restant(s)"; find "$RACINE/wp-content" -maxdepth 3 \( -name '*.sqlite' -o -name 'db.php*' \) 2>/dev/null | sed 's/^/     /'; }
@@ -243,6 +266,11 @@ if [ -n "$SQL" ]; then
   echo "   (l'ancien chemin repond maintenant HTTP ${c:-000} — c'est ce qu'on voulait)"
 fi
 
+if [ "${PURGE_NECESSAIRE:-0}" = 1 ]; then
+  echo "   note : la copie deja mise en cache par LiteSpeed reste servie jusqu'a purge ou expiration"
+  echo "   (max-age 604800 = sept jours). Le fichier est parti, le garde-fou tient : le cache se vide"
+  echo "   depuis l'admin (LiteSpeed > Purger tout) ou par l'operation verif-litespeed-uat."
+fi
 if [ "$ROUGE" -ne 0 ] || [ "$FUMEE_OK" -ne 1 ]; then
   defaire
   echo "   OPERATION ANNULEE et defaite : voir les lignes KO ci-dessus."
