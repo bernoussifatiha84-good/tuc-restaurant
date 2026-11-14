@@ -88,26 +88,49 @@ foreach (['posts' => 'ID', 'options' => 'option_id', 'postmeta' => 'meta_id', 'c
         ($ai === 0 || $ai > $max) ? 'ok' : 'DERIVE — la sequence est en dessous des ids existants');
 }
 // Les index : le drop-in les emulait depuis un tableau d'echafaudage ; sur MySQL ils doivent etre la.
-// Poids reel de la base, pour que « alourdir » veuille dire quelque chose de mesure. Les chiffres
-// InnoDB de information_schema sont des estimations cachees : c'est une ordre de grandeur, pas un
-// du-millieme — et c'est suffisant pour comparer a un fichier de 1,5 Mo.
-$sz = $wpdb->get_row("SELECT SUM(DATA_LENGTH) d, SUM(INDEX_LENGTH) i, SUM(DATA_FREE) f, SUM(TABLE_ROWS) r
-    FROM information_schema.TABLES WHERE TABLE_SCHEMA = DATABASE() AND TABLE_TYPE = 'BASE TABLE'", 1);
-printf("   poids base MySQL (estime InnoDB) : donnees %s Mo | index %s Mo | fragmentation %s Mo | ~%s lignes\n",
-    number_format(((int) ($sz['d'] ?? 0)) / 1048576, 1), number_format(((int) ($sz['i'] ?? 0)) / 1048576, 1),
-    number_format(((int) ($sz['f'] ?? 0)) / 1048576, 1), (string) ($sz['r'] ?? '?'));
-// Le plafond qui compte sur un mutualise n'est pas max_connections (le serveur est partage) mais
-// max_user_connections pour NOTRE utilisateur. Max_used_connections est global ; on rapporte les
-// deux, et la part de l'utilisateur dans le fichier d'etat.
-$me = $wpdb->get_row("SELECT COUNT(*) AS n, COALESCE(MAX(TIME),0) AS t FROM information_schema.PROCESSLIST
-    WHERE USER = SUBSTRING_INDEX(CURRENT_USER(), '@', 1)", 1);
-$mu = $wpdb->get_row("SHOW STATUS LIKE 'Max_used_connections'", ARRAY_N);
-printf("   connexions : %s actives pour cet utilisateur (plus longue %s s) | %s au pic historique du serveur\n",
-    (string) ($me['n'] ?? '?'), (string) ($me['t'] ?? '?'), is_array($mu) ? (string) $mu[1] : '?');
-$st = $wpdb->get_row("SHOW ENGINE INNODB STATUS", ARRAY_N);
-if (is_array($st) && preg_match('/(\d+)\.?\d* (?:rows?|ops)/i', (string) ($st[2] ?? ''), $mm)) {
-    printf("   activite InnoDB (extrait) : %s\n", trim(preg_replace('/\s+/', ' ', (string) ($st[2] ?? ''))));
+// Poids reel de la base. First attempt goes through information_schema — but on this hosting
+// the stats are switched off (information_schema_stats=OFF), which returns NULL, and NULL
+// printed as "0,0 Mo" would be a lie of the worst kind: a fake measurement. So the real
+// measure sums LENGTH() over the actual columns: slow enough to be honest, small enough here.
+$isz = $wpdb->get_row("SELECT @@information_schema_stats AS s", 1);
+printf("   information_schema_stats : %s\n", is_array($isz) ? (string) $isz['s'] : 'non lu');
+$tot = 0; $totr = 0; $parTable = [];
+$tabs = (array) $wpdb->get_col("SELECT TABLE_NAME FROM information_schema.TABLES
+    WHERE TABLE_SCHEMA = DATABASE() AND TABLE_TYPE = 'BASE TABLE' ORDER BY TABLE_NAME");
+foreach ($tabs as $tb) {
+    $cols = (array) $wpdb->get_col("SELECT COLUMN_NAME FROM information_schema.COLUMNS
+        WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = '" . esc_sql($tb) . "'");
+    $cols = array_values(array_filter($cols, static function ($c) use ($wpdb, $tb) {
+        $t = (string) $wpdb->get_var("SELECT DATA_TYPE FROM information_schema.COLUMNS WHERE TABLE_SCHEMA = DATABASE()
+            AND TABLE_NAME = '" . esc_sql($tb) . "' AND COLUMN_NAME = '" . esc_sql($c) . "'");
+        return !in_array($t, ['blob', 'varbinary'], true);
+    }));
+    if ($cols === []) { continue; }
+    $expr = "COALESCE(SUM(LENGTH(CONCAT_WS('|`|" . implode("", array_fill(0, min(count($cols), 12), "`|`|")) . "))), 0)";
+    $liste = implode('`, `', array_slice($cols, 0, 12));
+    $q = $wpdb->get_var("SELECT COALESCE(SUM(LENGTH(CONCAT_WS('~', `$liste`))), 0) FROM `$tb`");
+    $bytes = (int) $q; $rows = (int) $wpdb->get_var("SELECT COUNT(*) FROM `$tb`");
+    $tot += $bytes; $totr += $rows; $parTable[$tb] = [$rows, $bytes];
 }
+arsort($parTable);
+printf("   poids mesure (octets reels des colonnes) : %s sur %s lignes | %s tables\n",
+    number_format($tot), number_format($totr), number_format(count($parTable)));
+$n = 0;
+foreach ($parTable as $tb => $v) {
+    if ($v[1] <= 0) { continue; }
+    printf("     %-34s %6d lignes %10s o\n", $tb, $v[0], number_format($v[1]));
+    if (++$n >= 6) { break; }
+}
+// Connexions : information_schema.PROCESSLIST est parfois interdit au compte ; SHOW PROCESSLIST
+// passe par un autre chemin et marche toujours.
+$pl = (array) $wpdb->get_results("SHOW PROCESSLIST", 1);
+$moi = 0; $long = 0;
+foreach ($pl as $r) {
+    if (isset($r['User']) && $r['User'] === DB_USER) { $moi++; $long = max($long, (int) $r['Time']); }
+}
+$mu = $wpdb->get_row("SHOW STATUS LIKE 'Max_used_connections'", 2);
+printf("   connexions : %d ouvertes pour cet utilisateur (plus longue %d s) | %s au pic historique du serveur, partage\n",
+    $moi, $long, is_array($mu) ? (string) $mu[1] : '?');
 $ix = (int) $wpdb->get_var("SELECT COUNT(DISTINCT CONCAT(TABLE_NAME,'/',INDEX_NAME)) FROM information_schema.STATISTICS WHERE TABLE_SCHEMA = DATABASE() AND INDEX_NAME <> 'PRIMARY'");
 $pk = (int) $wpdb->get_var("SELECT COUNT(DISTINCT CONCAT(TABLE_NAME,'/',INDEX_NAME)) FROM information_schema.STATISTICS WHERE TABLE_SCHEMA = DATABASE() AND INDEX_NAME = 'PRIMARY'");
 printf("   index : %d cles primaires, %d index secondaires sur %s tables\n", $pk, $ix,
