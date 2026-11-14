@@ -157,6 +157,46 @@ $mes2 = chrono(static function () use ($ref, $T) {
 printf("  lecture autoload (la requete que WordPress refait a chaque hit) : p50 %.2f ms | p95 %.2f ms | max %.2f ms\n",
     $mes2[0], $mes2[1], $mes2[2]);
 
+echo "\n == ce qu'un cache d'objets changerait vraiment, mesure avant de decider == \n";
+// La question n'est pas « Redis est-il bien » mais « combien de requetes et d'octets un cache
+// d'objets sortirait de MySQL, par hit, et le plan le propose-t-il ». Les trois reponses ci-dessous
+// viennent de mesures, pas de la reputation du plugin.
+$auto = $ref->query("SELECT COUNT(*) n, COALESCE(SUM(LENGTH(option_value)),0) o FROM `{$T['options']}` WHERE autoload = 'yes'");
+$au = $auto ? $auto->fetch_assoc() : [];
+printf("  autoload : %s options, %s o rechargés a chaque hit non cache -> si 300 hits/heure, %s Mo lus\n",
+    number_format((int) ($au['n'] ?? 0)), number_format((int) ($au['o'] ?? 0)),
+    number_format(round((int) ($au['o'] ?? 0) * 300 / 1048576, 1)));
+$trans = $ref->query("SELECT COUNT(*) n FROM `{$T['options']}` WHERE option_name LIKE '\\\_transient\\_%'");
+$tr = $trans ? $trans->fetch_assoc() : [];
+printf("  transients stockes en base : %s (ce sont eux que le cache d'objets absorbe le mieux)\n",
+    number_format((int) ($tr['n'] ?? 0)));
+// Le drop-in vit dans wp-content, pas a la racine du site : le chercher au mauvais endroit
+// rendrait « non » alors qu'un object-cache.php est deja pose (et a retirer avant d'en poser un 2e).
+$racine = rtrim(dirname((string) $argv[1]), '/');
+$chemins = [$racine . '/wp-content/object-cache.php', $racine . '/object-cache.php'];
+$trouve = '';
+foreach ($chemins as $c) { if (is_file($c)) { $trouve = $c; break; } }
+printf("  drop-in de cache present : %s\n", $trouve === '' ? 'non (donc pas de desinstallation a prevoir)' : $trouve);
+foreach (['redis' => 'extension PHP Redis', 'memcached' => 'extension PHP Memcached', 'pdo_mysql' => 'pdo_mysql'] as $ext => $libelle) {
+    printf("     %-22s %s\n", $libelle, extension_loaded($ext) ? 'chargee' : 'absente');
+}
+foreach ([['127.0.0.1', 6379, 'redis'], ['127.0.0.1', 11211, 'memcached']] as [$h, $pt, $nom]) {
+    $t1 = microtime(true);
+    $e = @fsockopen($h, $pt, $errno, $errstr, 1.2);
+    $ms = (microtime(true) - $t1) * 1000;
+    if ($e) {
+        $reponse = '';
+        if ($nom === 'redis') { fwrite($e, "PING\r\n"); $reponse = trim((string) fgets($e, 64)); }
+        else { fwrite($e, "version\r\n"); $reponse = trim((string) fgets($e, 96)); }
+        fclose($e);
+        printf("     %s joint sur %s:%d en %.1f ms | premiere reponse : %s\n", $nom, $h, $pt, $ms,
+            $reponse === '' ? '(rien lu)' : $reponse);
+    } else {
+        printf("     %s : pas de serveur joint joignable sur %s:%d en %.1f ms (%s)\n", $nom, $h, $pt, $ms,
+            $errstr === '' ? "errno $errno" : $errstr);
+    }
+}
+
 echo "\n == fermeture == \n";
 foreach ($tenues as $x) { $x['m']->close(); }
 usleep(200000);
