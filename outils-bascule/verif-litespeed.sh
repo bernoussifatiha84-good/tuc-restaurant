@@ -207,7 +207,8 @@ else
   echo "  au cache du serveur bien au-dela des 60 s que le plugin pretend imposer : le TTL qui s'applique"
   echo "  est celui du serveur (604 800 s sur cet hote), pas le notre."
 fi
-echo "  TTL honore par le serveur : ${TTL_HONORE:?}(non mesure)"
+[ -z "$TTL_HONORE" ] && TTL_HONORE="non mesure (la boucle n'a pas rendu de releve exploitable)"
+echo "  TTL honore par le serveur : $TTL_HONORE"
 echo "  ce que la purge a produit : releve de la phase 3 = $P3 (attendu $NOUVEAU) -> PURGE_EFFICACE=$PURGE_EFFICACE"
 [ "$PURGE_EFFICACE" = oui ] || exit 7
 if [ -n "$RETOURNE" ]; then
