@@ -256,8 +256,12 @@ if [ -n "$URL" ]; then
   PU=$(curl -sS -m 20 -L "$URL/wp-json/tuc/v1/sante" 2>/dev/null | grep -oE '"menu_purge_uri":"[^"]+"' | head -1 \
     | sed 's/.*:"//; s/"$//' | sed 's#\\/#/#g')   # le JSON echappe les barres : https:\/\/...
   if [ -n "$PU" ]; then
-    # Le rapport de sante a rendu tantot un chemin (/uat/kfc) tantot une URL complete selon les
-    # versions. Les deux se lisent : on ne recompose que si ce n'est pas deja une URL.
+    # Le rapport de sante publie une URL de sonde, pas une page : menu_purge_path('controle-de-purge')
+    # designe un slug qui n'existe pas, et c'est voulu. Ce qui prouve que la purge vise le bon chemin,
+    # ce n'est donc pas un 200 la ou il n'y a rien a trouver — c'est QUEL QUI REPONDE. Un 404 rendu par
+    # notre propre route (code tuc_resto, « Restaurant introuvable ») dit que le chemin est le bon ;
+    # un 404 rendu par WordPress (rest_no_route) dirait que la forme de l'URL est fausse, et la
+    # purge irait dans le vide a chaque prix enregistre. C'est ca que le controle doit juger.
     PU_URL="$PU"
     case "$PU" in
       http*) ;;
@@ -265,8 +269,23 @@ if [ -n "$URL" ]; then
          PRE=$(printf '%s' "$URL" | sed -E 's#^https?://[^/]+##')
          PU_URL="$ORIGIN$(printf '%s' "$PU" | sed "s#^$PRE##")" ;;
     esac
-    pc=$(curl -sS -m 20 -o "$T/pu" -w '%{http_code}' -L "$PU_URL" 2>/dev/null)
-    [ "$pc" = "200" ] && ok "l'URI de purge du rapport de sante repond 200" || ko "l'URI de purge repond '${pc:-000}' ($PU_URL)"
+    pc=$(curl -sS -m 20 -o "$T/pu" -w '%{http_code}|%{content_type}' -L "$PU_URL" 2>/dev/null)
+    code_purge=${pc%%|*}; type_purge=${pc#*|}
+    corps=$(head -c 400 "$T/pu" 2>/dev/null)
+    echo "   sonde de purge : HTTP $code_purge | ${type_purge%%;*} | $(printf %s "$corps" | head -c 74)"
+    if printf %s "$corps" | grep -aq '"rest_no_route"'; then
+      ko "la route de purge n'existe pas (reponse WordPress rest_no_route) : l'URL purgee ne correspond a rien"
+    elif printf %s "$corps" | grep -aqE '"code":"tuc_'; then
+      [ "$code_purge" = "200" ] && ok "la sonde de purge repond 200 en JSON du plugin" || ok "la sonde repond $code_purge en JSON du plugin : le chemin est bon (slug fictif par construction)"
+    else
+      ko "la sonde de purge ne repond pas en JSON du plugin (HTTP $code_purge, type ${type_purge%%;*})"
+    fi
+    # et la garantie reelle, c'est qu'un slug qui existe se purge et se recharge
+    SLUG=$(curl -sS -m 20 -L "$URL/wp-json/tuc/v1/menu/kfc" 2>/dev/null | grep -oE '"slug":"[a-z0-9-]+"' | head -1 | sed 's/.*:"//; s/"$//')
+    [ -n "$SLUG" ] || SLUG=kfc
+    rc=$(curl -sS -m 20 -o "$T/ps" -w '%{http_code}' -L "$URL/wp-json/tuc/v1/menu/$SLUG" 2>/dev/null)
+    px=$(grep -oE '"price":[0-9.]+' "$T/ps" 2>/dev/null | head -2 | tr '\n' ' ')
+    [ "$rc" = "200" ] && ok "le slug reel '$SLUG' repond 200 | prix servis : ${px:-aucun}" || ko "le slug reel '$SLUG' repond $rc"
   else
     wa "menu_purge_uri absent du rapport de sante"
   fi
