@@ -132,6 +132,30 @@ try {
 $assert($sans_fatal, 'purge_menu_on_price_change suit la signature reelle de updated_post_meta (cle en 3e, valeur en 4e)');
 $assert(is_array(TUC_Security_Headers::purge_requests_for('https://example.invalid/uat/wp-json/tuc/v1/menu/kfc')),
     'la liste des demandes de purge est decidee separement (tableau, jamais une erreur)');
+
+// ── Un ecriture sans reponse doit quand meme purger (0.8.25) ──────────────────
+// Ce rig tourne sous `wp eval-file`, donc WP_CLI est defini : c'est exactement le
+// contexte que l'ancien garde-fou traitait comme une raison de ne rien faire.
+// MUTATION : repasser `menu_purge_path($slug, $skip)` et `if (null === $path ||
+// headers_sent()) return;` tels qu'ils etaient → les deux assertions ci-dessous
+// rougissent, parce que le module n'est plus jamais averti.
+$_spy = [];
+$_spy_cb = static function ($u) use (&$_spy): void { $_spy[] = (string) $u; };
+add_action('litespeed_purge_url', $_spy_cb, 10, 1);
+$_resto = wp_insert_post(['post_type' => 'tuc_resto', 'post_title' => 'Zeph Spy', 'post_name' => 'zeph-spy', 'post_status' => 'publish']);
+$_plat  = wp_insert_post(['post_type' => 'tuc_menu_item', 'post_title' => 'Aile spy', 'post_status' => 'publish']);
+update_post_meta($_plat, 'tuc_prix', 41);
+update_post_meta($_plat, 'tuc_resto_id', (int) $_resto);
+TUC_Security_Headers::purge_menu_on_price_change(0, (int) $_plat, 'tuc_prix', 42);
+$assert(count($_spy) >= 1, 'une ecriture de prix depuis un contexte sans reponse purge quand meme (WP-CLI, import, cron)');
+$assert(in_array(rest_url('tuc/v1/menu/zeph-spy'), $_spy, true), 'et elle nomme l URL publique du menu, pas un chemin invente');
+update_post_meta($_plat, 'tuc_prix', 'x');
+$_avant = count($_spy);
+TUC_Security_Headers::purge_menu_on_price_change(0, (int) $_plat, 'tuc_options', 'y');
+$assert(count($_spy) === $_avant, 'une autre cle que tuc_prix ne declenche aucune purge');
+remove_action('litespeed_purge_url', $_spy_cb);
+wp_delete_post((int) $_plat, true);
+wp_delete_post((int) $_resto, true);
 $assert(TUC_Security_Headers::purge_requests_for('') === [] || is_array(TUC_Security_Headers::purge_requests_for('')),
     'sans cache LiteSpeed installe, aucune purge pretendue : rien a appeler');
 $assert(count((array) apply_filters('xmlrpc_methods', ['system.listMethods' => 'x', 'wp.getUsersBlogs' => 'y'])) === 0,

@@ -97,8 +97,10 @@ final class TUC_Security_Headers
      * The URI LiteSpeed should drop after a price change, or null when nothing
      * should be emitted. Pure so the guard rails are testable without a cache.
      *
-     * A CLI or cron write has no response to attach a header to; pretending to
-     * purge from the command line would purge nothing and hide that fact.
+     * `$skip_when_no_response` is for callers whose only channel is a response
+     * header: there is nothing to attach it to in a CLI or cron run, and a caller
+     * that reports "purged" from there would be lying. It is NOT a reason to skip
+     * a purge that goes through the cache plugin's own API — see the hook below.
      */
     public static function menu_purge_path(?string $slug, bool $skip_when_no_response = false): ?string
     {
@@ -203,19 +205,26 @@ final class TUC_Security_Headers
             return;
         }
 
-        $skip = (defined('WP_CLI') && WP_CLI) || (defined('DOING_CRON') && DOING_CRON);
+        // Dropping a cache entry and announcing it in a response are two different abilities,
+        // and they used to share one guard: a write from wp-cli or cron returned early, so it
+        // purged nothing at all — while the comment five lines below promised the opposite. That
+        // is not hypothetical: the operator tooling in this repo writes prices with
+        // `wp post meta update`, and so did the verification that this file exists to serve.
+        // Only the header needs a response. The purge needs the plugin, nothing more.
+        $no_response = (defined('WP_CLI') && WP_CLI) || (defined('DOING_CRON') && DOING_CRON);
         $resto_id = (int) get_post_meta((int) $post_id, 'tuc_resto_id', true);
-        $path = self::menu_purge_path($resto_id ? (string) get_post_field('post_name', $resto_id) : null, $skip);
+        $path = self::menu_purge_path($resto_id ? (string) get_post_field('post_name', $resto_id) : null);
 
-        if (null === $path || headers_sent()) {
+        if (null === $path) {
             return;
         }
 
         // Three URIs, not one: the JSON route, the dish's own page, and — the one this
         // function used to miss — the rendered menu page of the restaurant, which is what
-        // a customer actually reads. The header only reaches the current response, so it
-        // cannot help a write coming from WP-CLI, the CSV import or a cron run; asking the
-        // plugin directly works from any context when the plugin is there.
+        // a customer actually reads. The header reaches only the response being written
+        // now, so it is of no use to a WP-CLI or cron write; asking the plugin directly
+        // works from any context when the plugin is there, and that is the half of the
+        // mechanism that must never be skipped.
         $resto_path = $resto_id ? get_permalink($resto_id) : false;
         $urls = self::purge_urls_for(
             (string) $path,
@@ -229,7 +238,9 @@ final class TUC_Security_Headers
 
         // Best effort by design: the header is ignored when LiteSpeed is not in
         // front of PHP, and the short lifetime above already bounds the damage.
-        header('X-LiteSpeed-Purge: ' . implode(', ', $urls), false);
+        if (! $no_response && ! headers_sent()) {
+            header('X-LiteSpeed-Purge: ' . implode(', ', $urls), false);
+        }
 
         foreach ($urls as $url) {
             foreach (self::purge_requests_for($url) as $call) {
