@@ -50,10 +50,16 @@ $n = 0;
 foreach ($subset as $u) { foreach (TUC_Security_Headers::purge_requests_for($u) as $call) { $call(); $n++; } }
 echo "    appels de purge emis : $n\n";
 // Le TTL reellement retenu par le serveur, lu cote plugin : rien d'invente.
-$ttl = get_option('litespeed.conf.cache-ttl');
-$opt = get_option('litespeed-opt');
-echo '    litespeed.conf.cache-ttl : ' . (is_scalar($ttl) && $ttl !== '' ? (string) $ttl : 'vide')
-   . ' | litespeed-opt : ' . (is_array($opt) ? 'configure (' . count($opt) . ' cles)' : 'non configure') . "\n";
+// Les cles suffixees par type de page, pas un nom invente. `litespeed.conf.cache-ttl` et
+// `litespeed-opt` n'existent pas dans cette version du plugin, et c'est sur ce « vide / non
+// configure » que j'avais ecrit que la cause etait hors du depot : la duree qui nous occupe est
+// bien dans WordPress, elle s'appelle `litespeed.conf.cache-ttl_rest`.
+$_fmt = static function (string $k): string {
+    $x = get_option('litespeed.conf.' . $k, '');
+    if (!is_scalar($x)) { $x = json_encode($x); }
+    return $k . '=' . ('' === (string) $x ? '(vide)' : (string) $x);
+};
+echo '    reglage lu : ' . implode(' | ', [$_fmt('cache'), $_fmt('cache-rest'), $_fmt('cache-ttl_rest'), $_fmt('cache-exc')]) . "\n";
 exit(0);
 PHPEOF
 
@@ -246,8 +252,16 @@ if [ "$H90" = "hit" ]; then
   echo "  revenu), le bord ne le respecte pas. Le seul levier reel reste la purge a l'ecriture."
   TTL_HONORE="non"
 else
-  echo "  entree expiree a t=90 (${H90}) : le TTL applique est bien court, le plugin est entendu."
-  TTL_HONORE="oui"
+  if printf '%s' "$H90" | grep -qiE "no-cache|^[?[:space:]]*$"; then
+    # Depuis le reglage cache-exc, la route repond sans copie : ce n'est pas un max-age respecte,
+    # c'est une exclusion. Ecrire « TTL honore : oui » installerait l'idee fausse que le serveur
+    # obeit a l'en-tete du plugin — il ne lui obeit toujours pas (cache-ttl_rest = 604 800).
+    echo "  aucune copie gardee sur cette cle (${H90:-rien}) : la route n'est pas mise en cache."
+    echo "  Ce n'est pas un max-age honore, c'est une exclusion : le prix est lu frais a chaque vue."
+    TTL_HONORE="sans objet (route exclue du cache)"
+  else
+    echo "  entree expiree a t=90 (${H90}) : le TTL applique est court, le reglage du plugin est entendu."
+    TTL_HONORE="oui"
 fi
 
 echo "$S ; 3ter. QUI RESERT LA COPIE : l'origine ou le bord ?"
