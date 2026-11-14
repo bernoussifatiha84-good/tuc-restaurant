@@ -28,6 +28,11 @@ case "$RACINE" in */uat) ;; *) echo "REFUS : la racine doit finir par /uat ($RAC
 [ -n "$URL" ] || { echo "REFUS : url de base manquante"; exit 2; }
 command -v wp >/dev/null 2>&1 || { echo "REFUS : wp-cli absent"; exit 2; }
 cd "$RACINE" || exit 2
+# `--path` doit etre absolu des qu'on a change de repertoire : la racine arrive relative
+# (SSH_ROOT = « domains/…/public_html/uat ») et depuis l'interieur, un chemin relatif ne designe
+# plus rien — d'ou « No WordPress installation found » sur le run 43627617367, alors que la meme
+# commande reussit quand on part de l'accueil.
+RACINE_ABS="$(pwd)"
 
 TMP="$(mktemp -d 2>/dev/null || echo /tmp/tuc-ttl-$$)"
 SAUVEGARDE="$HOME/archives-uat/$(date -u +%Y%m%dT%H%M%SZ)--reglage-ttl.txt"
@@ -110,10 +115,10 @@ purger_tout() {
   # noir, et un instrument qui cache la raison de son echec finit par la faire passer pour un
   # defaut du site (c'est exactement ce que ce depot a appris le 13/11 avec --path).
   local msg
-  msg=$(wp litespeed-purge all --path="$RACINE" --allow-root 2>&1)
+  msg=$(wp litespeed-purge all --path="$RACINE_ABS" --allow-root 2>&1)
   if [ $? = "0" ]; then echo "   cache vide par l'origine (wp litespeed-purge all)"; return 0; fi
   printf '   wp litespeed-purge all : %s\n' "$(printf '%s' "$msg" | tr '\n' ' ' | head -c 120)"
-  msg=$(wp litespeed-purge url "$ROUTE_URL" --path="$RACINE" --allow-root 2>&1)
+  msg=$(wp litespeed-purge url "$ROUTE_URL" --path="$RACINE_ABS" --allow-root 2>&1)
   if [ $? = "0" ]; then echo "   repli : la route du menu est purgee a l'unite ($ROUTE_URL)"; return 0; fi
   printf '   repli aussi en echec : %s\n' "$(printf '%s' "$msg" | tr '\n' ' ' | head -c 120)"
   echo "   aucune purge effectuee : la mesure qui suit portera sur des copies d'avant"
@@ -156,7 +161,13 @@ defaire() {
 }
 trap 'rc=$?; [ "$rc" != 0 ] && defaire' EXIT INT TERM
 
-wp eval-file "$TMP/regler.php" ecrire "$MODE" --allow-root 2>&1 | sed 's/^/   /' || { echo "   ecrit refusee par WordPress"; exit 9; }
+wp eval-file "$TMP/regler.php" ecrire "$MODE" --allow-root 2>&1 | sed 's/^/   /'
+code_ecriture=${PIPESTATUS[0]}
+case "$code_ecriture" in
+  0) echo "   ecrit" ;;
+  3) echo "   deja en place : aucune ecriture inutile, on re-purge et on re-mesure seulement" ;;
+  *) echo "   ecrit refusee par WordPress (code $code_ecriture)"; exit 9 ;;
+esac
 purger_tout
 Q="ap$(date +%s)-$$"
 a0=$(sonde "$ROUTE_URL?$Q"); printf "   t= 0s : %s\n" "$a0"
@@ -166,6 +177,9 @@ code=${a0%%|*}; c1cache=$(printf '%s' "$a1" | cut -d'|' -f2)
 ROUGE=0
 if [ "$MODE" = "exclure" ]; then
   [ "$c1cache" = "hit" ] && { echo "   ECHEC : la route est encore servie d'une copie 30 s apres l'exclusion demandee"; ROUGE=1; }
+  r0=$(sonde "$ROUTE_URL"); r1=$(sonde "$ROUTE_URL")
+  printf "   l URL du client, sans cle unique : %s puis %s\n" "$r0" "$r1"
+  case "$r1" in *\|hit\|*) echo "   ECHEC : l entree creee avant le reglage est encore servie a l URL reale"; ROUGE=1 ;; esac
   p=$(sonde "$URL/kfc/?garde=$$-a"); pp=$(sonde "$URL/kfc/?garde=$$-a")
   echo "   temoin page client /kfc/ : $p puis $pp (elle doit rester cacheable, sinon c'est tout le site qui vient de perdre son cache)"
   case "$pp" in *hit*) ;; *) echo "   ECHEC : la page non plus n'est plus servie d'une copie : le reglage a deborde"; ROUGE=1 ;; esac
