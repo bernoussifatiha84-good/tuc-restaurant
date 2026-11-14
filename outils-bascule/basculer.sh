@@ -251,8 +251,30 @@ if [ "$RUN" -ne 0 ]; then
 fi
 
 # --- 6. le changement de moteur, et sa fumee --------------------------------------------------
+cat > "$T/moteur.php" <<'PHPEOF'
+<?php
+// Le controle ne demande pas a HTTP s'il repond : il demande a WordPress de quel serveur il lit.
+$f = (string) ($argv[1] ?? '');
+if ($f === '' || !is_file($f)) { echo "WP-LOAD-ABSENT\n"; exit(0); }
+define('WP_USE_THEMES', false);
+ob_start(); require $f; ob_end_clean();
+global $wpdb;
+if (!is_object($wpdb)) { echo "VERSION-INCONNUE\n"; exit(0); }
+$wpdb->show_errors = false;
+if (method_exists($wpdb, 'suppress_errors')) { $wpdb->suppress_errors(true); }
+$v = $wpdb->get_var('SELECT VERSION()');
+echo (is_string($v) && $v !== '') ? $v : 'VERSION-INCONNUE', "\n";
+// 2 = ARRAY_N. La constante de WordPress n'existe pas hors de WordPress : la nommer ici
+// faisait un Fatal error melange a la reponse, donc au verdict.
+$t = $wpdb->get_results('SHOW TABLES', 2);
+$n = is_array($t) ? count($t) : -1;
+$p = (int) $wpdb->get_var("SELECT COUNT(*) FROM {$wpdb->posts}");
+$m = (int) $wpdb->get_var("SELECT COUNT(*) FROM {$wpdb->postmeta} WHERE meta_key = 'tuc_prix'");
+echo "tables : $n | posts : $p | tuc_prix : $m\n";
+PHPEOF
+
 bar; echo " 6. BASCULE DU MOTEUR"; bar
-MOT_AVANT=$("$PHPBIN" "$T/moteur.php" "$RACINE/wp-load.php" 2>&1 | grep -av 'already defined\|Cannot modify header' | head -3)
+MOT_AVANT=$("$PHPBIN" "$T/moteur.php" "$RACINE/wp-load.php" 2>&1 | grep -aE '^[0-9]|^(SQLite|MariaDB|MySQL)|WP-LOAD-ABSENT|VERSION-INCONNUE|tables :' | head -3)
 echo "   moteur avant bascule : $(printf %s "$MOT_AVANT" | tr '\n' ';')"
 mv "$DROPIN" "$RACINE/wp-content/db.php.avant-mysql-$TS" && echo "   drop-in ecarte : db.php -> db.php.avant-mysql-$TS"
 fumee() { # $1 = url, $2 = chaine attendue dans le corps. Trois tentatives, redirections suivies.
@@ -288,26 +310,7 @@ fumee "$BASE/wp-json/tuc/v1/menu/kfc" '"price"' || OK=0
 # La preuve que le site lit MySQL, et pas seulement qu'il repond : c'est $wpdb qui est interroge,
 # donc le moteur que WordPress a vraiment charge. Avant la bascule, le drop-in repond du SQLite
 # emule ; apres, une version de serveur reelle. Un "200 OK" ne distingue pas les deux.
-cat > "$T/moteur.php" <<'PHPEOF'
-<?php
-$f = $argv[1];
-if (!is_file($f)) { echo "WP-LOAD-ABSENT
-"; exit(0); }
-define('WP_USE_THEMES', false);
-ob_start(); require $f; ob_end_clean();
-global $wpdb;
-$wpdb->show_errors = false; $wpdb->suppress_errors(true);
-$v = $wpdb->get_var('SELECT VERSION()');
-echo is_string($v) && $v !== '' ? $v : 'VERSION-INCONNUE', "
-";
-$t = $wpdb->get_results('SHOW TABLES', ARRAY_N);
-printf("tables : %d | posts : %s | tuc_prix : %s
-",
-    is_array($t) ? count($t) : -1,
-    (string) (int) $wpdb->get_var("SELECT COUNT(*) FROM {$wpdb->posts}"),
-    (string) (int) $wpdb->get_var("SELECT COUNT(*) FROM {$wpdb->postmeta} WHERE meta_key = 'tuc_prix'"));
-PHPEOF
-MOT=$("$PHPBIN" "$T/moteur.php" "$RACINE/wp-load.php" 2>&1 | grep -av 'already defined\|Cannot modify header' | head -3)
+MOT=$("$PHPBIN" "$T/moteur.php" "$RACINE/wp-load.php" 2>&1 | grep -aE '^[0-9]|^(SQLite|MariaDB|MySQL)|WP-LOAD-ABSENT|VERSION-INCONNUE|tables :' | head -3)
 echo "   moteur vu par WordPress apres bascule : $(printf %s "$MOT" | tr '
 ' ';')"
 case "$MOT" in
@@ -320,7 +323,7 @@ if [ "$OK" -eq 0 ]; then
   echo "   FUMEE ROUGE apres bascule : retour arriere immediat."
   mv "$RACINE/wp-content/db.php.avant-mysql-$TS" "$DROPIN" && echo "   drop-in remis en place"
   tar -xzf "$ARCHE" -C "$RACINE" && echo "   wp-config restaure depuis l'archive verifiee"
-  MOT_APR=$("$PHPBIN" "$T/moteur.php" "$RACINE/wp-load.php" 2>&1 | grep -av 'already defined\|Cannot modify header' | head -1)
+  MOT_APR=$("$PHPBIN" "$T/moteur.php" "$RACINE/wp-load.php" 2>&1 | grep -aE '^[0-9]|^(SQLite|MariaDB|MySQL)|WP-LOAD-ABSENT|VERSION-INCONNUE' | head -1)
   echo "   moteur apres restauration : $(printf %s "$MOT_APR" | cut -c1-70)"
   if fumee "$BASE/wp-json/tuc/v1/sante" '"ok":true'; then
     echo "   RETABLISSEMENT VERIFIE : le site repond comme avant la bascule."
