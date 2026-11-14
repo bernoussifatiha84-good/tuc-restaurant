@@ -88,13 +88,32 @@ foreach (['posts' => 'ID', 'options' => 'option_id', 'postmeta' => 'meta_id', 'c
         ($ai === 0 || $ai > $max) ? 'ok' : 'DERIVE — la sequence est en dessous des ids existants');
 }
 // Les index : le drop-in les emulait depuis un tableau d'echafaudage ; sur MySQL ils doivent etre la.
+// Poids reel de la base, pour que « alourdir » veuille dire quelque chose de mesure. Les chiffres
+// InnoDB de information_schema sont des estimations cachees : c'est une ordre de grandeur, pas un
+// du-millieme — et c'est suffisant pour comparer a un fichier de 1,5 Mo.
+$sz = $wpdb->get_row("SELECT SUM(DATA_LENGTH) d, SUM(INDEX_LENGTH) i, SUM(DATA_FREE) f, SUM(TABLE_ROWS) r
+    FROM information_schema.TABLES WHERE TABLE_SCHEMA = DATABASE() AND TABLE_TYPE = 'BASE TABLE'", ARRAY_N);
+printf("   poids base MySQL (estime InnoDB) : donnees %s Mo | index %s Mo | fragmentation %s Mo | ~%s lignes\n",
+    number_format(((int) ($sz['d'] ?? 0)) / 1048576, 1), number_format(((int) ($sz['i'] ?? 0)) / 1048576, 1),
+    number_format(((int) ($sz['f'] ?? 0)) / 1048576, 1), (string) ($sz['r'] ?? '?'));
+// Le plafond qui compte sur un mutualise n'est pas max_connections (le serveur est partage) mais
+// max_user_connections pour NOTRE utilisateur. Max_used_connections est global ; on rapporte les
+// deux, et la part de l'utilisateur dans le fichier d'etat.
+$me = $wpdb->get_row("SELECT COUNT(*) n, MAX(TIME) t FROM information_schema.PROCESSLIST WHERE USER = CURRENT_USER() OR USER = SUBSTRING_INDEX(CURRENT_USER(),'@',1)", ARRAY_N);
+$mu = $wpdb->get_row("SHOW STATUS LIKE 'Max_used_connections'", ARRAY_N);
+printf("   connexions : %s actives pour cet utilisateur (plus longue %s s) | %s au pic historique du serveur\n",
+    (string) ($me['n'] ?? '?'), (string) ($me['t'] ?? '?'), is_array($mu) ? (string) $mu[1] : '?');
+$st = $wpdb->get_row("SHOW ENGINE INNODB STATUS", ARRAY_N);
+if (is_array($st) && preg_match('/(\d+)\.?\d* (?:rows?|ops)/i', (string) ($st[2] ?? ''), $mm)) {
+    printf("   activite InnoDB (extrait) : %s\n", trim(preg_replace('/\s+/', ' ', (string) ($st[2] ?? ''))));
+}
 $ix = (int) $wpdb->get_var("SELECT COUNT(DISTINCT CONCAT(TABLE_NAME,'/',INDEX_NAME)) FROM information_schema.STATISTICS WHERE TABLE_SCHEMA = DATABASE() AND INDEX_NAME <> 'PRIMARY'");
 $pk = (int) $wpdb->get_var("SELECT COUNT(DISTINCT CONCAT(TABLE_NAME,'/',INDEX_NAME)) FROM information_schema.STATISTICS WHERE TABLE_SCHEMA = DATABASE() AND INDEX_NAME = 'PRIMARY'");
 printf("   index : %d cles primaires, %d index secondaires sur %s tables\n", $pk, $ix,
     (string) $wpdb->get_var("SELECT COUNT(*) FROM information_schema.TABLES WHERE TABLE_SCHEMA = DATABASE()"));
 PHPEOF
 bar; echo " 1. LE MOTEUR REELLEMENT UTILISE"; bar
-"$PHP" "$T/moteur.php" "$RACINE/wp-load.php" 2>&1 | grep -av 'already defined\|Cannot modify header' | sed 's/^/ /' | head -28
+"$PHP" "$T/moteur.php" "$RACINE/wp-load.php" 2>&1 | grep -av 'already defined\|Cannot modify header' | sed 's/^/ /' | head -36
 V=$("$PHP" "$T/moteur.php" "$RACINE/wp-load.php" 2>&1 | grep -a 'version serveur' | head -1)
 case "$V" in
   *MariaDB*|*MySQL*) ok "WordPress lit un serveur MySQL/MariaDB" ;;
