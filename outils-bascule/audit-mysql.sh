@@ -244,8 +244,17 @@ fi
 # ---------------------------------------------------------------- 3. ce que le site sert
 bar; echo " 3. CE QUE LE SITE SERT, comparairement a la copie figee"; bar
 if [ -n "$URL" ]; then
+  # Deux sortes de lectures, deux regles. Le rapport de sante est une LECTURE D'ETAT : il doit
+  # venir de PHP, sinon on valide une copie (mesure du 14/11 : cet endpoint est cache 604 800 s,
+  # `x-litespeed-cache: hit`). Le menu et les pages sont la VUE DU CLIENT : eux, on les demande
+  # exactement comme ils sont servis, cache compris — c'est ce que le client voit qui nous interesse.
+  PROBE="audit$(date +%s)-$$"
   for p in "/wp-json/tuc/v1/sante" "/wp-json/tuc/v1/menu/kfc" "/kfc/" "/"; do
-    c=$(curl -sS -m 25 -o "$T/p" -w '%{http_code}' -L "$URL$p" 2>/dev/null || echo 000)
+    case "$p" in
+      */sante) q="$p?tucprobe=$PROBE" ;;
+      *) q="$p" ;;
+    esac
+    c=$(curl -sS -m 25 -o "$T/p" -w '%{http_code}' -L "$URL$q" 2>/dev/null || echo 000)
     t=$(head -c 1 "$T/p" 2>/dev/null)
     printf "   %-32s HTTP %s | %6s o | %s\n" "$p" "$c" "$(stat -c %s "$T/p" 2>/dev/null)" "$(printf %s "$t" | tr -d '\n')"
     [ "$c" = "200" ] || ko "$p ne repond pas 200"
@@ -253,7 +262,7 @@ if [ -n "$URL" ]; then
   P=$(curl -sS -m 25 -L "$URL/wp-json/tuc/v1/menu/kfc" 2>/dev/null | grep -oE '"price":[0-9.]+' | tr '\n' ' ')
   echo "   prix servis : ${P:-aucun}"
   # Le test du 404 historique : la purge doit viser une URL vivante.
-  PU=$(curl -sS -m 20 -L "$URL/wp-json/tuc/v1/sante" 2>/dev/null | grep -oE '"menu_purge_uri":"[^"]+"' | head -1 \
+  PU=$(curl -sS -m 20 -L "$URL/wp-json/tuc/v1/sante?tucprobe=$PROBE" 2>/dev/null | grep -oE '"menu_purge_uri":"[^"]+"' | head -1 \
     | sed 's/.*:"//; s/"$//' | sed 's#\\/#/#g')   # le JSON echappe les barres : https:\/\/...
   if [ -n "$PU" ]; then
     # Le rapport de sante publie une URL de sonde, pas une page : menu_purge_path('controle-de-purge')
@@ -269,7 +278,7 @@ if [ -n "$URL" ]; then
          PRE=$(printf '%s' "$URL" | sed -E 's#^https?://[^/]+##')
          PU_URL="$ORIGIN$(printf '%s' "$PU" | sed "s#^$PRE##")" ;;
     esac
-    pc=$(curl -sS -m 20 -o "$T/pu" -w '%{http_code}|%{content_type}' -L "$PU_URL" 2>/dev/null)
+    pc=$(curl -sS -m 20 -o "$T/pu" -w '%{http_code}|%{content_type}' -L "$PU_URL?tucprobe=$PROBE" 2>/dev/null)
     code_purge=${pc%%|*}; type_purge=${pc#*|}
     corps=$(head -c 400 "$T/pu" 2>/dev/null)
     echo "   sonde de purge : HTTP $code_purge | ${type_purge%%;*} | $(printf %s "$corps" | head -c 74)"

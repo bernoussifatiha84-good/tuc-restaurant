@@ -498,10 +498,17 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
+          PROBE="${GITHUB_RUN_ID}-$(date +%s)"
           BODY=""
           for attempt in 1 2 3 4 5; do
-            BODY=$(curl -fsS --max-time 20 "$SITE_URL/wp-json/tuc/v1/sante" 2>/dev/null) && break
-            BODY=$(curl -fsS --max-time 20 "$SITE_URL/?rest_route=/tuc/v1/sante" 2>/dev/null) && break
+            # Sonde fraiche, pas une copie. Mesure du 14/11 : /wp-json/tuc/v1/sante est servi par
+            # LiteSpeed avec `x-litespeed-cache: hit` et `cache-control: public, max-age=604800` —
+            # un controle de sante qui lit cette URL peut donc valider un deploiement contre le
+            # rapport d'une semaine precedente, version comprise. Une cle unique par execution force
+            # le rendu PHP (verifie : miss) sans toucher aux URLs que le client voit, elles, cachees
+            # a dessein.
+            BODY=$(curl -fsS --max-time 20 "$SITE_URL/wp-json/tuc/v1/sante?tucprobe=$PROBE" 2>/dev/null) && break
+            BODY=$(curl -fsS --max-time 20 "$SITE_URL/?rest_route=/tuc/v1/sante&tucprobe=$PROBE" 2>/dev/null) && break
             echo "Tentative $attempt/5 échouée, nouvelle tentative…"
             sleep 8
           done
@@ -1130,6 +1137,33 @@ jobs:
     environment: ${{ needs.cible.outputs.env }}
     steps:
       - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+
+      - name: Refuser d'auditer un arbre en retard sur ce qu'il audite
+        env:
+          OPERATION: ${{ inputs.operation }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          # Un instrument qui tourne sur un arbre perime produit des conclusions fausses, et rien
+          # dans la sortie ne le dit. C'est arrive le 14/11 : la branche d'outillage avait 41 commits
+          # de retard sur main, son grep ne voyait pas le verrouillage du hook de purge, et la revue
+          # publiee accusait le depot de ne rien tester. Les operations qui portent un jugement sur le
+          # code refusent donc un arbre en retard ; les autres sont seulement averties.
+          git fetch -q --no-tags origin main
+          if git merge-base --is-ancestor FETCH_HEAD HEAD; then
+            echo "OK : origin/main est contenu dans cet arbre ($(git rev-list --count FETCH_HEAD..HEAD) commit(s) d'outillage en avance, 0 de retard)."
+          else
+            RETARD=$(git rev-list --count HEAD..FETCH_HEAD)
+            case "$OPERATION" in
+              audit-mysql-uat|verif-litespeed-uat|mesure-connexions-uat|degager-sqlite-uat)
+                echo "::error title=Instrument perime::cet arbre est en retard de $RETARD commit(s) sur main : ses conclusions porteraient sur du code qui n'est plus en ligne. Mergez origin/main dans la branche d'audit, puis rejouez."
+                exit 1 ;;
+              *)
+                echo "::warning title=Instrument perime::$RETARD commit(s) de retard sur main — non bloquant pour '$OPERATION', mais a reprendre." ;;
+            esac
+          fi
 
       # Cet outil ecrit. Il ne peut done pas heriter d'une cible « par defaut » :
       # quatre refus, et aucun d'entre eux ne peut etre contourne par une autre operation.
