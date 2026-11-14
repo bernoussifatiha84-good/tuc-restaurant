@@ -16,6 +16,7 @@ on:
         description: Opération à exécuter
         type: choice
         options:
+          - provision-mysql-uat
           - creneau-mysql-uat
           - bascule-uat-mysql
           - bascule-uat-mysql-executer
@@ -152,6 +153,9 @@ jobs:
             ENV_NAME=uat; URL="$URL_UAT"; ROOT="$ROOT_UAT"
           elif [[ "$EVENT_NAME" == workflow_dispatch && "$OPERATION" == "bascule-uat-preflight" ]]; then
             # Preflight de la bascule SQLite -> MySQL : lecture seule sur l'UAT.
+            ENV_NAME=uat; URL="$URL_UAT"; ROOT="$ROOT_UAT"
+          elif [[ "$EVENT_NAME" == workflow_dispatch && "$OPERATION" == "provision-mysql-uat" ]]; then
+            # Provisionnement du creneau : l'UAT seulement, et l'ecrite ne porte que sur wp-config.
             ENV_NAME=uat; URL="$URL_UAT"; ROOT="$ROOT_UAT"
           elif [[ "$EVENT_NAME" == workflow_dispatch
                  && ( "$OPERATION" == "creneau-mysql-uat"
@@ -944,6 +948,149 @@ jobs:
           trap 'rm -f "$2" "$3"' EXIT
           bash "$2" "$1" "$3" "$4"
           REMOTE
+
+  # --- Provisionnement du creneau : l'API cree la base, SSH la reporte, rien d'autre. ---------
+  # Le jeton ne vit que comme secret du depot (HOSTINGER_API_TOKEN). Le mot de passe de la base est
+  # genere dans le runner, masque au log par ::add-mask::, passe par un fichier en mode 600, est
+  # relu depuis le wp-config apres coup, puis detruit. Il n'existe a aucun moment dans une ligne de
+  # commande, un argument SSH ou un commit.
+  provision_mysql_uat:
+    name: Creer le creneau MySQL et le reporter dans /uat
+    if: ${{ github.event_name == 'workflow_dispatch' && inputs.operation == 'provision-mysql-uat' }}
+    needs: [cible]
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    environment: ${{ needs.cible.outputs.env }}
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Refuser toute cible qui n'est pas l'UAT
+        env:
+          ENV_NAME: ${{ needs.cible.outputs.env }}
+          SITE_URL: ${{ needs.cible.outputs.url }}
+          SSH_ROOT: ${{ needs.cible.outputs.root }}
+          URL_UAT: ${{ vars.URL_UAT }}
+          URL_PRD: ${{ vars.URL_PRD }}
+          ROOT_UAT: ${{ vars.ROOT_UAT }}
+          ROOT_PRD: ${{ vars.ROOT_PRD }}
+          ROOT_DEV: ${{ vars.ROOT_DEV }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          trim() { printf '%s' "$1" | sed 's:/*$::'; }
+          if [ "$ENV_NAME" != "uat" ]; then
+            echo "::error::provision-mysql-uat n'accepte que la cible uat (recu : ${ENV_NAME:-vide}). Aucun acces tente."
+            exit 1
+          fi
+          root="$(trim "$SSH_ROOT")"
+          if [ "$(trim "${ROOT_UAT:-}")" != "$root" ]; then
+            echo "::error::ROOT_UAT ne correspond pas a la cible resolue ($root). Provisionnement annule."
+            exit 1
+          fi
+          case "$root" in
+            */uat) ;;
+            *) echo "::error::La racine resolue ne finit pas par /uat : $root. Provisionnement annule."; exit 1 ;;
+          esac
+          for pair in "URL_PRD:$SITE_URL" "ROOT_PRD:$root" "ROOT_DEV:$root"; do
+            key="${pair%%:*}"; val="${pair#*:}"; ref="$(trim "${!key:-}")"
+            if [ -n "$ref" ] && [ "$ref" = "$val" ]; then
+              echo "::error::La cible egale $key. Cet outil ne marche que sur l'UAT."
+              exit 1
+            fi
+          done
+          if [ -n "${URL_UAT:-}" ] && [ "$(trim "$URL_UAT")" != "$(trim "$SITE_URL")" ]; then
+            echo "::error::URL resolue differente de URL_UAT. Provisionnement annule."
+            exit 1
+          fi
+          echo "Cible acceptee pour le preflight : $root"
+
+
+      - name: Preparer la connexion SSH
+        env:
+          SSH_PRIVATE_KEY: ${{ secrets.SSH_PRIVATE_KEY }}
+          SSH_HOST: ${{ secrets.SSH_HOST }}
+          SSH_PORT: ${{ vars.SSH_PORT || '65002' }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p ~/.ssh
+          printf '%s\n' "$SSH_PRIVATE_KEY" > ~/.ssh/id_deploy
+          chmod 600 ~/.ssh/id_deploy
+          ssh-keygen -y -f ~/.ssh/id_deploy >/dev/null
+          ssh-keyscan -p "$SSH_PORT" -H "$SSH_HOST" >> ~/.ssh/known_hosts 2>/dev/null
+
+      - name: Linter les outils avant envoi
+        shell: bash
+        run: |
+          set -euo pipefail
+          bash -n outils-bascule/creer-creneau.sh
+          bash -n outils-bascule/poser-creneau.sh
+          bash -n outils-bascule/creneau-mysql.sh
+
+      - name: Creer la base chez l'hebergeur, la reporter dans le wp-config, la verifier
+        env:
+          HOSTINGER_API_TOKEN: ${{ secrets.HOSTINGER_API_TOKEN }}
+          HOSTINGER_ACCOUNT: ${{ vars.HOSTINGER_ACCOUNT }}
+          SSH_PORT: ${{ vars.SSH_PORT || '65002' }}
+          SSH_USER: ${{ secrets.SSH_USERNAME || secrets.SSH_USER }}
+          SSH_HOST: ${{ secrets.SSH_HOST }}
+          SSH_ROOT: ${{ needs.cible.outputs.root }}
+          SITE_URL: ${{ needs.cible.outputs.url }}
+          RUN_ID: ${{ github.run_id }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          pass="$RUNNER_TEMP/tuc-creneau-$RUN_ID"
+          export TUC_PASSFILE="$pass"
+          dom=$(printf '%s' "$SITE_URL" | sed -E 's#https?://##; s#[:/].*##')
+          echo "domaine declare a l'API : $dom"
+          # 1. L'API : base + utilisateur crees, mot de passe genere ici, nom reel relu dans la liste.
+          if ! bash outils-bascule/creer-creneau.sh "$dom" "${HOSTINGER_ACCOUNT:-u987613820}"; then
+            echo "::error::Le creneau n'a pas ete cree (ou pas verifie) par l'API. Le site n'a pas ete touche : aucun envoi, aucune ecriture."
+            exit 1
+          fi
+          # 2. Le report dans le wp-config, par SSH, avec archive verifiee et relecture des valeurs.
+          rp="/tmp/tuc-poser-${RUN_ID}.sh"; rpass="/tmp/tuc-creneau-pass-${RUN_ID}"
+          scp -q -i ~/.ssh/id_deploy -P "$SSH_PORT" -o StrictHostKeyChecking=yes \
+            outils-bascule/poser-creneau.sh "$SSH_USER@$SSH_HOST:$rp"
+          scp -q -i ~/.ssh/id_deploy -P "$SSH_PORT" -o StrictHostKeyChecking=yes \
+            "$pass" "$SSH_USER@$SSH_HOST:$rpass"
+          if [ -f "$pass.noms" ]; then
+            scp -q -i ~/.ssh/id_deploy -P "$SSH_PORT" -o StrictHostKeyChecking=yes \
+              "$pass.noms" "$SSH_USER@$SSH_HOST:$rpass.noms"
+            chmod 600 "$rpass" 2>/dev/null || true
+          fi
+          printf -v remote_root '%q' "$SSH_ROOT"; printf -v remote_pass '%q' "$rpass"
+          printf -v remote_rp '%q' "$rp"
+          set +e
+          ssh -i ~/.ssh/id_deploy -p "$SSH_PORT" -o StrictHostKeyChecking=yes \
+            "$SSH_USER@$SSH_HOST" "bash -s -- $remote_root $remote_pass $remote_rp" <<'REMOTE'
+          set -uo pipefail
+          # Le fichier de mot de passe est detruit meme si le script meurt : c'est la seule raison
+          # pour laquelle il sort du runner. `shred` si l'hote l'a, `rm` sinon.
+          trap 'shred -u "$2" 2>/dev/null || rm -f "$2" "$2.noms"; rm -f "$3"' EXIT
+          bash "$3" "$1" "$2"
+          REMOTE
+          code=$?
+          set -e
+          shred -u "$pass" "$pass.noms" 2>/dev/null || rm -f "$pass" "$pass.noms"
+          if [ "$code" -ne 0 ]; then
+            echo "::error::Le report dans le wp-config a echoue (code $code). Le script remet le wp-config d'avant tout seul ; verifier la ligne 'restaure' dans le journal ci-dessus."
+            exit "$code"
+          fi
+          # 3. Le releve en lecture seule, qui dit ce que le site voit maintenant — y compris le
+          #    sql_mode global, seul chiffre qui me manquait pour juger les 29 DEFAULT '0000-00-00'.
+          distant="/tmp/tuc-creneau-${RUN_ID}.sh"
+          scp -q -i ~/.ssh/id_deploy -P "$SSH_PORT" -o StrictHostKeyChecking=yes \
+            outils-bascule/creneau-mysql.sh "$SSH_USER@$SSH_HOST:$distant"
+          printf -v remote_file '%q' "$distant"
+          ssh -i ~/.ssh/id_deploy -p "$SSH_PORT" -o StrictHostKeyChecking=yes \
+            "$SSH_USER@$SSH_HOST" "bash -s -- $remote_root $remote_file" <<'REMOTE'
+          set -uo pipefail
+          trap 'rm -f "$2"' EXIT
+          bash "$2" "$1"
+          REMOTE
+          echo "Prochaine etape : operation = bascule-uat-mysql (conversion a blanc), puis -executer."
 
   verif_litespeed_uat:
     name: Verification LiteSpeed sur UAT (prix reversible)
