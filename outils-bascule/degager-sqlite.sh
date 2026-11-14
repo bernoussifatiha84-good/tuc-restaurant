@@ -121,30 +121,78 @@ else
 fi
 
 bar; echo " 3. ERROR_LOG FERME AU PUBLIC"; bar
+# Lecons de la premiere tentative sur l'hote, toutes deux mesurees : (1) LiteSpeed n'applique pas
+# `Require all denied` a l'interieur d'un <FilesMatch> — le bloc restait sans effet ; (2) il etait
+# ECrit en FIN de fichier, donc apres la regne `RewriteRule . index.php [L]` de WordPress, qui arrete
+# le traitement : un garde-fou place derriere un [L] n'existe pas. Le bloc est donc PREPOSE, en trois
+# syntaxes (rewrite = ce que LiteSpeed honore, filesmatch = Apache sans rewrite, deny = anciens
+# serveurs), et le log quitte physiquement la racine web. Le .htaccess est reconstruit a chaque
+# passage : un bloc TUC precedant est retire puis repose, jamais duplique.
+ELOG=""
+for c in "$RACINE/error_log" "$RACINE/logs/error_log" "$RACINE/../error_log"; do
+  [ -f "$c" ] && { ELOG="$c"; break; }
+done
+{
+  echo "# TUC — fichiers hors sol : journaux, rests d'installation, bases. A ne jamais servir."
+  echo "# Place AVANT le bloc WordPress : sa regne finale porte [L] et couperait tout ce qui suit."
+  echo "RewriteEngine On"
+  echo 'RewriteRule ^(.*/)?(error_log|[^/]*\.log|[^/]*\.sql|[^/]*\.sqlite|db-path\.php|db\.php(\..*)?)$ - [F,NS]'
+  echo '<FilesMatch "^(error_log|.*\.log|.*\.sql|.*\.sqlite|db-path\.php|db\.php(\..*)?)$">'
+  echo "  <IfModule mod_authz_core.c>"
+  echo "    Require all denied"
+  echo "  </IfModule>"
+  echo "  <IfModule !mod_authz_core.c>"
+  echo "    Order deny,allow"
+  echo "    Deny from all"
+  echo "  </IfModule>"
+  echo "</FilesMatch>"
+  if [ -n "$ELOG" ]; then
+    # le log continue d'ecrire, mais la ou personne ne le telecharge
+    echo "php_value error_log $ARCH/php-error.log"
+  fi
+  echo "# TUC — fin"
+  echo ""
+} > "$T/garde"
+echo "   bloc de garde : $(wc -l < "$T/garde") lignes, soit $(stat -c %s "$T/garde") o"
 if [ -f "$RACINE/.htaccess" ]; then
   cp "$RACINE/.htaccess" "$T/htaccess.avant"
-  if grep -q 'TUC — fichiers hors sol' "$RACINE/.htaccess"; then
-    echo "   le bloc existe deja dans .htaccess : rien ajoute"
-  else
-    cat >> "$RACINE/.htaccess" <<'HT'
-
-# TUC — fichiers hors sol : journaux et rests d'installation, a ne jamais servir.
-<FilesMatch "^(error_log|.*\.log|.*\.sql|.*\.sqlite|db\.php(\..*)?|db-path\.php)$">
-  Require all denied
-</FilesMatch>
-# TUC — fin
-HT
-    echo "   bloc ajoute en fin de .htaccess (l'original est garde, il revient si un controle rougit)"
-  fi
-  if [ -n "$URL" ]; then
-    c=$(curl -sS -m 20 -o "$T/after-log" -w '%{http_code}' "$URL/error_log" 2>/dev/null)
-    case "$c" in 403|401|404) ok "error_log ne repond plus au public (HTTP $c)" ;;
-                  200) ko "error_log repond toujours 200 : le bloc n'est pas applique"; defaire; exit 9 ;;
-                  *) echo "   --  error_log repond $c : ni 200 ni refuse, a verifier a la main" ;;
-    esac
-  fi
+  echo "   .htaccess avant : $(stat -c %s "$RACINE/.htaccess") o"
 else
-  echo "   pas de .htaccess a $RACINE : rien modifie"
+  echo "   pas de .htaccess a cet endroit : un nouveau sera cree"
+fi
+cat "$T/garde" > "$T/htaccess.nouveau"
+  # aucun interpretteur externe dans le chemin critique : l'hebergeur ne promet pas python3, et un
+  # outil de deplacement qui en depend se termine en .htaccess a moitie ecrit, avec le registre deja
+  # rempli. awk retire l'ancien bloc TUC (bornes explicites), on repose le bloc neuf en tete.
+  { cat "$T/garde"
+    awk 'BEGIN{d=0; gob=0}
+      /^# TUC .* fichiers hors sol/{d=1}
+      d==0 { if (gob) { if ($0=="") { gob=0; next } gob=0 } print }
+      /^# TUC .* fin$/{ if (d) { d=0; gob=1 } }' "$RACINE/.htaccess"
+  } > "$T/htaccess.nouveau"
+  mv "$T/htaccess.nouveau" "$RACINE/.htaccess"
+mv "$T/htaccess.nouveau" "$RACINE/.htaccess"
+echo "   .htaccess apres : $(stat -c %s "$RACINE/.htaccess") o (bloc en tete)"
+if [ -n "$ELOG" ]; then
+  echo "   le fichier de log lui-meme quitte la racine : $(stat -c %s "$ELOG") o"
+  deplacer "$ELOG" || echo "   (deplacement rate : le bloc .htaccess reste la seule protection)"
+else
+  echo "   aucun error_log trouve sous la racine : rien a deplacer"
+fi
+if [ -n "$URL" ]; then
+  c=$(curl -sS -m 20 -o "$T/after-log" -w '%{http_code}' "$URL/error_log" 2>/dev/null)
+  case "$c" in
+    403|401|404) ok "error_log ne repond plus au public (HTTP $c)" ;;
+    200) ko "error_log repond toujours 200 : rewrite et filesmatch non appliques tous les deux" ;;
+    500) ko ".htaccess refuse par le serveur (HTTP 500) : a annuler" ;;
+    *) echo "   --  error_log repond $c : ni 200 ni refuse, a verifier a la main" ;;
+  esac
+  for sonde in "/" "/kfc/" "/wp-json/tuc/v1/sante"; do
+    cc=$(curl -sS -m 20 -o /dev/null -w '%{http_code}' -L "$URL$sonde" 2>/dev/null)
+    [ "$cc" = "200" ] || ko "le nouveau .htaccess casse $sonde (HTTP $cc)"
+  done
+else
+  echo "   --  aucune URL : le bloc est ecrit, sa version reseau n'est pas verifiee"
 fi
 
 bar; echo " 4. FUMEE : LE SITE DOIT ETRE VERT APRES"; bar
