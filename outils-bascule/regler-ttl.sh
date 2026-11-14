@@ -41,9 +41,14 @@ cat > "$TMP/regler.php" <<'PHPEOF'
 <?php
 // Tout passe par le format de stockage du plugin : une option par cle, valeur textuelle JSON.
 // Inventer une forme serait exacte jusqu'au premier enregistrement fait depuis l'interface.
-$action = $argv[1] ?? 'lire';
-$clef   = $argv[2] ?? '';
-$charge = $argv[3] ?? '';
+// `wp eval-file` rend les parametres positionnels dans $args (c'est ce que fait deja purge.php
+// plus haut dans ce controle). Les lire dans $argv rendait $action absent, donc « lire » : la
+// branche d'ecriture ne s'est jamais executee, et le run 43627377413 a mesure un etat intact en
+// croyant mesurer un reglage applique. Le rouge obtenu etait donc le bon, pour la mauvaise raison.
+$args    = isset($args) && is_array($args) ? $args : [];
+$action = $args[0] ?? 'lire';
+$clef   = $args[1] ?? '';
+$charge = $args[2] ?? '';
 function lignes() {
     global $wpdb;
     $r = $wpdb->get_results("SELECT option_name n, option_value v FROM {$wpdb->options}"
@@ -100,7 +105,20 @@ sonde() { # $1 url ; rend "code|cache|age"
   a=$(tr -d '\r' < "$TMP/h" | grep -ai '^age:' | head -1 | sed 's/^[^:]*:[[:space:]]*//')
   printf '%s|%s|%s' "$(tr -d '\r' < "$TMP/h" | awk 'NR==1{print $2}')" "${x:-aucun}" "${a:-aucun}"
 }
-purger_tout() { wp litespeed-purge all --path="$RACINE" --allow-root >/dev/null 2>&1 && echo "  cache purge (wp litespeed-purge all --path)" || echo " wp-cli n'a pas pu purger : la mesure qui suit portera sur d'anciennes copies"; }
+purger_tout() {
+  # Le message de wp-cli se lit : l'etag ou le format d'option ne sont pas devinables depuis le
+  # noir, et un instrument qui cache la raison de son echec finit par la faire passer pour un
+  # defaut du site (c'est exactement ce que ce depot a appris le 13/11 avec --path).
+  local msg
+  msg=$(wp litespeed-purge all --path="$RACINE" --allow-root 2>&1)
+  if [ $? = "0" ]; then echo "   cache vide par l'origine (wp litespeed-purge all)"; return 0; fi
+  printf '   wp litespeed-purge all : %s\n' "$(printf '%s' "$msg" | tr '\n' ' ' | head -c 120)"
+  msg=$(wp litespeed-purge url "$ROUTE_URL" --path="$RACINE" --allow-root 2>&1)
+  if [ $? = "0" ]; then echo "   repli : la route du menu est purgee a l'unite ($ROUTE_URL)"; return 0; fi
+  printf '   repli aussi en echec : %s\n' "$(printf '%s' "$msg" | tr '\n' ' ' | head -c 120)"
+  echo "   aucune purge effectuee : la mesure qui suit portera sur des copies d'avant"
+  return 1
+}
 
 bar; echo " 1. CE QUE LE SERVEUR ET LE PLUGIN DECIDENT AUJOURD'HUI"; bar
 wp eval-file "$TMP/regler.php" lire --allow-root > "$TMP/avant.txt" 2>&1 || { echo "REFUS : lecture impossible"; exit 2; }
