@@ -92,8 +92,9 @@ foreach (['posts' => 'ID', 'options' => 'option_id', 'postmeta' => 'meta_id', 'c
 // the stats are switched off (information_schema_stats=OFF), which returns NULL, and NULL
 // printed as "0,0 Mo" would be a lie of the worst kind: a fake measurement. So the real
 // measure sums LENGTH() over the actual columns: slow enough to be honest, small enough here.
-$isz = $wpdb->get_row("SELECT @@information_schema_stats AS s", 1);
-printf("   information_schema_stats : %s\n", is_array($isz) ? (string) $isz['s'] : 'non lu');
+$isz = $wpdb->get_row("SHOW VARIABLES LIKE 'information_schema_stats'", 2);
+printf("   information_schema_stats : %s   (a ZERO, les tailles d'information_schema sont nulles : d'ou la mesure directe)\n",
+    is_array($isz) && trim((string) $isz[1]) !== '' ? (string) $isz[1] : 'non expose par l\'hebergeur');
 $tot = 0; $totr = 0; $parTable = [];
 $tabs = (array) $wpdb->get_col("SELECT TABLE_NAME FROM information_schema.TABLES
     WHERE TABLE_SCHEMA = DATABASE() AND TABLE_TYPE = 'BASE TABLE' ORDER BY TABLE_NAME");
@@ -106,7 +107,6 @@ foreach ($tabs as $tb) {
         return !in_array($t, ['blob', 'varbinary'], true);
     }));
     if ($cols === []) { continue; }
-    $expr = "COALESCE(SUM(LENGTH(CONCAT_WS('|`|" . implode("", array_fill(0, min(count($cols), 12), "`|`|")) . "))), 0)";
     $liste = implode('`, `', array_slice($cols, 0, 12));
     $q = $wpdb->get_var("SELECT COALESCE(SUM(LENGTH(CONCAT_WS('~', `$liste`))), 0) FROM `$tb`");
     $bytes = (int) $q; $rows = (int) $wpdb->get_var("SELECT COUNT(*) FROM `$tb`");
@@ -123,14 +123,25 @@ foreach ($parTable as $tb => $v) {
 }
 // Connexions : information_schema.PROCESSLIST est parfois interdit au compte ; SHOW PROCESSLIST
 // passe par un autre chemin et marche toujours.
-$pl = (array) $wpdb->get_results("SHOW PROCESSLIST", 1);
-$moi = 0; $long = 0;
+// Compter par IDENTIFIANT de connexion, pas par nom d'utilisateur : le nom peut differer de
+// DB_USER selon la facon dont le compte est declare, et un comparage muet rend un compte a zero
+// qui a l'air d'une mesure.
+$cid = (int) $wpdb->get_var('SELECT CONNECTION_ID()');
+$pl = (array) $wpdb->get_results('SHOW PROCESSLIST', 1);
+$moi = 0; $moiMoi = 0; $long = 0;
 foreach ($pl as $r) {
-    if (isset($r['User']) && $r['User'] === DB_USER) { $moi++; $long = max($long, (int) $r['Time']); }
+    $u = (string) ($r['User'] ?? '');
+    if ($u === DB_USER || stripos($u, (string) DB_USER) !== false) { $moi++; }
+    if ((int) ($r['Id'] ?? 0) === $cid) { $moiMoi = 1; $long = max($long, (int) ($r['Time'] ?? 0)); }
 }
 $mu = $wpdb->get_row("SHOW STATUS LIKE 'Max_used_connections'", 2);
-printf("   connexions : %d ouvertes pour cet utilisateur (plus longue %d s) | %s au pic historique du serveur, partage\n",
-    $moi, $long, is_array($mu) ? (string) $mu[1] : '?');
+printf("   connexions : %d vues au total dans le processlist (%d pour cet utilisateur, dont la mienne : %s, %d s)\n",
+    count($pl), $moi, $moiMoi ? 'oui' : 'NON VUE — processlist restreint par l\'hebergeur', $long);
+printf("   plafond : max_user_connections = %s pour ce compte | %s au pic historique du serveur, partage\n",
+    (string) $wpdb->get_var("SELECT @@max_user_connections"), is_array($mu) ? (string) $mu[1] : 'pic non expose');
+if (count($pl) > 0 && $moiMoi === 0) {
+    printf("   note : SHOW PROCESSLIST ne rend pas la connexion courante -> le compte de %d est une borne basse\n", $moi);
+}
 $ix = (int) $wpdb->get_var("SELECT COUNT(DISTINCT CONCAT(TABLE_NAME,'/',INDEX_NAME)) FROM information_schema.STATISTICS WHERE TABLE_SCHEMA = DATABASE() AND INDEX_NAME <> 'PRIMARY'");
 $pk = (int) $wpdb->get_var("SELECT COUNT(DISTINCT CONCAT(TABLE_NAME,'/',INDEX_NAME)) FROM information_schema.STATISTICS WHERE TABLE_SCHEMA = DATABASE() AND INDEX_NAME = 'PRIMARY'");
 printf("   index : %d cles primaires, %d index secondaires sur %s tables\n", $pk, $ix,
