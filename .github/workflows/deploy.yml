@@ -153,6 +153,14 @@ jobs:
           elif [[ "$EVENT_NAME" == workflow_dispatch && "$OPERATION" == "bascule-uat-preflight" ]]; then
             # Preflight de la bascule SQLite -> MySQL : lecture seule sur l'UAT.
             ENV_NAME=uat; URL="$URL_UAT"; ROOT="$ROOT_UAT"
+          elif [[ "$EVENT_NAME" == workflow_dispatch
+                 && ( "$OPERATION" == "creneau-mysql-uat"
+                      || "$OPERATION" == "bascule-uat-mysql"
+                      || "$OPERATION" == "bascule-uat-mysql-executer" ) ]]; then
+            # Outils de bascule SQLite -> MySQL : l'UAT et rien d'autre. Le sondage ne pose que
+            # des questions ; la phase reelle a son propre nom d'operation, precisement pour
+            # qu'aucun dispatch distrait ne se trouve etre une ecriture.
+            ENV_NAME=uat; URL="$URL_UAT"; ROOT="$ROOT_UAT"
           elif [[ "$EVENT_NAME" == workflow_dispatch && "$OPERATION" == "verif-litespeed-uat" ]]; then
             # Verification de purge LiteSpeed : une ecriture, une Restauration, sur l'UAT seule.
             ENV_NAME=uat; URL="$URL_UAT"; ROOT="$ROOT_UAT"
