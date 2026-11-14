@@ -1,0 +1,88 @@
+name: Lire un site public (relevé de design)
+
+# Lecteur seul : telecharge du HTML et du CSS publics, ne touche aucun serveur du projet, aucun secret.
+on:
+  workflow_dispatch:
+    inputs:
+      url:
+        description: URL publique a relever
+        required: true
+        type: string
+      tentatives:
+        description: Nombre de tentatives
+        required: false
+        type: string
+        default: '6'
+
+jobs:
+  lire:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Charger la page en tournant les identites de lecture
+        env:
+          CIBLE: ${{ inputs.url }}
+          NB: ${{ inputs.tentatives }}
+        run: |
+          set +e
+          mkdir -p sortie
+          UAS=(
+          "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36"
+          "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.4 Safari/605.1.15"
+          "Mozilla/5.0 (X11; Linux x86_64; rv:132.0) Gecko/20100101 Firefox/132.0"
+          "Mozilla/5.0 (iPhone; CPU iPhone OS 17_5 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.5 Mobile/15E148 Safari/604.1"
+          "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36 Edg/131.0.0.0"
+          "Mozilla/5.0 (Linux; Android 14; Pixel 8) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Mobile Safari/537.36"
+          )
+          N=${NB:-6}
+          LUE=0
+          for t in $(seq 1 "$N"); do
+            ua="${UAS[$((t % 6))]}"
+            code=$(curl -sS -m 30 -o sortie/page.html -w '%{http_code}' -A "$ua" -H 'Accept: text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8' -H 'Accept-Language: fr-FR,fr;q=0.9,en;q=0.8' --compressed "$CIBLE" 2>sortie/erreur-reseau.txt)
+            taille=$(wc -c < sortie/page.html 2>/dev/null || echo 0)
+            mur=$(grep -c -e 'Oh, no!' -e 'working on it' -e 'Verifying you are human' -e 'Just a moment' -e 'Access Denied' sortie/page.html 2>/dev/null)
+            echo "tentative $t : HTTP $code, $taille octets, marqueurs-de-mur=$mur, identite=${ua:0:30}"
+            if [ "$code" = "200" ] && [ "$taille" -gt 15000 ] && [ "$mur" = "0" ]; then LUE=1; echo "LUE a la tentative $t"; break; fi
+            if [ "$t" -lt "$N" ]; then echo "  attente 25 s avant nouvelle tentative"; sleep 25; fi
+          done
+          if [ "$LUE" != "1" ]; then
+            echo "::error::aucune lecture propre en $N tentatives : ce n est pas un jugement sur le site, c est une limite de mesure."
+            echo "PREMIER_OCTETS:"; head -c 300 sortie/page.html
+            exit 1
+          fi
+          echo "TITRE : $(grep -o '<title>[^<]*' sortie/page.html | head -1 | sed 's/<title>//')"
+          echo "H1 : $(grep -o '<h1[^>]*>[^<]*' sortie/page.html | head -1 | sed 's/<[^>]*>//')"
+          echo "OCTETS : $(wc -c < sortie/page.html)"
+      - name: Miroiter les feuilles de style aux memes chemins
+        env:
+          CIBLE: ${{ inputs.url }}
+        run: |
+          set +e
+          BASE=$(echo "$CIBLE" | grep -o '^https\?://[^/]*')
+          n=0
+          for href in $(grep -o 'href="[^"]*\.css[^"]*"' sortie/page.html | sed 's/^href="//; s/"$//' | head -14); do
+            case "$href" in
+              //*) url="https:$href" ; chemin="${href#//}" ; chemin="/${chemin#*/}" ;;
+              http*) url="$href" ; chemin="${href#http*://}" ; chemin="/${chemin#*/}" ;;
+              /*) url="$BASE$href" ; chemin="$href" ;;
+              *) url="$BASE/${href#./}" ; chemin="/${href#./}" ;;
+            esac
+            chemin=$(echo "$chemin" | sed 's/?.*//; s/#.*//')
+            dest="sortie$(dirname "$chemin")"
+            mkdir -p "$dest"
+            curl -sS -m 25 -o "$dest/$(basename "$chemin")" -A 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36' --compressed "$url"
+            if [ -s "$dest/$(basename "$chemin")" ]; then
+              echo "recupere : $chemin  ($(wc -c < "$dest/$(basename "$chemin")") octets)"
+              n=$((n+1))
+            else
+              rm -f "$dest/$(basename "$chemin")"
+              echo "raté : $url"
+            fi
+          done
+          echo "FEUILLES : $n  |  TOTAL_CSS : $(find sortie -name '*.css' -exec cat {} + 2>/dev/null | wc -c) octets"
+          echo "Si une feuille est en 403, le releve local perdra les valeurs qu elle portait : ce sera signale comme NON MESURE, pas comme un ecart."
+      - name: Envoyer la capture au poste de mesure
+        uses: actions/upload-artifact@v4
+        with:
+          name: lecture-site
+          path: sortie/
+          if-no-files-found: error
