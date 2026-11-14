@@ -151,6 +151,35 @@ echo "   pour revenir en arriere a la main : tar -xzf $ARCHE -C $RACINE"
 echo "   l'archive reste sur l'hote a la fin du run : c'est voulu, c'est la seule copie du wp-config d'avant."
 echo "   RETOUR ARRIERE ENREGISTRE : la ligne ci-dessus est la seule chose a retenir si le run est coupe."
 
+# --- 4bis. le charset, qui ne se decide qu'au moment ou l'on ecrit ----------------------------
+# Le convertisseur cree ses tables en utf8mb4 et se connecte en utf8mb4 : la copie est fidele.
+# Mais c'est DB_CHARSET qui decide comment WORDPRESS se connectera apres le basculement. Tant que
+# le drop-in SQLite est la, un emoji passe (SQLite stocke du texte). Bascule sur MySQL avec
+# DB_CHARSET=utf8 (= utf8mb3 chez MySQL) : le meme emoji ecrit demain est detruit silencieusement,
+# ligne par ligne, sans erreur. /uat porte DB_CHARSET=utf8 (mesure au run 43600496477), donc cette
+# ligne n'est pas de la prudence generique, c'est un reglage du site concerné.
+bar; echo " 4bis. CHARSET DE CONNEXION APRES BASCULE"; bar
+CS=$("$PHPBIN" -r '$s=file_get_contents($argv[1]); preg_match("/define\(\s*[\x27\"]DB_CHARSET[\x27\"]\s*,\s*[\x27\"]([^\x27\"]+)/",$s,$m)?print($m[1]):print("?");' "$WPC" 2>/dev/null)
+echo "   DB_CHARSET actuel : ${CS:-?}"
+if [ "$CS" != "utf8mb4" ]; then
+  if [ "$PHASE" != "executer" ]; then
+    echo "   A REGLER AU JOUR DE L'ECRITURE : passer DB_CHARSET a utf8mb4 en meme temps que le moteur."
+    echo "   (la conversion, elle, est deja en utf8mb4 : c'est le cote WordPress qu'il aligne)"
+  else
+    if command -v wp >/dev/null 2>&1 \
+       && wp config set DB_CHARSET utf8mb4 --path="$RACINE" >/dev/null 2>&1 \
+       && [ "$("$PHPBIN" -r '$s=file_get_contents($argv[1]); preg_match("/define\(\s*[\x27\"]DB_CHARSET[\x27\"]\s*,\s*[\x27\"]([^\x27\"]+)/",$s,$m)?print($m[1]):print("?");' "$WPC" 2>/dev/null)" = "utf8mb4" ]; then
+      echo "   DB_CHARSET : utf8mb4 relu dans le fichier (la valeur d'avant est dans l'archive verifiee)"
+    else
+      echo "   ECHEC : je n'ai pas pu corriger DB_CHARSET, et je ne bascule pas sans cette correction."
+      echo "   A faire a la main dans $WPC : define('DB_CHARSET', 'utf8mb4'); puis relancer."
+      exit 9
+    fi
+  fi
+else
+  echo "   deja utf8mb4 : rien a aligner"
+fi
+
 # --- 4. conversion a blanc -------------------------------------------------------------------
 bar; echo " 4. CONVERSION A BLANC (TUC_MODE=dry : ni la cible ni le site ne sont touches)"; bar
 export TUC_SQLITE="$SQLITED" TUC_WPCONFIG="$WPC" TUC_MODE=dry
@@ -159,7 +188,7 @@ SEC=${PIPESTATUS[0]}
 echo "   (sortie du convertisseur en sec : $SEC)"
 if [ "$PHASE" != "executer" ]; then
   bar
-  echo "  FIN DE LA PHASE dry. La bascule reelle n'a pas ete demandee : aucune ecrite."
+  echo "  FIN DE LA PHASE dry. La bascule reelle n'a pas ete demandee : aucune ecriture n'a eu lieu sur le moteur."
   echo "  Pour passer a l'ecriture : relancer avec l'operation bascule-uat-mysql-executer."
   bar
   [ "$SEC" -eq 0 ] && exit 0 || exit "$SEC"
