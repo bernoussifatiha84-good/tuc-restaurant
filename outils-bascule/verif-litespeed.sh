@@ -57,6 +57,51 @@ echo '    litespeed.conf.cache-ttl : ' . (is_scalar($ttl) && $ttl !== '' ? (stri
 exit(0);
 PHPEOF
 
+cat > "$TMP/etat.php" <<'PHPEOF'
+<?php
+// Ou vit reellement la duree du cache, verifie au lieu d'etre suppose. Trois questions, trois
+// reponses lues dans la base et dans PHP : le plugin de cache est-il actif, ou sont son reglage,
+// et le notre envoie-t-il vraiment sa consigne.
+global $wpdb;
+$act = get_option('active_plugins');
+$act = is_array($act) ? $act : [];
+$fil = [];
+foreach ($act as $p) {
+    if (preg_match('#(litespeed|pure-cache|hostinger|wp-rocket|w3tc|wp-super-cache|nginx-helper|swift)#i', (string) $p)) {
+        $fil[] = (string) $p;
+    }
+}
+echo '  plugins de cache actifs : ' . ($fil ? implode(', ', $fil) : 'aucun') . "\n";
+echo '  LITESPEED_VERSION : ' . (defined('LITESPEED_VERSION') ? LITESPEED_VERSION : 'non definie')
+    . ' | classe LiteSpeed\Cache : ' . (class_exists('LiteSpeed\Cache') ? 'chargee' : 'absente') . "\n";
+$rows = $wpdb->get_results(
+    "SELECT option_name AS n, LENGTH(option_value) AS l, LEFT(option_value, 130) AS v"
+    . " FROM {$wpdb->options}"
+    . " WHERE option_name LIKE 'litespeed%' OR option_name LIKE '%pure-cache%' OR option_name LIKE 'hostinger%'"
+    . " ORDER BY option_name LIMIT 40",
+    ARRAY_A
+);
+if (!is_array($rows) || [] === $rows) {
+    echo "  AUCUNE option litespeed*/hostinger* en base : la duree ne se regle pas dans WordPress, ni ici ni ailleurs\n";
+} else {
+    foreach ($rows as $r) {
+        printf("     %-36s %6s o | %s\n", (string) $r['n'], (string) $r['l'],
+            preg_replace('/\s+/', ' ', (string) $r['v']));
+    }
+}
+$ignore = $wpdb->get_var("SELECT option_value FROM {$wpdb->options} WHERE option_name = 'litespeed-opt' LIMIT 1");
+if (is_string($ignore) && '' !== $ignore) {
+    $o = maybe_unserialize($ignore);
+    foreach (['cache_ignore_uri', 'cache-ttl', 'guest_cache', 'cache_login', 'objcache-stores'] as $k) {
+        echo '     opt[' . $k . '] : ' . (is_array($o) && array_key_exists($k, $o)
+            ? (is_scalar($o[$k]) ? (string) $o[$k] : json_encode($o[$k])) : 'absent de l option') . "\n";
+    }
+} else {
+    echo "     litespeed-opt : absent (le plugin tourne sur ses defauts, et rien ne les modifie)\n";
+}
+exit(0);
+PHPEOF
+
 # Le prix lu dans la reponse du client : le JSON, pas le HTML. Un seul champ, un seul id.
 cat > "$TMP/prix.php" <<'PHPEOF'
 <?php
@@ -98,6 +143,7 @@ fetch_json() { # $1 = fichier ou ecrire le corps ; laisse les en-tetes dans $TMP
   return 1
 }
 entete() { grep -ai "^$1:" "$TMP/h" 2>/dev/null | head -1 | sed 's/\r$//'; }
+lc() { printf '%s' "$1" | tr 'A-Z' 'a-z'; }   # ${x,,} n'est pas garanti selon le bash de l'hote
 RELA_ID=""
 purger() { wp eval-file "$TMP/purge.php" "$PLAT" "$RELA_ID" "$1" "${2:-agir}" --allow-root 2>&1 | sed 's/^/  /'; }
 
@@ -190,6 +236,49 @@ else
   TTL_HONORE="oui"
 fi
 
+echo "$S ; 3ter. QUI RESERT LA COPIE : l'origine ou le bord ?"
+# Un reglage de duree ne sert a rien si la copie que le client recoit ne vient pas de l'endroit
+# qu'on regle. Discriminant joue sur une cle creee ici meme : la purge du plugin ne touche que
+# l'origine, donc si la cle survit a cette purge, c'est qu'un niveau au-dessus la resserre.
+VERDICT_BORD=""
+QT="ttl$(date +%s)-$$"
+JSON_ORIG="$JSON"
+JSON="$BASE/wp-json/tuc/v1/menu/$RELA?ttlcle=$QT"
+P0=$(fetch_json "$TMP/t0.json"); H0=$(lc "$(entete 'x-litespeed-cache')")
+sleep 25
+P1=$(fetch_json "$TMP/t1.json"); H1=$(lc "$(entete 'x-litespeed-cache')"); A1=$(entete 'age')
+printf "  cle unique %s : t=0 %s | t=25s %s | age %s\n" "$QT" "${H0:-?}" "${H1:-?}" "${A1:-aucun}"
+if [ "$H1" != "hit" ]; then
+  echo "  aucune copie conservee sur cette cle en 25 s : le discriminant n'a pas pu jouer."
+  VERDICT_BORD="non concluant"
+else
+  if wp litespeed-purge url "$JSON" --allow-root >/dev/null 2>&1; then
+    echo "  origine purgee sur cette cle exacte (wp litespeed-purge url, --path implicite car on est dans $RACINE)"
+  else
+    echo "  wp-cli n'a pas pu purger cette cle : le discriminant est fausse, on ne conclut pas"
+    VERDICT_BORD="non concluant"
+  fi
+  if [ -z "$VERDICT_BORD" ]; then
+    P2=$(fetch_json "$TMP/t2.json"); H2=$(lc "$(entete 'x-litespeed-cache')")
+    printf "  relance apres purge d'origine : %s\n" "${H2:-?}"
+    if [ "$H2" = "hit" ]; then
+      echo "  CONCLUSION : la cle survit a la purge de l'origine -> c'est le bord (hcdn) qui ressert la copie."
+      echo "  Un reglage de duree cote serveur ou cote plugin n'y changera rien : il faut la purge du bord, ou sortir la route du cache."
+      VERDICT_BORD="bord"
+    else
+      echo "  CONCLUSION : la cle est tombee des que l'origine est purgee -> c'est bien l'origine qui gardait l'entree."
+      echo "  Le reglage de duree a donc un endroit ou se lire, et le max-age de 60 s est ignore par l'origine elle-meme."
+      VERDICT_BORD="origine"
+    fi
+  fi
+fi
+echo "  verdict du discriminant : $VERDICT_BORD"
+echo "  ou en est le cote plugin : $(wp eval 'echo has_filter("rest_post_dispatch", ["TUC_Security_Headers", "tune_menu_response"]) ? "le filtre de reglage est branche" : "le filtre N EST PAS branche";' --allow-root 2>/dev/null | tail -1)"
+JSON="$JSON_ORIG"
+
+echo "$S ; 3quater. OU VIT LE REGLAGE DE DUREE"
+wp eval-file "$TMP/etat.php" --allow-root 2>&1 | sed 's/^/  /'
+
 echo "$S ; 4. RESTAURATION"
 wp post meta update "$PLAT" tuc_prix "$ANCIEN" --allow-root >/dev/null 2>&1
 RESTAURE=0
@@ -208,7 +297,7 @@ else
   echo "  est celui du serveur (604 800 s sur cet hote), pas le notre."
 fi
 [ -z "$TTL_HONORE" ] && TTL_HONORE="non mesure (la boucle n'a pas rendu de releve exploitable)"
-echo "  TTL honore par le serveur : $TTL_HONORE"
+echo "  TTL honore par le serveur : $TTL_HONORE | qui ressert la copie : ${VERDICT_BORD:-non mesure}"
 echo "  ce que la purge a produit : releve de la phase 3 = $P3 (attendu $NOUVEAU) -> PURGE_EFFICACE=$PURGE_EFFICACE"
 [ "$PURGE_EFFICACE" = oui ] || exit 7
 if [ -n "$RETOURNE" ]; then
