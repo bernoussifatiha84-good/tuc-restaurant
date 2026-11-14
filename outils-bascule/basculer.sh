@@ -209,7 +209,8 @@ bar; echo " 6. BASCULE DU MOTEUR"; bar
 mv "$DROPIN" "$RACINE/wp-content/db.php.avant-mysql-$TS" && echo "   drop-in ecarte : db.php -> db.php.avant-mysql-$TS"
 fumee() {
   local u="$1" att="$2" got code
-  code=$(curl -s -o "$T/f" -w '%{http_code}' -m 25 "$u" 2>/dev/null || echo 000)
+  code=$(curl -s -o "$T/f" -w '%{http_code}' -m 25 "$u" 2>/dev/null)
+  [ -n "$code" ] || code=000   # curl rend deja 000 a l'echec : le `|| echo 000` faisait « 000000 »
   got=$(grep -o "$att" "$T/f" 2>/dev/null | head -1)
   printf "   %-46s HTTP %s | %s\n" "${u##*/}" "$code" "${got:-$att absent}"
   [ -n "$got" ] && return 0 || return 1
@@ -223,11 +224,19 @@ if [ "$OK" -eq 0 ]; then
   echo "   FUMEE ROUGE apres bascule : retour arriere immediat."
   mv "$RACINE/wp-content/db.php.avant-mysql-$TS" "$DROPIN" && echo "   drop-in remis en place"
   tar -xzf "$ARCHE" -C "$RACINE" && echo "   wp-config restaure depuis l'archive verifiee"
-  fumee "$BASE/wp-json/tuc/v1/sante" '"ok":true'
-  echo "   etat d'avant bascule retabli. La cible MySQL garde la conversion : a vider a la main,"
-  echo "   c'est le seul dechet que ce script laisse, et il ne sert a personne en l'etat."
+  if fumee "$BASE/wp-json/tuc/v1/sante" '"ok":true'; then
+    echo "   RETABLISSEMENT VERIFIE : le site repond comme avant la bascule."
+    code_finale=8
+  else
+    echo "   RETABLISSEMENT NON VERIFIE : le controle apres restauration n'est pas vert. Le site est"
+    echo "   dans l'etat que l'archive decrit, mais personne ne l'a vu repondre. A regarder maintenant :"
+    echo "     $BASE/wp-json/tuc/v1/sante   (et s'il ne repond pas : tar -xzf $ARCHE -C $RACINE)"
+    code_finale=10
+  fi
+  echo "   La cible MySQL garde la conversion : a vider a la main, c'est le seul dechet que ce script"
+  echo "   laisse, et il ne sert a personne en l'etat."
   bar
-  exit 8
+  exit "$code_finale"
 fi
 bar
 echo " 7. VERDICT"
