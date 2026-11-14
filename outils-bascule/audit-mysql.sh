@@ -232,9 +232,12 @@ if [ -n "$FIDEL" ] && [ -f "$FIDEL" ] && [ -n "$SQLD" ]; then
   "$PHP" "$FIDEL" "$SQLD" "$WPC" "$( "$PHP" -r '$s=file_get_contents($argv[1]); preg_match("/table_prefix\s*=\s*[\x27\"]([^\x27\"]+)/",$s,$m)?print($m[1]):print("wp_");' "$WPC" )" > "$T/fid.log" 2>&1
   F=${PIPESTATUS[0]}
   # le resume (dernieres lignes) est imprime une fois ; le detail, que s'il y a matiere.
-  grep -aE "COMPTE|lignes comparees|VERDICT fidelite" "$T/fid.log" | sed -n '1,12p' | sed 's/^/ /'
-  if [ "$F" -ne 0 ]; then grep -aE "^ +wp_" "$T/fid.log" | head -10 | sed 's/^/ /'; fi
-  if [ "$F" -eq 0 ]; then ok "aucune derive inattendue"; else ko "derives inattendues : voir le detail ci-dessus"; fi
+  grep -aE "tables : MySQL|lignes comparees|nees depuis|VERDICT fidelite|compte |DERIVE$" "$T/fid.log" | sed -n '1,14p' | sed 's/^/ /'
+  # les lignes de detail, d'abord : c'est ce qui nomme la perte. Les lignes par table suivent.
+  if [ "$F" -ne 0 ]; then grep -aE "ABSENTE|^[ ]+wp_[a-z_]+\[" "$T/fid.log" | head -12 | sed 's/^/ /'; fi
+  if [ "$F" -eq 0 ]; then ok "aucune derive inattendue"
+  elif [ "$F" -eq 2 ]; then wa "comparaison impossible : MySQL ou la copie inaccessibles en CLI (le controle $wpdb reste valable)"
+  else ko "derives inattendues : voir le detail ci-dessus"; fi
 else
   wa "comparaison non faite (fidelite=$( [ -n "${FIDEL:-}" ] && echo '$FIDEL' || echo absent ), copie=$( [ -n "$SQLD" ] && echo "$SQLD" || echo absente ))"
 fi

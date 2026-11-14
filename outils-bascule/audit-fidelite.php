@@ -66,17 +66,24 @@ function cle_ligne(array $cols, array $row): string
     // Une ligne est identifiee par sa cle primaire ; sans PK, par l'ordre de lecture.
     if ($cols === []) { return ''; }
     $k = [];
-    foreach ($cols as $c) { $k[] = $c . '=' . ($row[$c] ?? "\0"); }
+    foreach ($cols as $c) { $k[] = $c . '=' . (string) ($row[$c] ?? ''); }
     return implode('|', $k);
 }
 
 function colonnes_cle(mysqli $my, string $db, string $t): array
 {
+    // SEQ_IN_INDEX, pas SEQ_IN_COLUMN : la colonne n'existe pas sous ce nom, et une requete
+    // invalide renvoie false — donc « aucune cle primaire », donc un audit qui ne compare rien
+    // tout en ayant l'air de conclure. Un faux vide et une vraie absence ne se ressemblent pas.
     $q = $my->query(sprintf(
-        "SELECT COLUMN_NAME FROM information_schema.STATISTICS WHERE TABLE_SCHEMA='%s' AND TABLE_NAME='%s' AND INDEX_NAME='PRIMARY' ORDER BY SEQ_IN_COLUMN",
+        "SELECT COLUMN_NAME FROM information_schema.STATISTICS WHERE TABLE_SCHEMA='%s' AND TABLE_NAME='%s' AND INDEX_NAME='PRIMARY' ORDER BY SEQ_IN_INDEX",
         mysqli_real_escape_string($my, $db), mysqli_real_escape_string($my, $t)));
+    if ($q === false) {
+        fwrite(STDERR, 'ABORT : lecture des cles primaires impossible (' . mysqli_error($my) . "). Sans cles, pas de comparaison ligne a ligne.\n");
+        exit(2);
+    }
     $o = [];
-    if ($q) { while ($r = $q->fetch_row()) { $o[] = $r[0]; } }
+    while ($r = $q->fetch_row()) { $o[] = $r[0]; }
     return $o;
 }
 
@@ -94,9 +101,22 @@ $escamotage = $jq ? (int) $jq->fetchArray(SQLITE3_NUM)[0] : 0;
 printf("tables : MySQL=%d | SQLite=%d (%d d'echafaudage) | communes=%d\n",
     count($en_mysql), count($en_sqlite), $escamotage, count($communes));
 
-$totaux = ['lignes' => 0, 'cellules' => 0, 'NORMALISE' => 0, 'ECRIT' => 0, 'DERIVE' => 0];
+$totaux = ['lignes' => 0, 'cellules' => 0, 'NORMALISE' => 0, 'ECRIT' => 0, 'DERIVE' => 0,
+          'AJOUTEE' => 0, 'EPHEMERE' => 0];
 $detail = [];
+$ecarts_compte = [];
+$lignes_attendues = [];
 $chauffe = 0;
+
+// Une copie figee a une heure : le site continue d'ecrire et de menager. Une ligne d'ordonnanceur
+// terminee, un transient expire, disparaissent legalement ; une ligne de contenu qui disparait est
+// une perte. La regle porte donc sur la NATURE de la ligne, pas sur la table seulement.
+$TABLES_EPHIMERES = ['actionscheduler_actions', 'actionscheduler_logs', 'actionscheduler_locks'];
+// nom court, pour ne pas dependre du prefixe choisi a l'install
+$nom_court = static fn(string $t): string => preg_replace('/^[a-z0-9_]*?(wp_|wc_)/', '', $t) ?? $t;
+$OPTIONS_EPHIMERES = '/^(_transient_|_site_transient_|'
+    . 'cron$|_transient_doing_cron$|action_scheduler_run_queue|rewrite_rules|timeout_|'
+    . 'wp_http_last_modified|_nonce_key|_nonce_salt)/';
 
 foreach ($communes as $t) {
     $q = $my->query("SELECT COUNT(*) FROM `" . str_replace('`', '``', $t) . '`');
@@ -106,11 +126,11 @@ foreach ($communes as $t) {
     $n_sqlite = (int) $q2;
     if ($n_mysql < 0 || $n_sqlite < 0) { printf("  %-42s lecture impossible\n", $t); continue; }
     if ($n_mysql === 0 && $n_sqlite === 0) { continue; }
-    if ($n_mysql !== $n_sqlite) {
-        printf("  %-42s COMPTE DIFFERENT MySQL=%d SQLite=%d\n", $t, $n_mysql, $n_sqlite);
-        $totaux['DERIVE'] += abs($n_mysql - $n_sqlite);
-        continue;
-    }
+    if ($n_mysql !== $n_sqlite) { $ecarts_compte[$t] = $n_mysql - $n_sqlite; }
+    // Pas de `continue` ici. Un compte qui bouge est une attente sur un site vivant ; comparer
+    // les cellules reste le seul moyen de savoir SI une ligne de contenu a disparu. Sauter la
+    // table aurait masque exactement ce qu'on cherche.
+    $lignes_attendues[$t] = $n_sqlite;
     // Colonnes dans le meme ordre des deux cotes : on s'appuie sur information_schema pour MySQL,
     // et sur PRAGMA pour SQLite (qui rend l'ordre de la CREATE TABLE emulee).
     $cols = [];
@@ -144,13 +164,32 @@ foreach ($communes as $t) {
         $map[($pk !== [] ? cle_ligne($pk, $a) : '#' . $i)] = $a;
         $i++;
     }
+    if ($pk === []) {
+        // Sans cle primaire, il n'y a rien pour apparier une ligne de l'autre cote. Comparer par
+        // position serait chercher le probleme : la moindre ligne en plus decale tout le reste.
+        printf("  %-42s %5d lignes vs %5d | SANS CLE PRIMAIRE : presence comparee au compte seul\n",
+            $t, $n_mysql, $n_sqlite);
+        if ($n_mysql !== $n_sqlite) { $totaux['DERIVE'] += 1; $detail[] = "$t : comptes differents, aucune cle pour localiser"; }
+        continue;
+    }
     $res2 = $my->query('SELECT ' . $collist . ' FROM `' . str_replace('`', '``', $t) . '` ORDER BY '
-        . implode(', ', array_map(static fn($c) => '`' . str_replace('`', '``', $c) . '`', $pk ?: [$cols[0]])));
-    $n = 0; $k = 0; $tdiff = ['NORMALISE' => 0, 'ECRIT' => 0, 'DERIVE' => 0];
+        . implode(', ', array_map(static fn($c) => '`' . str_replace('`', '``', $c) . '`', $pk)));
+    $n = 0; $tdiff = ['NORMALISE' => 0, 'ECRIT' => 0, 'DERIVE' => 0,
+                      'AJOUTEE' => 0, 'EPHEMERE' => 0];
+    $vus = [];
     while ($res2 && $row = $res2->fetch_assoc()) {
-        $key = ($pk !== [] ? cle_ligne($pk, array_map(static fn($c) => (string) ($row[$c] ?? ''), $pk)) : '#' . $n);
-        $src = $map[$key] ?? (isset($map['#' . $n]) ? $map['#' . $n] : null);
-        if ($src === null) { $tdiff['DERIVE']++; $detail[] = "$t#$key : ligne absente de la copie"; $n++; $k++; continue; }
+        // cle_ligne lit par NOM de colonne : passer les valeurs par array_map les renumerote en
+        // 0..n, et toutes les cles MySQL devenaient identiquement vides. D'ou 1 410 "lignes nees
+        // depuis la bascule" sur une copie conforme. On passe la ligne associtative telle quelle.
+        $key = cle_ligne($pk, $row);
+        $src = $map[$key] ?? null;   // par la cle, et seulement par elle
+        if ($src === null) {
+            // La ligne n'existait pas a la figeance : le site l'a creee depuis. Une bascule n'a
+            // jamais promis de geler le present — elle a promis de ne rien perdre.
+            $tdiff['AJOUTEE']++;
+            $n++; continue;
+        }
+        $vus[$key] = true;
         foreach ($cols as $c) {
             $totaux['cellules']++;
             $brut_a = (string) ($src[$c] ?? '');
@@ -172,21 +211,51 @@ foreach ($communes as $t) {
                     mb_substr(preg_replace('/\s+/u', ' ', $a), 0, 34), mb_substr(preg_replace('/\s+/u', ' ', $b), 0, 34));
             }
         }
-        $n++; $k++;
+        $n++;
     }
-    $totaux['lignes'] += $n;
+    // Ce qui reste dans la copie et plus dans la base vivante. Deux causes, un seul danger :
+    // le menage legitime du site (menace nulle) contre la ligne de contenu perdue (tout le danger).
+    $en_moins = 0;
+    foreach ($map as $key => $srcrow) {
+        if (isset($vus[$key])) { continue; }
+        $en_moins++;
+        $eph = in_array($nom_court($t), $TABLES_EPHIMERES, true);
+        if (!$eph && isset($srcrow['option_name']) && preg_match($OPTIONS_EPHIMERES, (string) $srcrow['option_name'])) {
+            $eph = true;   // transient expire, cron, regles de reecriture : recres par definition
+        }
+        if ($eph) {
+            $tdiff['EPHEMERE']++;
+        } else {
+            $tdiff['DERIVE']++;
+            if ($chauffe < 40) {
+                $chauffe++;
+                $detail[] = sprintf('%s[%s] : PRESENTE dans la copie, ABSENTE de MySQL — %s',
+                    $t, substr($key, 0, 24),
+                    mb_substr(preg_replace('/\s+/u', ' ', json_encode(array_map('strval', array_slice($srcrow, 0, 2)), JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES)), 0, 56));
+            }
+        }
+    }
+    $totaux['lignes'] += $n + $en_moins;
     foreach ($tdiff as $kk => $vv) { $totaux[$kk] += $vv; }
     $mark = ($tdiff['DERIVE'] === 0) ? 'ok' : 'DERIVE';
-    printf("  %-42s %5d lignes | normalise=%-4d ecrit=%-4d derive=%-3d %s\n",
-        $t, $n, $tdiff['NORMALISE'], $tdiff['ECRIT'], $tdiff['DERIVE'], $mark);
+    // le signe est ecrit a la main : sprintf de PHP n'accepte le "char de remplissage" (')
+    // qu'avec une largeur, et un format malforme tue l'audit entier apres la premiere table.
+    $compte = isset($ecarts_compte[$t])
+        ? sprintf(" | compte %s%d (MySQL)", $ecarts_compte[$t] > 0 ? '+' : '', $ecarts_compte[$t]) : '';
+    printf("  %-42s %5d lignes | normalise=%-4d ecrit=%-4d ajoutez=%-4d ephemeres=%-4d derive=%-3d%s %s\n",
+        $t, $n, $tdiff['NORMALISE'], $tdiff['ECRIT'], $tdiff['AJOUTEE'], $tdiff['EPHEMERE'],
+        $tdiff['DERIVE'], $compte, $mark);
 }
 
 echo "\n== detail des ecarts (plafonne a 40) ==\n";
 foreach ($detail as $d) { echo '  ' . $d . "\n"; }
 if ($detail === []) { echo "  aucun\n"; }
 
-printf("\nlignes comparées : %d | cellules : %d | normalisees : %d | ecrites depuis la bascule : %d | DERIVEES : %d\n",
-    $totaux['lignes'], $totaux['cellules'], $totaux['NORMALISE'], $totaux['ECRIT'], $totaux['DERIVE']);
+printf("\nlignes comparees : %d | cellules : %d | normalisees : %d | ecrites : %d | ajoutees depuis la bascule : %d | menuisees : %d | DERIVEES : %d\n",
+    $totaux['lignes'], $totaux['cellules'], $totaux['NORMALISE'], $totaux['ECRIT'],
+    $totaux['AJOUTEE'], $totaux['EPHEMERE'], $totaux['DERIVE']);
+printf("  la copie est figee a la bascule : %d lignes nees depuis, %d detruites par le menage du site — ce ne sont pas des pertes.\n",
+    $totaux['AJOUTEE'], $totaux['EPHEMERE']);
 echo $totaux['DERIVE'] === 0
     ? "VERDICT fidelite : la copie vivante ne contredit la copie figee que la ou c'est attendu.\n"
     : "VERDICT fidelite : " . $totaux['DERIVE'] . " ecart(s) inattendu(s) — a regarder avant de jeter la copie SQLite.\n";
