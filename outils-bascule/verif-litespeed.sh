@@ -262,6 +262,7 @@ else
   else
     echo "  entree expiree a t=90 (${H90}) : le TTL applique est court, le reglage du plugin est entendu."
     TTL_HONORE="oui"
+  fi
 fi
 
 echo "$S ; 3ter. QUI RESERT LA COPIE : l'origine ou le bord ?"
