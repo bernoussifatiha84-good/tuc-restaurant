@@ -1420,7 +1420,10 @@ jobs:
             "$SSH_USER@$SSH_HOST" "bash -s -- $remote_root $remote_url $remote_sh $DRAPEAU --mode $MODE" <<'REMOTE'
           set -uo pipefail
           trap 'rm -f "$3"' EXIT
-          bash "$3" $4 $5 $6 "$1" "$2"
+          # Le drapeau deplace les positions : en lecture seule, $6 n'existe pas, et sous
+          # `set -u` un $6 nu fait capoter l'appel avant meme que l'outil soit lance
+          # (mesure : `bash: line 3: $6: unbound variable`, run 43627203418).
+          bash "$3" ${4:-} ${5:-} ${6:-} "$1" "$2"
           REMOTE
           code=$?
           echo "———— code de sortie du reglage : $code (0 = fait et verifie, 9 = non conforme puis retabli, 2 = cible refusee) ————"
