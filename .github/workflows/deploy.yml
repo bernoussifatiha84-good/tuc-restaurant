@@ -26,6 +26,7 @@ on:
           - seed-demo-uat
           - bascule-uat-preflight
           - verif-litespeed-uat
+          - audit-mysql-uat
         default: deploy
         required: true
 
@@ -165,8 +166,10 @@ jobs:
             # des questions ; la phase reelle a son propre nom d'operation, precisement pour
             # qu'aucun dispatch distrait ne se trouve etre une ecriture.
             ENV_NAME=uat; URL="$URL_UAT"; ROOT="$ROOT_UAT"
-          elif [[ "$EVENT_NAME" == workflow_dispatch && "$OPERATION" == "verif-litespeed-uat" ]]; then
-            # Verification de purge LiteSpeed : une ecriture, une Restauration, sur l'UAT seule.
+          elif [[ "$EVENT_NAME" == workflow_dispatch
+                 && ( "$OPERATION" == "verif-litespeed-uat" || "$OPERATION" == "audit-mysql-uat" ) ]]; then
+            # Verification de purge LiteSpeed et audit post-bascule : les deux ecrivent et se
+            # restaurent, sur l'UAT seule.
             ENV_NAME=uat; URL="$URL_UAT"; ROOT="$ROOT_UAT"
           elif [[ "$REF_TYPE" == branch && "$REF_NAME" == develop ]]; then
             ENV_NAME=dev; URL="$URL_DEV"; ROOT="$ROOT_DEV"
@@ -1094,8 +1097,11 @@ jobs:
           echo "Prochaine etape : operation = bascule-uat-mysql (conversion a blanc), puis -executer."
 
   verif_litespeed_uat:
-    name: Verification LiteSpeed sur UAT (prix reversible)
-    if: ${{ github.event_name == 'workflow_dispatch' && inputs.operation == 'verif-litespeed-uat' }}
+    name: Verification LiteSpeed + audit MySQL sur UAT (ecritures reversibles)
+    # Les deux operations partagent le meme contrat : cible UAT obligatoire, ecrite reversible,
+    # auto-nettoyage. Elles sont donc gardees par le meme bloc de refus,  et se distinguent par un `if`
+    # d'etape — pas par un second job qui dupliquerait soixante lignes de verrous.
+    if: ${{ github.event_name == 'workflow_dispatch' && (inputs.operation == 'verif-litespeed-uat' || inputs.operation == 'audit-mysql-uat') }}
     needs: [cible]
     runs-on: ubuntu-latest
     timeout-minutes: 22   # le polling du TTL dure jusqu a 8 min
@@ -1159,15 +1165,18 @@ jobs:
           ssh-keygen -y -f ~/.ssh/id_deploy >/dev/null
           ssh-keyscan -p "$SSH_PORT" -H "$SSH_HOST" >> ~/.ssh/known_hosts 2>/dev/null
 
-      - name: Linter l'outil avant envoi
+      - name: Linter les outils avant envoi
         shell: bash
         run: |
           set -euo pipefail
           bash -n outils-bascule/verif-litespeed.sh
+          bash -n outils-bascule/audit-mysql.sh
+          php -l outils-bascule/audit-fidelite.php
 
       # Le script se restaure lui-meme (trap sur EXIT/INT/TERM) : une coupure en cours de
       # route ne laisse pas un prix faux en base. /tmp, hors racine web, supprime a la fin.
       - name: Executor la verification (ecriture reversible, restauration garantie)
+        if: ${{ inputs.operation == 'verif-litespeed-uat' }}
         env:
           SSH_PORT: ${{ vars.SSH_PORT || '65002' }}
           SSH_USER: ${{ secrets.SSH_USERNAME || secrets.SSH_USER }}
@@ -1191,6 +1200,43 @@ jobs:
           trap 'rm -f "$3"' EXIT
           bash "$3" "$1" "$2"
           REMOTE
+
+      # L'audit compare le MySQL vivant a la copie SQLite figee a la bascule, et prononce sur
+      # le poids de cette copie. Les deux fichiers partent en /tmp (hors racine web) et sont
+      # supprimes a la fin ; l'ecrite ne porte que sur des lignes que le script detruit lui-meme.
+      - name: Executor l'audit MySQL (lecture + ecrite auto-nettoye)
+        if: ${{ inputs.operation == 'audit-mysql-uat' }}
+        env:
+          SSH_PORT: ${{ vars.SSH_PORT || '65002' }}
+          SSH_USER: ${{ secrets.SSH_USERNAME || secrets.SSH_USER }}
+          SSH_HOST: ${{ secrets.SSH_HOST }}
+          SSH_ROOT: ${{ needs.cible.outputs.root }}
+          SITE_URL: ${{ needs.cible.outputs.url }}
+          RUN_ID: ${{ github.run_id }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          sh_d="/tmp/tuc-audit-${RUN_ID}.sh"
+          ph_d="/tmp/tuc-audit-fidelite-${RUN_ID}.php"
+          scp -q -i ~/.ssh/id_deploy -P "$SSH_PORT" -o StrictHostKeyChecking=yes \
+            outils-bascule/audit-mysql.sh "$SSH_USER@$SSH_HOST:$sh_d"
+          scp -q -i ~/.ssh/id_deploy -P "$SSH_PORT" -o StrictHostKeyChecking=yes \
+            outils-bascule/audit-fidelite.php "$SSH_USER@$SSH_HOST:$ph_d"
+          printf -v remote_root '%q' "$SSH_ROOT"
+          printf -v remote_url '%q' "$SITE_URL"
+          printf -v remote_sh '%q' "$sh_d"
+          printf -v remote_ph '%q' "$ph_d"
+          echo "Audit post-bascule sur $SITE_URL : moteur, ecrites, fidelite des donnees, poids de la copie SQLite"
+          set +e
+          ssh -i ~/.ssh/id_deploy -p "$SSH_PORT" -o StrictHostKeyChecking=yes \
+            "$SSH_USER@$SSH_HOST" "bash -s -- $remote_root $remote_url $remote_sh $remote_ph" <<'REMOTE'
+          set -uo pipefail
+          trap 'rm -f "$3" "$4"' EXIT
+          bash "$3" --audit "$1" "$2" "$4"
+          REMOTE
+          code=$?
+          echo "———— code de sortie de l'audit : $code (0 = rien a signaler, 9 = points bloquants) ————"
+          exit "$code"
 
   inventaire_woocommerce:
     name: Inventaire WooCommerce (lecture seule)
