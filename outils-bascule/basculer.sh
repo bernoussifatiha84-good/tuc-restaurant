@@ -17,9 +17,10 @@ set -uo pipefail
 RACINE="${1:-}"
 CONV="${2:-}"
 PHASE="${3:-dry}"
+URL_SITE="${4:-}"
 case "$PHASE" in dry|executer) ;; *) echo "phase inconnue : $PHASE (attendu dry ou executer)" >&2; exit 2;; esac
 if [ -z "$RACINE" ] || [ ! -d "$RACINE" ] || [ ! -f "$CONV" ]; then
-  echo "usage : basculer.sh <racine-valide> <tuc-bascule.php> [dry|executer]" >&2
+  echo "usage : basculer.sh <racine-valide> <tuc-bascule.php> [dry|executer] [url-du-site]" >&2
   exit 2
 fi
 case "$RACINE" in
@@ -251,24 +252,76 @@ fi
 
 # --- 6. le changement de moteur, et sa fumee --------------------------------------------------
 bar; echo " 6. BASCULE DU MOTEUR"; bar
+MOT_AVANT=$("$PHPBIN" "$T/moteur.php" "$RACINE/wp-load.php" 2>&1 | grep -av 'already defined\|Cannot modify header' | head -3)
+echo "   moteur avant bascule : $(printf %s "$MOT_AVANT" | tr '\n' ';')"
 mv "$DROPIN" "$RACINE/wp-content/db.php.avant-mysql-$TS" && echo "   drop-in ecarte : db.php -> db.php.avant-mysql-$TS"
-fumee() {
-  local u="$1" att="$2" got code
-  code=$(curl -s -o "$T/f" -w '%{http_code}' -m 25 "$u" 2>/dev/null)
-  [ -n "$code" ] || code=000   # curl rend deja 000 a l'echec : le `|| echo 000` faisait « 000000 »
-  got=$(grep -o "$att" "$T/f" 2>/dev/null | head -1)
-  printf "   %-46s HTTP %s | %s\n" "${u##*/}" "$code" "${got:-$att absent}"
+fumee() { # $1 = url, $2 = chaine attendue dans le corps. Trois tentatives, redirections suivies.
+  local u="$1" att="$2" got code n
+  got=""; code=000
+  for n in 1 2 3; do
+    code=$(curl -sSL -m 25 -o "$T/f" -w '%{http_code}' "$u" 2>/dev/null)
+    [ -n "$code" ] || code=000   # curl rend deja 000 a l'echec : un `|| echo 000` faisait « 000000 »
+    got=$(grep -o "$att" "$T/f" 2>/dev/null | head -1)
+    [ -n "$got" ] && break
+    sleep 6
+  done
+  printf "   %-44s HTTP %s | %s\n" "$(printf %s "$u" | sed 's#.*/uat/##; s#^#/#')" "$code" "${got:-$att absent}"
   [ -n "$got" ] && return 0 || return 1
 }
 OK=1
-BASE=$( "$PHPBIN" -r '$s=file_get_contents($argv[1]); preg_match("/define\(\s*[\x27\"]WP_HOME[\x27\"]\s*,\s*[\x27\"]([^\x27\"]+)/",$s,$m)?print($m[1]):print(rtrim(dirname(dirname($argv[1])),"/"));' "$WPC" 2>/dev/null)
+# L'URL du site n'est PAS devinee depuis le wp-config : sur cet hebergeur, WP_HOME n'y est pas
+# define (l'option `home` est en base). Un chemin de fichier passe pour une URL et le controle
+# rouge declenchait un retour arriere sur un chantier qui reussissait.
+BASE="${URL_SITE:-}"
+if [ -z "$BASE" ]; then
+  BASE=$("$PHPBIN" -r '$s=file_get_contents($argv[1]); if (preg_match("/define\(\s*[\x27\"]WP_HOME[\x27\"]\s*,\s*[\x27\"]([^\x27\"]+)/",$s,$m)) { print($m[1]); }' "$WPC" 2>/dev/null)
+fi
+if [ -z "$BASE" ]; then
+  echo "   REFUS : aucune URL de controle. Sans fumee, on ne bascule pas : le retour arriere devrait"
+  echo "   etre declenche a l'aveugle, et un retour arriere a l'aveugle n'est pas une securite."
+  exit 9
+fi
+BASE=$(printf '%s' "$BASE" | sed 's:/*$::')
+echo "   url de controle : $BASE"
 fumee "$BASE/wp-json/tuc/v1/sante" '"ok":true' || OK=0
-fumee "$BASE/?rest_route=/tuc/v1/menu/kfc" '"price"' || OK=0
+fumee "$BASE/wp-json/tuc/v1/menu/kfc" '"price"' || OK=0
+# La preuve que le site lit MySQL, et pas seulement qu'il repond : c'est $wpdb qui est interroge,
+# donc le moteur que WordPress a vraiment charge. Avant la bascule, le drop-in repond du SQLite
+# emule ; apres, une version de serveur reelle. Un "200 OK" ne distingue pas les deux.
+cat > "$T/moteur.php" <<'PHPEOF'
+<?php
+$f = $argv[1];
+if (!is_file($f)) { echo "WP-LOAD-ABSENT
+"; exit(0); }
+define('WP_USE_THEMES', false);
+ob_start(); require $f; ob_end_clean();
+global $wpdb;
+$wpdb->show_errors = false; $wpdb->suppress_errors(true);
+$v = $wpdb->get_var('SELECT VERSION()');
+echo is_string($v) && $v !== '' ? $v : 'VERSION-INCONNUE', "
+";
+$t = $wpdb->get_results('SHOW TABLES', ARRAY_N);
+printf("tables : %d | posts : %s | tuc_prix : %s
+",
+    is_array($t) ? count($t) : -1,
+    (string) (int) $wpdb->get_var("SELECT COUNT(*) FROM {$wpdb->posts}"),
+    (string) (int) $wpdb->get_var("SELECT COUNT(*) FROM {$wpdb->postmeta} WHERE meta_key = 'tuc_prix'"));
+PHPEOF
+MOT=$("$PHPBIN" "$T/moteur.php" "$RACINE/wp-load.php" 2>&1 | grep -av 'already defined\|Cannot modify header' | head -3)
+echo "   moteur vu par WordPress apres bascule : $(printf %s "$MOT" | tr '
+' ';')"
+case "$MOT" in
+  *SQLite*|*sqlite*|WP-LOAD-ABSENT*|*VERSION-INCONNUE*)
+    echo "   REFUS : WordPress ne rapporte pas un serveur MySQL/MariaDB apres la bascule."
+    OK=0 ;;
+esac
 if [ "$OK" -eq 0 ]; then
   bar
   echo "   FUMEE ROUGE apres bascule : retour arriere immediat."
   mv "$RACINE/wp-content/db.php.avant-mysql-$TS" "$DROPIN" && echo "   drop-in remis en place"
   tar -xzf "$ARCHE" -C "$RACINE" && echo "   wp-config restaure depuis l'archive verifiee"
+  MOT_APR=$("$PHPBIN" "$T/moteur.php" "$RACINE/wp-load.php" 2>&1 | grep -av 'already defined\|Cannot modify header' | head -1)
+  echo "   moteur apres restauration : $(printf %s "$MOT_APR" | cut -c1-70)"
   if fumee "$BASE/wp-json/tuc/v1/sante" '"ok":true'; then
     echo "   RETABLISSEMENT VERIFIE : le site repond comme avant la bascule."
     code_finale=8

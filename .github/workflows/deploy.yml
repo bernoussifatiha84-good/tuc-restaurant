@@ -942,11 +942,12 @@ jobs:
           printf -v remote_conv '%q' "$conv"
           phase="${TUC_PHASE:-dry}"
           echo "Bascule MySQL sur $SITE_URL — phase : $phase (le site reste sur son moteur tant que la fumee n est pas verte)"
+          printf -v remote_url '%q' "$SITE_URL"
           ssh -i ~/.ssh/id_deploy -p "$SSH_PORT" -o StrictHostKeyChecking=yes \
-            "$SSH_USER@$SSH_HOST" "bash -s -- $remote_root $remote_outil $remote_conv $phase" <<'REMOTE'
+            "$SSH_USER@$SSH_HOST" "bash -s -- $remote_root $remote_outil $remote_conv $phase $remote_url" <<'REMOTE'
           set -uo pipefail
           trap 'rm -f "$2" "$3"' EXIT
-          bash "$2" "$1" "$3" "$4"
+          bash "$2" "$1" "$3" "$4" "$5"
           REMOTE
 
   # --- Provisionnement du creneau : l'API cree la base, SSH la reporte, rien d'autre. ---------
