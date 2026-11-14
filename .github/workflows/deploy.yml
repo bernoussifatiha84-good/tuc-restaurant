@@ -27,6 +27,8 @@ on:
           - bascule-uat-preflight
           - verif-litespeed-uat
           - audit-mysql-uat
+          - mesure-connexions-uat
+          - degager-sqlite-uat
         default: deploy
         required: true
 
@@ -167,9 +169,11 @@ jobs:
             # qu'aucun dispatch distrait ne se trouve etre une ecriture.
             ENV_NAME=uat; URL="$URL_UAT"; ROOT="$ROOT_UAT"
           elif [[ "$EVENT_NAME" == workflow_dispatch
-                 && ( "$OPERATION" == "verif-litespeed-uat" || "$OPERATION" == "audit-mysql-uat" ) ]]; then
-            # Verification de purge LiteSpeed et audit post-bascule : les deux ecrivent et se
-            # restaurent, sur l'UAT seule.
+                 && ( "$OPERATION" == "verif-litespeed-uat" || "$OPERATION" == "audit-mysql-uat"
+                      || "$OPERATION" == "mesure-connexions-uat" || "$OPERATION" == "degager-sqlite-uat" ) ]]; then
+            # Verification de purge LiteSpeed, audit post-bascule, mesure de connexions et degagement
+            # de l'ancien moteur : les quatre touchent l'hote, sur l'UAT seule. Le degagement deplace
+            # des fichiers (il n'en supprime aucun) ; la mesure ouvre des connexions et les ferme.
             ENV_NAME=uat; URL="$URL_UAT"; ROOT="$ROOT_UAT"
           elif [[ "$REF_TYPE" == branch && "$REF_NAME" == develop ]]; then
             ENV_NAME=dev; URL="$URL_DEV"; ROOT="$ROOT_DEV"
@@ -1101,7 +1105,7 @@ jobs:
     # Les deux operations partagent le meme contrat : cible UAT obligatoire, ecrite reversible,
     # auto-nettoyage. Elles sont donc gardees par le meme bloc de refus,  et se distinguent par un `if`
     # d'etape — pas par un second job qui dupliquerait soixante lignes de verrous.
-    if: ${{ github.event_name == 'workflow_dispatch' && (inputs.operation == 'verif-litespeed-uat' || inputs.operation == 'audit-mysql-uat') }}
+    if: ${{ github.event_name == 'workflow_dispatch' && (inputs.operation == 'verif-litespeed-uat' || inputs.operation == 'audit-mysql-uat' || inputs.operation == 'mesure-connexions-uat' || inputs.operation == 'degager-sqlite-uat') }}
     needs: [cible]
     runs-on: ubuntu-latest
     timeout-minutes: 22   # le polling du TTL dure jusqu a 8 min
@@ -1171,7 +1175,18 @@ jobs:
           set -euo pipefail
           bash -n outils-bascule/verif-litespeed.sh
           bash -n outils-bascule/audit-mysql.sh
+          bash -n outils-bascule/degager-sqlite.sh
           php -l outils-bascule/audit-fidelite.php
+          php -l outils-bascule/mesure-connexions.php
+          # Le degagement refuse seul toute racine hors /uat et sans --executer : le verifier ici,
+          # avant meme de toucher a l'hote, c'est la porte du job testee sur la branche.
+          # le refus va sur stderr (c'est un refus) : capturer les deux flux, sinon ce garde-fou
+          # echouerait pour la bonne raison et bloquerait le job entier.
+          if bash outils-bascule/degager-sqlite.sh /tmp 2>&1 | grep -q 'REFUS'; then
+            echo "  porte de l'outil : refuse sans --executer — ok"
+          else
+            echo "::error::degager-sqlite.sh ne refuse plus sans --executer. Envoi annule."; exit 1
+          fi
 
       # Le script se restaure lui-meme (trap sur EXIT/INT/TERM) : une coupure en cours de
       # route ne laisse pas un prix faux en base. /tmp, hors racine web, supprime a la fin.
@@ -1236,6 +1251,70 @@ jobs:
           REMOTE
           code=$?
           echo "———— code de sortie de l'audit : $code (0 = rien a signaler, 9 = points bloquants) ————"
+          exit "$code"
+
+      - name: Executor la mesure de connexions
+        if: ${{ inputs.operation == 'mesure-connexions-uat' }}
+        env:
+          SSH_PORT: ${{ vars.SSH_PORT || '65002' }}
+          SSH_USER: ${{ secrets.SSH_USERNAME || secrets.SSH_USER }}
+          SSH_HOST: ${{ secrets.SSH_HOST }}
+          SSH_ROOT: ${{ needs.cible.outputs.root }}
+          RUN_ID: ${{ github.run_id }}
+          N: ${{ inputs.note }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          ph_d="/tmp/tuc-mesure-conn-${RUN_ID}.php"
+          scp -q -i ~/.ssh/id_deploy -P "$SSH_PORT" -o StrictHostKeyChecking=yes \
+            outils-bascule/mesure-connexions.php "$SSH_USER@$SSH_HOST:$ph_d"
+          printf -v remote_root '%q' "$SSH_ROOT"
+          printf -v remote_ph '%q' "$ph_d"
+          # un N entre 2 et 40, sinon la valeur par defaut de l'outil (24)
+          n=$(printf '%s' "${N:-}" | tr -dc '0-9'); [ -n "$n" ] && [ "$n" -ge 2 ] && [ "$n" -le 40 ] || n=24
+          echo "Mesure de ce que le compte tient comme connexions : $n ouvertes simultanement, puis fermees"
+          set +e
+          ssh -i ~/.ssh/id_deploy -p "$SSH_PORT" -o StrictHostKeyChecking=yes \
+            "$SSH_USER@$SSH_HOST" "bash -s -- $remote_root $remote_ph $n" <<'REMOTE'
+          set -uo pipefail
+          trap 'rm -f "$2"' EXIT
+          php "$2" "$1/wp-config.php" "$3"
+          REMOTE
+          code=$?
+          echo "———— code de sortie : $code ————"
+          exit "$code"
+
+      # L'operation deplace des fichiers hors de la racine web, avec registre et retour arriere
+      # automatique si un controle rougit. Rien n'est supprime du disque : tout atterrit dans
+      # ~/archives-uat/, en 700. Les deux outils (moteur, fumee) tournent avant et apres.
+      - name: Dégager l'ancien moteur de /uat (déplacements vérifiés, annulables)
+        if: ${{ inputs.operation == 'degager-sqlite-uat' }}
+        env:
+          SSH_PORT: ${{ vars.SSH_PORT || '65002' }}
+          SSH_USER: ${{ secrets.SSH_USERNAME || secrets.SSH_USER }}
+          SSH_HOST: ${{ secrets.SSH_HOST }}
+          SSH_ROOT: ${{ needs.cible.outputs.root }}
+          SITE_URL: ${{ needs.cible.outputs.url }}
+          RUN_ID: ${{ github.run_id }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          sh_d="/tmp/tuc-degager-${RUN_ID}.sh"
+          scp -q -i ~/.ssh/id_deploy -P "$SSH_PORT" -o StrictHostKeyChecking=yes \
+            outils-bascule/degager-sqlite.sh "$SSH_USER@$SSH_HOST:$sh_d"
+          printf -v remote_root '%q' "$SSH_ROOT"
+          printf -v remote_url '%q' "$SITE_URL"
+          printf -v remote_sh '%q' "$sh_d"
+          echo "Degagement sur $SITE_URL : la copie SQLite et l'extension quittent la racine web pour ~/archives-uat/"
+          set +e
+          ssh -i ~/.ssh/id_deploy -p "$SSH_PORT" -o StrictHostKeyChecking=yes \
+            "$SSH_USER@$SSH_HOST" "bash -s -- $remote_root $remote_url $remote_sh" <<'REMOTE'
+          set -uo pipefail
+          trap 'rm -f "$3"' EXIT
+          bash "$3" --executer "$1" "$2"
+          REMOTE
+          code=$?
+          echo "———— code de sortie du degagement : $code (0 = fait et verifie, 9 = refuse puis defait) ————"
           exit "$code"
 
   inventaire_woocommerce:
