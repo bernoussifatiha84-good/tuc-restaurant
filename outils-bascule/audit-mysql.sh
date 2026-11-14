@@ -93,7 +93,7 @@ foreach (['posts' => 'ID', 'options' => 'option_id', 'postmeta' => 'meta_id', 'c
 // printed as "0,0 Mo" would be a lie of the worst kind: a fake measurement. So the real
 // measure sums LENGTH() over the actual columns: slow enough to be honest, small enough here.
 $isz = $wpdb->get_row("SHOW VARIABLES LIKE 'information_schema_stats'", 2);
-printf("   information_schema_stats : %s   (a ZERO, les tailles d'information_schema sont nulles : d'ou la mesure directe)\n",
+printf("   information_schema_stats : %s   (NULL ou zero = statistiques non calculees : la taille se mesure alors colonne par colonne)\n",
     is_array($isz) && trim((string) $isz[1]) !== '' ? (string) $isz[1] : 'non expose par l\'hebergeur');
 $tot = 0; $totr = 0; $parTable = [];
 $tabs = (array) $wpdb->get_col("SELECT TABLE_NAME FROM information_schema.TABLES
@@ -137,7 +137,7 @@ foreach ($pl as $r) {
 $mu = $wpdb->get_row("SHOW STATUS LIKE 'Max_used_connections'", 2);
 printf("   connexions : %d vues au total dans le processlist (%d pour cet utilisateur, dont la mienne : %s, %d s)\n",
     count($pl), $moi, $moiMoi ? 'oui' : 'NON VUE — processlist restreint par l\'hebergeur', $long);
-printf("   plafond : max_user_connections = %s pour ce compte | %s au pic historique du serveur, partage\n",
+printf("   plafond : max_user_connections = %s pour ce compte | pic serveur : %s\n",
     (string) $wpdb->get_var("SELECT @@max_user_connections"), is_array($mu) ? (string) $mu[1] : 'pic non expose');
 if (count($pl) > 0 && $moiMoi === 0) {
     printf("   note : SHOW PROCESSLIST ne rend pas la connexion courante -> le compte de %d est une borne basse\n", $moi);
