@@ -72,13 +72,18 @@ foreach ($act as $p) {
     }
 }
 echo '  plugins de cache actifs : ' . ($fil ? implode(', ', $fil) : 'aucun') . "\n";
-echo '  LITESPEED_VERSION : ' . (defined('LITESPEED_VERSION') ? LITESPEED_VERSION : 'non definie')
-    . ' | classe LiteSpeed\Cache : ' . (class_exists('LiteSpeed\Cache') ? 'chargee' : 'absente') . "\n";
+if (!function_exists('get_plugins')) { require_once ABSPATH . 'wp-admin/includes/plugin.php'; }
+$gp = get_plugins();
+$ver = [];
+foreach ($gp as $f0 => $d0) { if (preg_match('#^(litespeed-cache|pure-cache)/#', $f0)) { $ver[] = $f0 . ' ' . $d0['Version']; } }
+echo '  version declaree du plugin de cache : ' . ($ver ? implode(' | ', $ver) : 'introuvable')
+    . ' | helper lite_speed_purge_url : ' . (function_exists('lite_speed_purge_url') ? 'la' : 'absente')
+    . ' | action litespeed_purge_url : ' . (has_action('litespeed_purge_url') !== false ? 'quelqu\'un l\'ecoute' : 'personne ne l\'ecoute') . "\n";
 $rows = $wpdb->get_results(
     "SELECT option_name AS n, LENGTH(option_value) AS l, LEFT(option_value, 130) AS v"
     . " FROM {$wpdb->options}"
     . " WHERE option_name LIKE 'litespeed%' OR option_name LIKE '%pure-cache%' OR option_name LIKE 'hostinger%'"
-    . " ORDER BY option_name LIMIT 40",
+    . " ORDER BY option_name LIMIT 200",
     ARRAY_A
 );
 if (!is_array($rows) || [] === $rows) {
@@ -88,6 +93,15 @@ if (!is_array($rows) || [] === $rows) {
         printf("     %-36s %6s o | %s\n", (string) $r['n'], (string) $r['l'],
             preg_replace('/\s+/', ' ', (string) $r['v']));
     }
+}
+// Les trois cles qui decident vraiment, lues sous leur nom reel. Ce controle cherchait
+// `litespeed.conf.cache-ttl` et `litespeed-opt` : ces noms n'existent pas dans cette version,
+// d'ou un « vide / non configure » qui faisait ressembler a une cause hors du depot ce qui est
+// un reglage WordPress a trois caracteres pres.
+foreach (['litespeed.conf.cache-rest', 'litespeed.conf.cache-ttl_rest', 'litespeed.conf.cache-ttl_pub',
+          'litespeed.conf.cache-exc', 'litespeed.conf.cache_header', 'litespeed.conf.cache-ttl_status'] as $vraie) {
+    $vv = $wpdb->get_var($wpdb->prepare("SELECT option_value FROM {$wpdb->options} WHERE option_name = %s LIMIT 1", $vraie));
+    printf("     %-34s %s\n", $vraie, null === $vv ? '(absente)' : ('' === $vv ? '(vide)' : $vv));
 }
 $ignore = $wpdb->get_var("SELECT option_value FROM {$wpdb->options} WHERE option_name = 'litespeed-opt' LIMIT 1");
 if (is_string($ignore) && '' !== $ignore) {
@@ -244,9 +258,10 @@ VERDICT_BORD=""
 QT="ttl$(date +%s)-$$"
 JSON_ORIG="$JSON"
 JSON="$BASE/wp-json/tuc/v1/menu/$RELA?ttlcle=$QT"
-P0=$(fetch_json "$TMP/t0.json"); H0=$(lc "$(entete 'x-litespeed-cache')")
+val() { entete "$1" | sed 's/^[^:]*:[[:space:]]*//' | tr 'A-Z' 'a-z'; }   # entete() rend la LIGNE, pas la valeur
+P0=$(fetch_json "$TMP/t0.json"); H0=$(val 'x-litespeed-cache')
 sleep 25
-P1=$(fetch_json "$TMP/t1.json"); H1=$(lc "$(entete 'x-litespeed-cache')"); A1=$(entete 'age')
+P1=$(fetch_json "$TMP/t1.json"); H1=$(val 'x-litespeed-cache'); A1=$(entete 'age')
 printf "  cle unique %s : t=0 %s | t=25s %s | age %s\n" "$QT" "${H0:-?}" "${H1:-?}" "${A1:-aucun}"
 if [ "$H1" != "hit" ]; then
   echo "  aucune copie conservee sur cette cle en 25 s : le discriminant n'a pas pu jouer."
@@ -259,7 +274,7 @@ else
     VERDICT_BORD="non concluant"
   fi
   if [ -z "$VERDICT_BORD" ]; then
-    P2=$(fetch_json "$TMP/t2.json"); H2=$(lc "$(entete 'x-litespeed-cache')")
+    P2=$(fetch_json "$TMP/t2.json"); H2=$(val 'x-litespeed-cache')
     printf "  relance apres purge d'origine : %s\n" "${H2:-?}"
     if [ "$H2" = "hit" ]; then
       echo "  CONCLUSION : la cle survit a la purge de l'origine -> c'est le bord (hcdn) qui ressert la copie."
