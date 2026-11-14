@@ -120,7 +120,7 @@ bar; echo " 2. LA SOURCE"; bar
 # repertoire - et prouver ce qu'il a trouve : les 15 premiers octets. Un fichier .sqlite qui ne
 # porte pas la signature SQLite n'est pas une base, et convertir ce-la produirait un MySQL vide
 # presente comme une reussite.
-cat > "$D/sqlite.php" <<'PHPEOF'
+cat > "$T/sqlite.php" <<'PHPEOF'
 <?php
 // Liste les candidats dans l'ordre ou le drop-in les trouverait, et dit pour chacun s'il est la,
 // de quelle taille, et s'il porte la signature d'une base SQLite.
@@ -133,7 +133,13 @@ if (is_file($pf)) {
         foreach (array_unique($m[1]) as $c) { $cand[] = $c; }
     }
 }
-foreach ([$dir . '/.ht*.sqlite', $dir . '/*.sqlite', $dir . '/.ht*.db', $dir . '/*.db'] as $g) {
+// Le plugin de l'hote ne pose pas la base a plat : db-path.php vaut
+//   return __DIR__ . '/.ht.<32 hexadecimaux>/.ht.sqlite';
+// (mesure dans le log du run 43603751761). Un glob qui s'arrete au repertoire courant ne la voit
+// pas — c'est le « introuvable » du run 43603858601, et la cause n'etait pas mon regex.
+$globs = [$dir . '/.ht*.sqlite', $dir . '/*.sqlite', $dir . '/.ht*.db', $dir . '/*.db',
+          $dir . '/*/.ht.sqlite', $dir . '/*/*.sqlite', $dir . '/*/.ht*.sqlite', $dir . '/*/*.db'];
+foreach ($globs as $g) {
     foreach ((array) glob($g) as $x) { $cand[] = $x; }
 }
 $vus = [];
@@ -147,16 +153,16 @@ foreach ($cand as $c) {
     }
 }
 PHPEOF
-"$PHPBIN" "$D/sqlite.php" "$DATADIR" > "$D/candidats" 2>&1
-if [ ! -s "$D/candidats" ]; then echo "   aucun candidat dans $DATADIR"; exit 5; fi
-sed 's/^/     /' "$D/candidats" | cut -c1-124
-SQLITED=$(awk -F'\t' '$3=="SIGNATURE OK" {print $1; exit}' "$D/candidats")
+"$PHPBIN" "$T/sqlite.php" "$DATADIR" > "$T/candidats" 2>&1
+if [ ! -s "$T/candidats" ]; then echo "   aucun candidat dans $DATADIR"; exit 5; fi
+sed 's/^/     /' "$T/candidats" | cut -c1-124
+SQLITED=$(awk -F'\t' '$3=="SIGNATURE OK" {print $1; exit}' "$T/candidats")
 if [ -z "$SQLITED" ]; then
   echo "   REFUS : aucun des candidats ci-dessus n'est une base SQLite (signature absente ou etrangere)."
   echo "   Je ne convertis pas un fichier que je n'ai pas identifie comme une base."
   exit 5
 fi
-TAILLE=$(awk -F'\t' -v p="$SQLITED" '$1==p {print $2; exit}' "$D/candidats")
+TAILLE=$(awk -F'\t' -v p="$SQLITED" '$1==p {print $2; exit}' "$T/candidats")
 if [ "${TAILLE:-0}" -lt 4096 ]; then
   echo "   REFUS : $SQLITED ne fait que $TAILLE o — une base de 54 tables en fait 1 576 960. On s'arrete."
   exit 5
