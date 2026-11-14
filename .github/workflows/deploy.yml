@@ -1182,11 +1182,19 @@ jobs:
           # avant meme de toucher a l'hote, c'est la porte du job testee sur la branche.
           # le refus va sur stderr (c'est un refus) : capturer les deux flux, sinon ce garde-fou
           # echouerait pour la bonne raison et bloquerait le job entier.
-          if bash outils-bascule/degager-sqlite.sh /tmp 2>&1 | grep -q 'REFUS'; then
-            echo "  porte de l'outil : refuse sans --executer — ok"
-          else
-            echo "::error::degager-sqlite.sh ne refuse plus sans --executer. Envoi annule."; exit 1
-          fi
+          # Pas de pipeline ici : sous `set -o pipefail`, le code 2 rendu par le refus ferait echouer
+          # la conduite entiere meme quand grep a trouve la ligne — et le job se brouillerait lui-meme
+          # pour un succes de l'outil. On capte la sortie, on la filtre a la main.
+          porte=$(bash outils-bascule/degager-sqlite.sh /tmp 2>&1 || true)
+          case "$porte" in
+            *REFUS*) echo "  porte de l'outil : refuse sans --executer — ok" ;;
+            *) printf '%s\n' "$porte" | tail -3; echo "::error::degager-sqlite.sh ne refuse plus sans --executer. Envoi annule."; exit 1 ;;
+          esac
+          porte2=$(bash outils-bascule/degager-sqlite.sh --executer /tmp/na-existe-pas 2>&1 || true)
+          case "$porte2" in
+            *invalide*|*REFUS*) echo "  porte 2 : refuse une racine inexistante — ok" ;;
+            *) echo "::error::degager-sqlite.sh accepte une racine inexistante. Envoi annule."; exit 1 ;;
+          esac
 
       # Le script se restaure lui-meme (trap sur EXIT/INT/TERM) : une coupure en cours de
       # route ne laisse pas un prix faux en base. /tmp, hors racine web, supprime a la fin.
