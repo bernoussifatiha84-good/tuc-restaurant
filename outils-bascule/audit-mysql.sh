@@ -277,9 +277,12 @@ fi
 # ---------------------------------------------------------------- 4. fidelite, cellule par cellule
 bar; echo " 4. FIDELITE : le MySQL vivant contre la copie SQLite figee a la bascule"; bar
 SQLD=""
-for cand in "$RACINE/wp-content/database" "$RACINE/wp-content"; do
+# deux aires de recherche : sous wp-content (l'avant-bascule) et dans l'archive hors racine web, ou
+# le degagement l'a instancee. L'audit de fidelite doit rester jouable, sinon on perd le seul
+# controle qui dit « MySQL ne contredit pas la copie ».
+for cand in "$RACINE/wp-content/database" "$RACINE/wp-content" "$HOME/archives-uat"; do
   [ -n "$SQLD" ] && break
-  SQLD=$(find "$cand" -maxdepth 2 -name '*.sqlite' -size +100k 2>/dev/null | head -1)
+  SQLD=$(find "$cand" -maxdepth 3 -name '*.sqlite' -size +100k 2>/dev/null | head -1)
 done
 if [ -n "$FIDEL" ] && [ -f "$FIDEL" ] && [ -n "$SQLD" ]; then
   echo "   copie figee : $SQLD ($(stat -c %s "$SQLD") o, mtime $(stat -c %y "$SQLD" | cut -d. -f1))"
@@ -316,8 +319,8 @@ if [ -n "$SQLD" ]; then
     else ok "la base SQLite n'est pas accessible par le web (HTTP $c)"; fi
   fi
 else
-  echo "   aucune copie .sqlite trouvee : rien a soupeser"
-  ok "rien de lourd a garder"
+  echo "   aucune copie .sqlite trouvee : l'ancien moteur n'est plus sous la racine web"
+  ok "rien a soupeser sur le site"
 fi
 if command -v wp >/dev/null 2>&1; then
   ST=$(wp plugin get sqlite-database-integration --field=status --path="$RACINE" 2>/dev/null || echo 'inconnu')
