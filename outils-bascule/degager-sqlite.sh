@@ -187,7 +187,10 @@ if [ -n "$URL" ]; then
     echo "   200 rendu alors que le fichier est parti : corps servi par le cache, pas par le disque"
     c2=$(curl -sS -m 20 -o "$T/after-log2" -w '%{http_code}' "$URL/error_log?nocache=$TS" 2>/dev/null)
     if command -v wp >/dev/null 2>&1; then
-      if wp litespeed-purge url "$URL/error_log" >/dev/null 2>&1; then
+      # --path est obligatoire : le shell SSH s'ouvre dans l'accueil, pas dans le site, et wp-cli y
+      # cherche une installation WordPress. Sans lui, la purge echoue pour une raison de procedure et
+      # le cache garde la fuite en vie sept jours de plus.
+      if wp litespeed-purge url "$URL/error_log" --path="$RACINE" >/dev/null 2>&1; then
         echo "   purge de cette URL demandee a LiteSpeed"
       else
         echo "   (wp-cli n'a pas pu purger : la cle de cache reste jusqu'a expiration)"
