@@ -113,9 +113,9 @@ t2=$(sonde "$ROUTE_URL?pre=$$-0"); printf "   la meme cle, a l'instant      : %s
 
 bar; echo " 2. CE QUE CETTE OPERATION VEUT CHANGER (mode: $MODE)"; bar
 case "$MODE" in
-  exclure) echo "   ajouter /wp-json/tuc/v1/menu/ a `litespeed.conf.cache-exc` : la route n'est plus jamais servie d'une copie."
+  exclure) echo "   ajouter /wp-json/tuc/v1/menu/ a l'option litespeed.conf.cache-exc : la route n'est plus jamais servie d'une copie."
            echo "   prix lu frais a chaque vue ; cout mesure le 14/11 : 581 o, une requete a p50 0,30 ms / p95 14,86 ms." ;;
-  ttl60)   echo "   passer `litespeed.conf.cache-ttl_rest` de 604 800 a 60 s : la copie existe mais meurt en une minute."
+  ttl60)   echo "   passer l'option litespeed.conf.cache-ttl_rest de 604 800 a 60 s : la copie existe mais meurt en une minute."
            echo "   garde la protection du DB sous trafic, laisse jusqu'a 60 s de prix perime." ;;
 esac
 if [ "$EXECUTE" != "1" ]; then
